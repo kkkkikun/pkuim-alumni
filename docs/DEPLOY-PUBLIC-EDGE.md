@@ -1,12 +1,30 @@
 # 公网接入层部署指南（临时预览版用）
 
-> 目标：让**客户手机**和**客户浏览器**能访问到本平台的后端 API 与管理后台，
-> 从而支撑「微信小程序临时预览版」与「管理后台演示」。
+> 目标：让**客户手机**能访问到本平台的后端 API，从而支撑「微信小程序临时预览版」。
 >
 > 现状约束（已实测）：校园机 `172.16.38.110` 在 NAT 后面、无公网 IP，
 > compose 的 nginx 绑在 `127.0.0.1:18080`，校园网只放行了极少数站点
 > （GitHub / ngrok / cloudflare / localhost.run 等免费穿透服务均不可达）。
 > 所以走「**临时公网服务器 + SSH 反向隧道**」这条路。
+
+---
+
+## 0. 当前实际部署状态（已落地）
+
+| 项 | 现状 |
+|---|---|
+| 公网服务器 | **8.160.116.34**（阿里云 ECS，Ubuntu 24.04，2 核 / 1.7 GB / 40 GB） |
+| SSH | 端口 **55971**（22 未开放）；用户 `root`（管理）/ `nmg-tunnel`（隧道专用受限账号） |
+| 边缘节点 | 容器 `nmg-edge-nginx`（compose 项目 `nmg-pku-alumni`，目录 `/opt/nmg-pku-alumni/edge`） |
+| 对外端口 | **18080**（ufw 已放行；**阿里云安全组还需手动放行**，见第 5 节） |
+| 公网暴露范围 | **只有 `/api/`**；根路径返回 404（管理后台只走 SSH 隧道） |
+| 隧道方向 | 校园机**主动出站** → 阿里云（阿里云 → 校园机不可达，校园 NAT 只放行 SSH 转发端口） |
+| 隧道账号 | `nmg-tunnel`，authorized_keys 限制为 `restrict,port-forwarding,permitlisten="127.0.0.1:18081"` |
+| 小程序上传 | 计划在**阿里云**上跑（公网出口 IP 固定，正好加进微信的 IP 白名单） |
+
+> ⚠️ **这台机器上还跑着别人的两个项目**（`openfeedback` 占 80/443、`schoolwall-cn` 的校园墙后端/PG/Redis）。
+> 本项目的部署**完全不碰**它们：独立 compose 项目、`nmg-` 前缀、独立目录 `/opt/nmg-pku-alumni`、
+> 不共享网络/卷/端口、不执行任何 prune 或全局 compose down。
 
 ---
 
@@ -35,11 +53,15 @@
 ### 1.2 安全组 / 防火墙放行清单
 
 ```
-入站  TCP 22     来源 你的办公 IP（更安全）；临时图省事可先放开
-入站  TCP 80     来源 0.0.0.0/0   （客户手机访问）
-入站  TCP 443    来源 0.0.0.0/0   （启用 HTTPS 时）
-出站  全部       允许
+入站  TCP 55971   来源 你的办公 IP（SSH；本机 22 未开放）
+入站  TCP 18080   来源 0.0.0.0/0   （小程序 / 客户访问 API）
+出站  全部        允许
 ```
+
+> ⚠️ 本机 **80/443 已被既有的 Caddy（openfeedback 项目）占用**，
+> 不要去动它 —— 我们的边缘节点走 **18080**。
+> 服务器 OS 层的 ufw 我已加好 `18080/tcp ALLOW`（既有规则未动），
+> 云厂商安全组需要你在控制台补一条。
 
 ### 1.3 两种用法，选择其一
 
@@ -65,57 +87,69 @@
 
 ---
 
-## 二、部署步骤（10 分钟）
+## 二、部署步骤（已在 8.160.116.34 上实际执行过）
 
 ### 第 0 步：拿到服务器信息后要做的事
 
-请提供：公网 IP、SSH 用户名、端口、登录方式（密码或密钥）。
+公网 IP、SSH 用户名、端口、登录方式（密码或密钥）。
 
-### 第 1 步：公网服务器上装边缘 nginx
-
-把脚本传到公网服务器（或直接粘贴执行）：
+### 第 1 步：建隧道专用受限账号（在公网服务器上执行）
 
 ```bash
-# 传到公网机
-scp infra/scripts/deploy-public-edge.sh root@<公网IP>:/root/
-ssh root@<公网IP> 'apt-get update && apt-get install -y nginx && bash /root/deploy-public-edge.sh --listen 80'
+bash infra/scripts/prep-tunnel-user.sh \
+  --public-key "<校园机上 ~/.ssh/nmg_edge_key.pub 的内容>" \
+  --permit-listen "127.0.0.1:18081"
 ```
 
-脚本做的事：写 `/etc/nginx/conf.d/nmg-edge.conf` → `nginx -t` → reload → 自检。
-重复执行是幂等的（会先备份旧配置）。
+它会建一个 `nmg-tunnel` 账号，authorized_keys 写成
+`restrict,port-forwarding,permitlisten="127.0.0.1:18081"` ——
+**能转发、不能开 shell、只能在指定端口监听**。
+隧道私钥就算泄露，也拿不到 root、也开不了别的端口。
 
-### 第 2 步：校园机上建立反向隧道
+### 第 2 步：部署边缘节点（容器版，不动系统 nginx）
+
+```bash
+bash infra/scripts/deploy-edge-container.sh \
+  --backend 127.0.0.1:18081 --listen 18080 --dir /opt/nmg-pku-alumni/edge
+```
+
+为什么用容器而不是装系统 nginx：这台机器的 80/443 已被 Caddy 占着，
+装系统 nginx 会因端口冲突**直接起不来**；容器版则完全隔离
+（独立 compose 项目 + `nmg-` 前缀 + `network_mode: host` 才能连到宿主机的隧道口）。
+
+> ⚠️ nginx 配置是 bind mount，改完文件容器**不会**自动生效 ——
+> 脚本里已经带上 `nginx -s reload`（踩过：配置改了但行为没变）。
+
+### 第 3 步：校园机上建立反向隧道
 
 ```bash
 ssh sqserver 'cd ~/MyProject/pkuim-alumni && bash infra/scripts/tunnel-public-edge.sh \
-    --public-host <公网IP> --remote-user root --daemon'
+    --public-host 8.160.116.34 --public-port 55971 --remote-user nmg-tunnel \
+    --local-port 18080 --remote-listen-port 18081 --daemon'
 ```
 
-脚本会：
-1. 在校园机生成隧道专用密钥 `~/.ssh/nmg_edge_key`；
-2. **打印公钥** → 把它加到公网机的 `~/.ssh/authorized_keys`；
-3. 拉起后台守护进程（断了自动重连，10 秒重试）。
+校园机**主动出站**（实测：阿里云 → 校园机不可达，校园 NAT 只放行 SSH 转发端口）。
+守护进程断了自动重连；停它用 `--stop`（会连 ssh 子进程一起收干净，否则端口会一直被占）。
 
-> **端口选择**：默认公网侧监听 `18080`。
-> 若与既有服务冲突，用 `--remote-listen-port <端口>` 换一个
-> （校园机上 `18081`/`18082` 等端口**已被其它服务占用**，别踩）。
-> 停隧道用 `--stop`（会连 ssh 子进程一起收干净，否则端口会一直被占）。
+### 第 4 步：验收
 
 ```bash
-# 公网机上追加公钥（把上一步打印的整行贴进去）
-echo 'ssh-ed25519 AAAA... nmg-edge-tunnel' >> ~/.ssh/authorized_keys
+# 公网机上
+curl -sS http://127.0.0.1:18081/api/v1/system/health   # 隧道是否通
+curl -sS http://127.0.0.1:18080/api/v1/system/health   # 边缘入口
+curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:18080/   # 期望 404（后台不经公网）
 ```
 
-### 第 3 步：验收
+### 第 5 步：放行安全组（**只能你在控制台做**）
 
-```bash
-# 在公网机上
-curl -sS http://127.0.0.1:18080/api/v1/system/health     # 隧道是否通
-curl -sS http://127.0.0.1/ -o /dev/null -w '%{http_code}\n'   # 边缘 nginx
-# 在你自己电脑上
-curl -sS http://<公网IP>/api/v1/system/health
-curl -sSI http://<公网IP>/                          # 管理后台首页
-```
+阿里云安全组 → 入方向 → 手工添加：
+
+| 协议 | 端口 | 授权对象 | 说明 |
+|---|---|---|---|
+| TCP | **18080** | `0.0.0.0/0` | 小程序与客户访问（**必须**，否则外网连接会超时） |
+
+> 服务器 OS 层的 ufw 规则**已经加好了**（`18080/tcp ALLOW`），
+> 但云厂商安全组在实例外面，只能你在控制台加。
 
 ---
 
@@ -145,23 +179,34 @@ bash infra/scripts/release-miniprogram-preview.sh \
 
 ## 四、安全提醒（请一并处理）
 
-1. **管理后台暴露在公网**：`/` 是 Vue3 管理后台（账号 `admin` / `Admin@2026`）。
-   演示期间请**改掉默认密码**，演示结束立刻关掉公网入口或加 IP 白名单。
-2. **校园机的 SSH 已被转发到公网**（`172.16.38.110:56127`）。请确认：
-   - 只用密钥登录（已是无密码 ed25519 免密）；
-   - `authorized_keys` 里**不要**放来源不明的公钥；
-   - 建议换成 `PasswordAuthentication no`。
-3. **不要**把 MySQL / Redis 端口暴露到公网。公网机只装 nginx，隧道只转 HTTP。
-4. 演示数据里不含任何联系方式（`private_contacts` 字段在导出时已被剥离）。
-5. 临时服务器到期前，把公网入口关掉：`systemctl stop nginx` + 停掉校园机的隧道单元。
-
----
+1. **公网只暴露 `/api/`**：管理后台**不经公网**（根路径返回 404），
+   继续走你的 SSH 隧道访问。原因是它的默认密码 `Admin@2026` 是
+   硬编码在种子脚本里、还写在 README 上 —— 暴露到公网等于把后台送人。
+   确实需要把后台也放出来时，给 `deploy-edge-container.sh` 加 `--allow-admin`，
+   **并先改掉默认密码**。
+2. **隧道账号是受限的**：`nmg-tunnel` 的 authorized_keys 写着
+   `restrict,port-forwarding,permitlisten="127.0.0.1:18081"` ——
+   不能开 shell、不能转发到别的端口。要撤销隧道：删掉这台机器上的
+   `/home/nmg-tunnel/.ssh/authorized_keys` 即可。
+3. **本机既有的两个项目我一行都没动**：`openfeedback`（80/443 的 Caddy）、
+   `schoolwall-cn`（校园墙后端 + PG + Redis）。
+   我们的东西全在 `/opt/nmg-pku-alumni/`，compose 项目名 `nmg-pku-alumni`，
+   容器名 `nmg-edge-nginx`。
+4. **校园机的 SSH 已被转发到公网**（`172.16.38.110:56127`）。请确认：
+   只用密钥登录、`authorized_keys` 里没有来源不明的公钥。
+5. **不要**把 MySQL / Redis 端口暴露到公网。公网机只跑一个 nginx 容器，隧道只转 HTTP。
+6. **临时服务器到期前**：停边缘节点
+   （`docker compose --project-name nmg-pku-alumni down`）、
+   停校园机隧道（`bash infra/scripts/tunnel-public-edge.sh --stop`）、
+   删掉 `nmg-tunnel` 账号、撤掉 ufw 的 18080 规则。
 
 ## 五、脚本索引
 
 | 脚本 | 跑在哪 | 作用 |
 |---|---|---|
-| `infra/scripts/deploy-public-edge.sh` | 公网服务器 | 装 nginx + 反代到隧道端口（可选 HTTPS） |
+| `infra/scripts/prep-tunnel-user.sh` | 公网服务器 | 建**受限**隧道账号（只转发、只听指定端口） |
+| `infra/scripts/deploy-edge-container.sh` | 公网服务器 | **容器版**边缘节点（本机 80/443 被占时用这个） |
+| `infra/scripts/deploy-public-edge.sh` | 公网服务器 | 边缘节点（**系统 nginx 版**，适合没有端口冲突的机器） |
 | `infra/scripts/tunnel-public-edge.sh` | 校园机 | 建立 SSH 反向隧道（`--daemon` 不需要 root；`--stop` 收干净） |
 | `infra/scripts/check-public-edge-e2e.sh` | 校园机 | 端到端自测：边缘 nginx → 隧道 → compose nginx → API |
 | `infra/scripts/release-miniprogram-preview.sh` | 校园机 | 一键发布体验版：预检 → 离线编译自检 → 写 AppID → 注入 API 基址 → 上传 → 出二维码 |
