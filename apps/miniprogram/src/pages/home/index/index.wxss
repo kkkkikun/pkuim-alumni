@@ -1,0 +1,23 @@
+/* 首页局部样式：目前只有「演示模式提示条」，其余沿用全局样式表。 */
+
+/* 非阻塞提示条：不遮挡内容，点一下能看到说明 */
+.demo-banner {
+  display: flex;
+  align-items: center;
+  padding: 16rpx 30rpx;
+  background: var(--pink);
+  border-bottom: 1rpx solid var(--sand);
+}
+
+.demo-banner-dot {
+  width: 12rpx;
+  height: 12rpx;
+  margin-right: 12rpx;
+  border-radius: 50%;
+  background: var(--red);
+}
+
+.demo-banner-text {
+  font-size: 24rpx;
+  color: var(--reddeep);
+}

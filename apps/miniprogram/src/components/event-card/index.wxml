@@ -1,0 +1,11 @@
+<view class="event" bindtap="onTap">
+  <view class="event-mark">
+    <text class="event-mark-text">{{event.kind || '燕'}}</text>
+  </view>
+  <view class="event-copy">
+    <text class="event-title">{{event.title}}</text>
+    <text class="event-meta">{{event.kind}}<text wx:if="{{event.status === 'published'}}"> · 报名中</text></text>
+    <text class="event-place">{{event.regionName || '内蒙古'}}{{event.place ? ' · ' + event.place : ''}}</text>
+  </view>
+  <text class="event-arrow">›</text>
+</view>

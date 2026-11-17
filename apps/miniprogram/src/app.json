@@ -1,0 +1,83 @@
+{
+  "pages": [
+    "pages/home/index/index",
+    "pages/home/article-list/index",
+    "pages/home/article-detail/index",
+    "pages/home/event-list/index",
+    "pages/home/event-detail/index",
+    "pages/home/event-register/index",
+    "pages/home/my-registrations/index",
+    "pages/home/notice-list/index",
+    "pages/home/notice-detail/index",
+    "pages/home/about/index",
+    "pages/directory/index/index",
+    "pages/directory/filter/index",
+    "pages/directory/profile/index",
+    "pages/directory/request/index",
+    "pages/directory/request-result/index",
+    "pages/connect/index/index",
+    "pages/connect/filter/index",
+    "pages/connect/resource-detail/index",
+    "pages/connect/demand-detail/index",
+    "pages/connect/publish-resource/index",
+    "pages/connect/publish-demand/index",
+    "pages/connect/my-posts/index",
+    "pages/connect/publish-status/index",
+    "pages/connect/intent/index",
+    "pages/connect/request-detail/index",
+    "pages/me/index/index",
+    "pages/me/profile/index",
+    "pages/me/profile-edit/index",
+    "pages/me/verify-intro/index",
+    "pages/me/verify-form/index",
+    "pages/me/verify-upload/index",
+    "pages/me/verify-progress/index",
+    "pages/me/verify-history/index",
+    "pages/me/received-requests/index",
+    "pages/me/sent-requests/index",
+    "pages/me/connections/index",
+    "pages/me/contact-share/index",
+    "pages/me/my-events/index",
+    "pages/me/my-posts/index",
+    "pages/me/privacy/index",
+    "pages/me/notifications/index",
+    "pages/me/notification-detail/index",
+    "pages/me/account/index"
+  ],
+  "window": {
+    "backgroundTextStyle": "light",
+    "navigationBarBackgroundColor": "#ffffff",
+    "navigationBarTitleText": "内蒙古北大校友会",
+    "navigationBarTextStyle": "black",
+    "backgroundColor": "#f8f7f5",
+    "enablePullDownRefresh": false
+  },
+  "tabBar": {
+    "custom": true,
+    "color": "#a29c99",
+    "selectedColor": "#a51e28",
+    "backgroundColor": "#fffcfb",
+    "borderStyle": "white",
+    "list": [
+      {
+        "pagePath": "pages/home/index/index",
+        "text": "首页"
+      },
+      {
+        "pagePath": "pages/directory/index/index",
+        "text": "通讯录"
+      },
+      {
+        "pagePath": "pages/connect/index/index",
+        "text": "连接"
+      },
+      {
+        "pagePath": "pages/me/index/index",
+        "text": "我的"
+      }
+    ]
+  },
+  "style": "v2",
+  "lazyCodeLoading": "requiredComponents",
+  "sitemapLocation": "sitemap.json"
+}

@@ -1,0 +1,42 @@
+<view class="detail-page">
+  <state-view
+    status="{{loading ? 'loading' : error ? 'error' : 'idle'}}"
+    error-text="{{error}}"
+    bind:retry="onRetry"
+  ></state-view>
+
+  <block wx:if="{{targetId}}">
+    <view class="card">
+      <view class="card-title">向 {{targetName}} 发起联系申请</view>
+      <view class="card-desc">{{targetMeta}}</view>
+    </view>
+
+    <view class="section">
+      <view class="form-item">
+        <text class="form-label">想交流什么？<text class="required">*</text></text>
+        <textarea
+          class="form-textarea"
+          value="{{message}}"
+          maxlength="300"
+          placeholder="例如：我也在从事数字科技工作，想和你交流行业经验……"
+          bindinput="onMessageInput"
+        ></textarea>
+        <text class="form-hint">请简要说明交流主题，6–300 字。对方会看到这段说明并自主决定是否接受。</text>
+      </view>
+      <text class="form-error" wx:if="{{submitError}}">{{submitError}}</text>
+      <view class="notice-box">
+        提交申请不会暴露双方的联系方式。只有对方接受、且双方都开启联系方式共享后，彼此才能看到联系方式。
+      </view>
+    </view>
+  </block>
+
+  <view class="fixed-bar" wx:if="{{success}}">
+    <button class="btn-main btn-block" bindtap="onViewResult">查看申请结果</button>
+  </view>
+
+  <view class="fixed-bar" wx:elif="{{targetId}}">
+    <button class="btn-main btn-block" loading="{{submitting}}" disabled="{{submitting}}" bindtap="onSubmit">
+      {{submitting ? '提交中…' : '提交联系申请'}}
+    </button>
+  </view>
+</view>

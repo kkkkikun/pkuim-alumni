@@ -1,0 +1,48 @@
+@import "../../../styles/blocks.wxss";
+
+.filter-page {
+  padding-bottom: 200rpx;
+}
+
+.region-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18rpx;
+  margin-top: 24rpx;
+}
+
+.region-option {
+  min-width: 0;
+  min-height: 110rpx;
+  padding: 16rpx 10rpx;
+  border: 1rpx solid #eee7e3;
+  border-radius: 20rpx;
+  background: #fcfaf9;
+  color: #625753;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8rpx;
+}
+
+.region-name {
+  font-size: 24rpx;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.region-count {
+  font-size: 19rpx;
+  color: #aaa09b;
+}
+
+.region-option.on {
+  background: #f9e9e6;
+  border-color: #dca9a4;
+  color: #a51e28;
+}
+
+.region-option.on .region-count {
+  color: #b66b69;
+}

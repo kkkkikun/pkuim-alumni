@@ -1,0 +1,51 @@
+@import "../../../styles/blocks.wxss";
+
+.upload-box {
+  margin-top: 30rpx;
+  padding: 70rpx 30rpx;
+  border: 2rpx dashed #e6d7d1;
+  border-radius: 24rpx;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14rpx;
+}
+
+.upload-plus {
+  font-size: 56rpx;
+  color: #d8a89c;
+  line-height: 1;
+}
+
+.upload-title {
+  font-size: 29rpx;
+  font-weight: 700;
+  color: #332d2b;
+}
+
+.upload-desc {
+  font-size: 22rpx;
+  color: #a19893;
+}
+
+.upload-item {
+  display: flex;
+  align-items: center;
+  gap: 20rpx;
+  padding: 22rpx 26rpx;
+  background: #fff;
+  border-radius: 18rpx;
+  margin-bottom: 14rpx;
+}
+
+.upload-item-name {
+  flex: 1;
+  font-size: 25rpx;
+  color: #332d2b;
+}
+
+.upload-item-remove {
+  font-size: 24rpx;
+  color: #a51e28;
+}

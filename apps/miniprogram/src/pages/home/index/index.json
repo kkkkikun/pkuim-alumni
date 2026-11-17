@@ -1,0 +1,12 @@
+{
+  "navigationBarTitleText": "首页",
+  "navigationBarBackgroundColor": "#a51e28",
+  "navigationBarTextStyle": "white",
+  "backgroundColor": "#f8f7f5",
+  "backgroundTextStyle": "light",
+  "enablePullDownRefresh": true,
+  "usingComponents": {
+    "article-card": "../../../components/article-card/index",
+    "event-card": "../../../components/event-card/index"
+  }
+}

@@ -1,0 +1,21 @@
+<view class="list-page">
+  <state-view
+    status="{{loading && items.length === 0 ? 'loading' : error ? 'error' : items.length === 0 ? 'empty' : 'idle'}}"
+    error-text="{{error}}"
+    empty-text="还没有认证记录"
+    empty-desc="完成校友认证后，提交与审核记录会保留在这里"
+    bind:retry="onRetry"
+  ></state-view>
+
+  <view class="history-list" wx:if="{{items.length}}">
+    <view class="history-card" wx:for="{{items}}" wx:key="id">
+      <view class="history-head">
+        <text class="history-name">{{item.applicantName}}</text>
+        <text class="tag {{item.status === 'approved' ? 'tag-green' : item.status === 'rejected' ? 'tag-grey' : ''}}">{{item.statusLabel}}</text>
+      </view>
+      <view class="history-meta">{{item.college || '未填写院系'}} · {{item.graduationYear ? item.graduationYear + '届' : '未填写年份'}}</view>
+      <view class="history-meta">提交于 {{item.submittedAt}}</view>
+      <view class="history-review">{{item.reviewText}}</view>
+    </view>
+  </view>
+</view>

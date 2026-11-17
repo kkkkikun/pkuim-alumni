@@ -1,0 +1,150 @@
+# =============================================================================
+# NMG-PKU-Alumni —— 可选监控栈（Prometheus + Grafana + node-exporter + cAdvisor）
+#
+#   docker compose --project-name nmg-pku-alumni-monitor \
+#     -f infra/monitoring/docker-compose.monitoring.yml up -d
+#
+# 注意：
+#   - 独立 compose 项目名 / 独立网络 / 独立数据卷，不与主栈 nmg-pku-alumni 混用；
+#   - 端口仅绑定 127.0.0.1；
+#   - 镜像走华为云镜像源（Docker Hub 直连不可用）；
+#   - 监控栈不是交付必需项，主栈部署不依赖它。
+# =============================================================================
+
+name: nmg-pku-alumni-monitor
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  prometheus:
+    image: ${PROMETHEUS_IMAGE:-swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/prom/prometheus:latest}
+    container_name: nmg-prometheus
+    restart: unless-stopped
+    logging: *default-logging
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-lifecycle
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - nmg-prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-19090}:9090"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9090/-/healthy || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 4G
+    networks:
+      - monitor-net
+
+  grafana:
+    image: ${GRAFANA_IMAGE:-swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/grafana/grafana:latest}
+    container_name: nmg-grafana
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-CHANGE_ME_grafana}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_INSTALL_PLUGINS: ""
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - nmg-grafana-data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-13000}:3000"
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 4G
+    networks:
+      - monitor-net
+
+  node-exporter:
+    image: ${NODE_EXPORTER_IMAGE:-swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/prom/node-exporter:latest}
+    container_name: nmg-node-exporter
+    restart: unless-stopped
+    logging: *default-logging
+    command:
+      - --path.rootfs=/host
+      - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)
+    volumes:
+      - /:/host:ro,rslave
+    pid: host
+    ports:
+      - "127.0.0.1:${NODE_EXPORTER_PORT:-19100}:9100"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9100/metrics || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1G
+    networks:
+      - monitor-net
+
+  cadvisor:
+    image: ${CADVISOR_IMAGE:-swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/cadvisor/cadvisor:latest}
+    container_name: nmg-cadvisor
+    restart: unless-stopped
+    logging: *default-logging
+    privileged: true
+    command:
+      - --docker_only=true
+      - --housekeeping_interval=15s
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    ports:
+      - "127.0.0.1:${CADVISOR_PORT:-18099}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/healthz || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 2G
+    networks:
+      - monitor-net
+
+volumes:
+  nmg-prometheus-data:
+    name: nmg-prometheus-data
+  nmg-grafana-data:
+    name: nmg-grafana-data
+
+networks:
+  monitor-net:
+    name: nmg-pku-alumni-monitor-net
+    driver: bridge

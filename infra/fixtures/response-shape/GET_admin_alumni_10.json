@@ -1,0 +1,59 @@
+{
+  "code": "OK",
+  "message": "success",
+  "data": {
+    "userId": 10,
+    "displayName": "夹具校友",
+    "realName": "夹具校友",
+    "college": "经济学院",
+    "degree": "学士",
+    "graduationYear": 2015,
+    "regionCode": "HHS",
+    "regionName": "呼和浩特市",
+    "industryCode": "DIGI",
+    "industryName": "数字科技",
+    "direction": "产品方向",
+    "intro": "合成数据，用于校验嵌套元素结构。",
+    "verified": true,
+    "verifiedAt": "2026-01-03T00:00:00.000Z",
+    "contactVisible": false,
+    "createdAt": "2026-01-01T00:00:00.000Z",
+    "updatedAt": "2026-01-03T00:00:00.000Z",
+    "userStatus": "active",
+    "stage": "verified",
+    "verifications": [
+      {
+        "id": 1,
+        "userId": 10,
+        "applicantName": "夹具校友",
+        "college": "经济学院",
+        "graduationYear": 2015,
+        "degree": "学士",
+        "studentIdMasked": "2015****1234",
+        "status": "approved",
+        "attachments": [
+          {
+            "id": 1,
+            "mediaId": 21,
+            "fileName": "id-card.png",
+            "mimeType": "image/png",
+            "size": 512,
+            "uploadedAt": "2026-01-02T00:00:00.000Z"
+          }
+        ],
+        "reviews": [
+          {
+            "id": 1,
+            "adminId": 1,
+            "adminName": "夹具审核员",
+            "action": "approve",
+            "note": "材料齐全",
+            "createdAt": "2026-01-03T00:00:00.000Z"
+          }
+        ],
+        "submittedAt": "2026-01-02T00:00:00.000Z",
+        "decidedAt": "2026-01-03T00:00:00.000Z"
+      }
+    ]
+  }
+}

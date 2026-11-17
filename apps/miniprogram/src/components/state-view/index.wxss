@@ -1,0 +1,64 @@
+.state-view {
+  padding: 40rpx 30rpx;
+}
+
+.state-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18rpx;
+  padding: 70rpx 0;
+}
+
+.spinner {
+  width: 44rpx;
+  height: 44rpx;
+  border-radius: 50%;
+  border: 4rpx solid #f0e2df;
+  border-top-color: #a51e28;
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.state-text {
+  font-size: 25rpx;
+  color: #918c8a;
+}
+
+.state-block {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 70rpx 30rpx;
+}
+
+.state-title {
+  font-size: 30rpx;
+  font-weight: 600;
+  color: #6f6866;
+}
+
+.state-desc {
+  margin-top: 14rpx;
+  font-size: 25rpx;
+  color: #a19893;
+  line-height: 1.8;
+  text-align: center;
+}
+
+.state-btn {
+  margin-top: 30rpx;
+  padding: 0 40rpx;
+  height: 70rpx;
+  line-height: 70rpx;
+  border-radius: 36rpx;
+  background: #fff9f6;
+  border: 1rpx solid #efd4cd;
+  color: #a53739;
+  font-size: 26rpx;
+}

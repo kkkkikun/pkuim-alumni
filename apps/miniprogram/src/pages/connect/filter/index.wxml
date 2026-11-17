@@ -1,0 +1,44 @@
+<view class="detail-page filter-page">
+  <view class="section">
+    <view class="section-head">
+      <text class="section-title">信息类型</text>
+      <text class="section-sub">资源与需求双向连接</text>
+    </view>
+    <view class="chip-row">
+      <view class="chip {{type === 'all' ? 'active' : ''}}" data-type="all" bindtap="onTypeTap">全部</view>
+      <view class="chip {{type === 'resource' ? 'active' : ''}}" data-type="resource" bindtap="onTypeTap">我能提供</view>
+      <view class="chip {{type === 'demand' ? 'active' : ''}}" data-type="demand" bindtap="onTypeTap">我有需求</view>
+    </view>
+  </view>
+
+  <view class="section">
+    <view class="section-head">
+      <text class="section-title">所属地区</text>
+      <text class="section-sub">按盟市或区外校友筛选</text>
+    </view>
+    <view class="region-grid">
+      <view class="region-option {{regionCode === '' ? 'on' : ''}}" data-code="" bindtap="onRegionTap">
+        <text class="region-name">全部地区</text>
+        <text class="region-count">不限地区</text>
+      </view>
+      <view
+        class="region-option {{regionCode === item.code ? 'on' : ''}}"
+        wx:for="{{regions}}"
+        wx:key="code"
+        data-code="{{item.code}}"
+        bindtap="onRegionTap"
+      >
+        <text class="region-name">{{item.name}}</text>
+        <text class="region-count" wx:if="{{item.alumniCount !== undefined}}">{{item.alumniCount}} 条</text>
+        <text class="region-count" wx:else>{{item.level === 'outside' ? '区外校友' : '内蒙古'}}</text>
+      </view>
+    </view>
+  </view>
+
+  <view class="fixed-bar">
+    <view class="btn-row">
+      <button class="btn-ghost btn-block" bindtap="onReset">重置</button>
+      <button class="btn-main btn-block" bindtap="onConfirm">确定</button>
+    </view>
+  </view>
+</view>

@@ -1,0 +1,94 @@
+<view class="detail-page">
+  <state-view
+    status="{{loading ? 'loading' : error ? 'error' : 'idle'}}"
+    error-text="{{error}}"
+    bind:retry="onRetry"
+  ></state-view>
+
+  <block wx:if="{{!loading && !error}}">
+    <view class="card">
+      <view class="card-title">编辑个人资料</view>
+      <view class="card-desc">资料会展示给已建立联系的校友；展示范围由「隐私设置」控制。</view>
+    </view>
+
+    <view class="section">
+      <view class="form-item">
+        <text class="form-label">展示名称<text class="required">*</text></text>
+        <input class="form-input" value="{{displayName}}" maxlength="30" data-field="displayName" bindinput="onInput" placeholder="例如：林知远" />
+      </view>
+
+      <view class="form-item">
+        <text class="form-label">真实姓名</text>
+        <input class="form-input" value="{{realName}}" maxlength="30" data-field="realName" bindinput="onInput" placeholder="仅用于身份核验" />
+      </view>
+
+      <view class="form-item">
+        <text class="form-label">毕业院系</text>
+        <input class="form-input" value="{{college}}" maxlength="40" data-field="college" bindinput="onInput" placeholder="例如：信息科学技术学院" />
+      </view>
+
+      <view class="form-item">
+        <text class="form-label">学位</text>
+        <input class="form-input" value="{{degree}}" maxlength="20" data-field="degree" bindinput="onInput" placeholder="例如：本科 / 硕士 / 博士" />
+      </view>
+
+      <view class="form-item">
+        <text class="form-label">毕业年份</text>
+        <input class="form-input" value="{{graduationYear}}" maxlength="4" type="number" data-field="graduationYear" bindinput="onInput" placeholder="例如：2015" />
+      </view>
+
+      <view class="form-item">
+        <text class="form-label">所在盟市</text>
+        <picker mode="selector" range="{{regions}}" range-key="name" value="{{regionIndex}}" bindchange="onRegionChange">
+          <view class="picker-value {{regionIndex < 0 ? 'placeholder' : ''}}">
+            {{regionIndex < 0 ? '请选择所在盟市' : regions[regionIndex].name}}
+          </view>
+        </picker>
+      </view>
+
+      <view class="form-item">
+        <text class="form-label">所在行业</text>
+        <picker mode="selector" range="{{industries}}" range-key="name" value="{{industryIndex}}" bindchange="onIndustryChange">
+          <view class="picker-value {{industryIndex < 0 ? 'placeholder' : ''}}">
+            {{industryIndex < 0 ? '请选择所在行业' : industries[industryIndex].name}}
+          </view>
+        </picker>
+      </view>
+
+      <view class="form-item">
+        <text class="form-label">专业方向</text>
+        <input class="form-input" value="{{direction}}" maxlength="40" data-field="direction" bindinput="onInput" placeholder="例如：软件开发与人工智能应用" />
+      </view>
+
+      <view class="form-item">
+        <text class="form-label">个人介绍</text>
+        <textarea class="form-textarea" value="{{intro}}" maxlength="300" data-field="intro" bindinput="onInput" placeholder="介绍你关注的领域与希望交流的方向" />
+      </view>
+
+      <view class="menu-title">联系方式（仅在双方授权后可见）</view>
+
+      <view class="form-item">
+        <text class="form-label">手机号</text>
+        <input class="form-input" value="{{contactPhone}}" maxlength="20" data-field="contactPhone" bindinput="onInput" placeholder="用于建立联系后展示" />
+      </view>
+
+      <view class="form-item">
+        <text class="form-label">微信号</text>
+        <input class="form-input" value="{{contactWechat}}" maxlength="40" data-field="contactWechat" bindinput="onInput" placeholder="用于建立联系后展示" />
+      </view>
+
+      <view class="form-item">
+        <text class="form-label">邮箱</text>
+        <input class="form-input" value="{{contactEmail}}" maxlength="60" data-field="contactEmail" bindinput="onInput" placeholder="用于建立联系后展示" />
+      </view>
+
+      <text class="form-error" wx:if="{{submitError}}">{{submitError}}</text>
+    </view>
+  </block>
+
+  <view class="fixed-bar" wx:if="{{!loading && !error}}">
+    <button class="btn-main btn-block" loading="{{submitting}}" disabled="{{submitting}}" bindtap="onSubmit">
+      {{submitting ? '保存中…' : '保存资料'}}
+    </button>
+  </view>
+</view>

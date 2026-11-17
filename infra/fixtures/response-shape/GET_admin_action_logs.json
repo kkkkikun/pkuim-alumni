@@ -1,0 +1,25 @@
+{
+  "code": "OK",
+  "message": "success",
+  "data": {
+    "items": [
+      {
+        "id": 1,
+        "adminId": 1,
+        "adminName": "夹具管理员",
+        "action": "article.create",
+        "targetType": "article",
+        "targetId": "1",
+        "detail": null,
+        "ip": "127.0.0.1",
+        "createdAt": "2026-01-01T00:00:00.000Z"
+      }
+    ],
+    "meta": {
+      "page": 1,
+      "pageSize": 20,
+      "total": 1,
+      "totalPages": 1
+    }
+  }
+}

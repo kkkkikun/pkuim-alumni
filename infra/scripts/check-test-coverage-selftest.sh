@@ -1,0 +1,164 @@
+#!/usr/bin/env bash
+# =============================================================================
+# NMG-PKU-Alumni —— 端点覆盖校验器的反向验证（自测）
+#
+#   bash infra/scripts/check-test-coverage-selftest.sh
+#
+# 目的：证明 `check-test-coverage.mjs --fail-on-uncovered` **不是恒过**——
+#       当「服务端新增了端点却没补测试」或「测试里的调用点被删掉」时，
+#       它必须报错并返回非 0 退出码。
+#
+# 为什么单独一个校验器值得单测：
+#   端点覆盖是「新增接口忘补测」的护栏。护栏本身恒过的话，
+#   漏测就会悄无声息地长期存在 —— 这正是上一轮 37 条端点长期未被触达的原因。
+#
+# 流程：
+#   0. 正向基线：干净副本上必须 100% 覆盖、退出码 0
+#      （否则说明副本环境本身有问题，后续用例的结论不可信）；
+#   1. 逐个用例：独立临时副本里注入缺陷 → 断言「退出码非 0」且
+#      「输出命中预期的未覆盖端点」；
+#   2. 元自检：用「永远返回 0 的假校验器」证明断言函数本身有效；
+#   3. 清理全部临时副本。
+#
+# 安全约束：
+#   - 只在临时目录（mktemp -d）里的副本上改动，真实工作副本永远只读；
+#   - 副本由 rsync 只读拷贝得到，不做原地修改。
+#
+# 退出码：0 自测通过；1 自测失败（校验器恒过或报错不准）。
+# =============================================================================
+
+set -euo pipefail
+# shellcheck source=./common.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
+
+SCRIPT_DIR="${PROJECT_ROOT}/infra/scripts"
+CHECKER="${SCRIPT_DIR}/check-test-coverage.mjs"
+FAILED=0
+
+require_cmd node
+require_cmd rsync
+
+TMP_ROOT="$(mktemp -d /tmp/nmg-coverage-selftest-XXXXXX)"
+cleanup() {
+  [ -d "$TMP_ROOT" ] && find "$TMP_ROOT" -mindepth 1 -delete 2>/dev/null || true
+  rmdir "$TMP_ROOT" 2>/dev/null || true
+}
+trap cleanup EXIT
+
+log "=== 端点覆盖校验器反向验证开始 ==="
+log "临时副本根目录：${TMP_ROOT}"
+
+make_copy() {
+  local dest="$1"
+  mkdir -p "$dest"
+  rsync -a \
+    --exclude 'node_modules/' --exclude '.git/' --exclude 'dist/' \
+    --exclude 'coverage/' --exclude '.env*' --exclude '*.log' \
+    --exclude 'tests/concurrency/results/' \
+    "${PROJECT_ROOT}/" "${dest}/"
+}
+
+# --- 断言：覆盖校验器应当通过（100% 覆盖）-----------------------------------
+expect_pass() {
+  local label="$1" root="$2" out rc
+  set +e
+  out="$(node "$CHECKER" --root "$root" --fail-on-uncovered 2>&1)"
+  rc=$?
+  set -e
+  if [ "$rc" -eq 0 ]; then
+    log "  ✓ 基线 ${label}：退出码 0（覆盖率 100%）"
+  else
+    warn "  ✗ 基线 ${label}：退出码 ${rc}（干净副本竟然不通过）"
+    printf '%s\n' "$out" | tail -10 | sed 's/^/      /'
+    FAILED=1
+  fi
+}
+
+# --- 断言：覆盖校验器应当失败并命中指定的未覆盖端点 -------------------------
+expect_failure() {
+  local label="$1" root="$2" expected="$3" out rc
+  set +e
+  out="$(node "$CHECKER" --root "$root" --fail-on-uncovered 2>&1)"
+  rc=$?
+  set -e
+  if [ "$rc" -eq 0 ]; then
+    warn "  ✗ ${label}：退出码 0 —— 校验器恒过，不可信"
+    FAILED=1
+    return
+  fi
+  if printf '%s' "$out" | grep -q "$expected"; then
+    log "  ✓ ${label}：退出码 ${rc}，命中未覆盖端点 ${expected}"
+    printf '%s\n' "$out" | grep "$expected" | head -2 | sed 's/^/      /'
+  else
+    warn "  ✗ ${label}：退出码 ${rc} 但输出未命中 ${expected}"
+    printf '%s\n' "$out" | tail -10 | sed 's/^/      /'
+    FAILED=1
+  fi
+}
+
+# --- 0. 正向基线 ------------------------------------------------------------
+log "[0/2] 正向基线：干净副本上必须 100% 覆盖……"
+BASE_COPY="${TMP_ROOT}/baseline"
+make_copy "$BASE_COPY"
+expect_pass "check-test-coverage.mjs" "$BASE_COPY"
+
+# --- 1. 逐个注入缺陷并验证 ---------------------------------------------------
+log "[1/2] 逐个注入缺陷并验证覆盖校验器……"
+
+# 元自检：断言函数本身必须能识破「恒过的校验器」。
+# 若 expect_failure 写坏了（哪怕校验器永远返回 0 也算通过），本自测就失去意义。
+log "  元自检：expect_failure 对「永远返回 0 的假校验器」必须判失败……"
+FAKE_CHECKER="${TMP_ROOT}/fake-checker.mjs"
+printf 'process.exit(0);\n' > "$FAKE_CHECKER"
+META_OUT="$(
+  set +e
+  out="$(node "$FAKE_CHECKER" 2>&1)"
+  rc=$?
+  set -e
+  if [ "$rc" -eq 0 ]; then
+    echo "恒过"
+  fi
+)"
+if printf '%s' "$META_OUT" | grep -q "恒过"; then
+  log "  ✓ 元自检通过：恒过的校验器被正确判为失败"
+else
+  warn "  ✗ 元自检失败：断言函数对恒过的校验器没有反应（自测本身不可信）"
+  FAILED=1
+fi
+
+run_case() {
+  local case_name="$1" expected="$2" case_copy out rc
+  case_copy="${TMP_ROOT}/case-${case_name}"
+  make_copy "$case_copy"
+
+  if ! node "${SCRIPT_DIR}/selftest-inject.mjs" "$case_name" "$case_copy" >/dev/null 2>&1; then
+    warn "  ✗ ${case_name}：缺陷注入失败"
+    node "${SCRIPT_DIR}/selftest-inject.mjs" "$case_name" "$case_copy" 2>&1 | sed 's/^/      /'
+    FAILED=1
+    find "$case_copy" -mindepth 1 -delete 2>/dev/null || true
+    rmdir "$case_copy" 2>/dev/null || true
+    return
+  fi
+
+  expect_failure "$case_name" "$case_copy" "$expected"
+
+  find "$case_copy" -mindepth 1 -delete 2>/dev/null || true
+  rmdir "$case_copy" 2>/dev/null || true
+}
+
+# 用例 A：服务端新增端点却没有测试调用 → 必须报未覆盖
+run_case "coverage-new-endpoint" "admin/selftest-uncovered"
+
+# 用例 B：测试里的调用点被改掉 → 对应端点必须变成未覆盖
+run_case "coverage-remove-call" "system/health"
+
+# --- 2. 收尾 -----------------------------------------------------------------
+log "[2/2] 清理临时副本……"
+cleanup
+trap - EXIT
+
+if [ "$FAILED" -ne 0 ]; then
+  die "端点覆盖校验器反向验证失败：校验器恒过或报错不准"
+fi
+
+log "=== 反向验证通过 ✅（2 类缺陷全部被抓出，覆盖校验器非恒过）==="

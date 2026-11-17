@@ -1,0 +1,38 @@
+<view class="detail-page">
+  <state-view
+    status="{{loading ? 'loading' : error ? 'error' : 'idle'}}"
+    error-text="{{error}}"
+    bind:retry="onRetry"
+  ></state-view>
+
+  <block wx:if="{{postTitle}}">
+    <view class="card">
+      <view class="card-title">{{postTitle}}</view>
+      <view class="card-desc">发布者：{{postAuthor}}</view>
+    </view>
+
+    <view class="section">
+      <view class="form-item">
+        <text class="form-label">留言内容<text class="required">*</text></text>
+        <textarea
+          class="form-textarea"
+          value="{{message}}"
+          maxlength="300"
+          placeholder="请简单说明你希望交流的内容或能够提供的资源……"
+          bindinput="onMessageInput"
+        ></textarea>
+        <text class="form-hint">6–300 字。内容会随合作意向发送给发布者。</text>
+      </view>
+      <text class="form-error" wx:if="{{submitError}}">{{submitError}}</text>
+      <view class="notice-box">
+        表达合作意向后，会生成一条联系申请，等待发布者确认。发布者接受前，双方不会互相看到联系方式。
+      </view>
+    </view>
+  </block>
+
+  <view class="fixed-bar" wx:if="{{postTitle && !success}}">
+    <button class="btn-main btn-block" loading="{{submitting}}" disabled="{{submitting}}" bindtap="onSubmit">
+      {{submitting ? '提交中…' : '提交合作意向'}}
+    </button>
+  </view>
+</view>

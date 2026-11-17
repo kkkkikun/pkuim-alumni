@@ -1,0 +1,64 @@
+<view class="detail-page">
+  <state-view
+    status="{{loading ? 'loading' : error ? 'error' : 'idle'}}"
+    error-text="{{error}}"
+    bind:retry="onRetry"
+  ></state-view>
+
+  <block wx:if="{{connection}}">
+    <view class="profile-head">
+      <view class="profile-avatar">{{connection.peerInitial}}</view>
+      <view class="profile-copy">
+        <view class="profile-name"><text>{{connection.peerName}}</text></view>
+        <view class="profile-meta">{{connection.peerMeta}}</view>
+        <view class="profile-meta">建立于 {{connection.establishedAt}}</view>
+      </view>
+    </view>
+
+    <view class="section">
+      <view class="section-head"><text class="section-title">我的联系方式共享</text></view>
+      <view class="card">
+        <view class="toggle-row">
+          <view class="toggle-copy">
+            <text class="toggle-title">向对方共享我的联系方式</text>
+            <text class="toggle-desc">关闭后，对方将立即无法查看你的手机号、微信与邮箱</text>
+          </view>
+          <switch checked="{{connection.myContactShared}}" disabled="{{submitting}}" bindchange="onToggleShare" color="#a51e28" />
+        </view>
+      </view>
+    </view>
+
+    <view class="section">
+      <view class="section-head"><text class="section-title">对方联系方式</text></view>
+      <view class="detail-rows card" wx:if="{{connection.peerContactShared}}">
+        <view class="detail-row">
+          <text class="detail-label">姓名</text>
+          <text class="detail-value">{{connection.peerName}}</text>
+        </view>
+        <view class="detail-row">
+          <text class="detail-label">电话</text>
+          <text class="detail-value">{{connection.peerPhone || '未填写'}}</text>
+        </view>
+        <view class="detail-row">
+          <text class="detail-label">微信</text>
+          <text class="detail-value">{{connection.peerWechat || '未填写'}}</text>
+        </view>
+        <view class="detail-row">
+          <text class="detail-label">邮箱</text>
+          <text class="detail-value">{{connection.peerEmail || '未填写'}}</text>
+        </view>
+      </view>
+      <view class="card" wx:else>
+        <view class="card-desc">对方尚未开启联系方式共享，因此这里不展示任何联系方式。双方都开启后即可互相查看。</view>
+      </view>
+    </view>
+
+    <text class="form-error" wx:if="{{actionError}}">{{actionError}}</text>
+
+    <view class="section">
+      <view class="notice-box">
+        联系方式共享完全由本人控制，可随时撤回；撤回后对方将立即无法查看已共享的内容。
+      </view>
+    </view>
+  </block>
+</view>

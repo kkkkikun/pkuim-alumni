@@ -1,0 +1,21 @@
+<view class="detail-page">
+  <state-view
+    status="{{loading ? 'loading' : error ? 'error' : 'idle'}}"
+    error-text="{{error}}"
+    bind:retry="onRetry"
+  ></state-view>
+
+  <block wx:if="{{article}}">
+    <view class="article-head">
+      <text class="article-category" wx:if="{{article.categoryName}}">{{article.categoryName}}</text>
+      <text class="article-date">{{article.publishedAt}}</text>
+    </view>
+    <view class="article-title">{{article.title}}</view>
+    <view class="article-summary" wx:if="{{article.summary}}">{{article.summary}}</view>
+    <view class="prose">{{article.body}}</view>
+    <view class="article-meta">
+      <text>发布于 {{article.publishedAt}}</text>
+      <text>阅读 {{article.viewCount}}</text>
+    </view>
+  </block>
+</view>

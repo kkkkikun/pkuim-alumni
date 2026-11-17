@@ -1,0 +1,11 @@
+{
+  "navigationBarTitleText": "账号设置",
+  "navigationBarBackgroundColor": "#ffffff",
+  "navigationBarTextStyle": "black",
+  "backgroundColor": "#f8f7f5",
+  "backgroundTextStyle": "light",
+  "enablePullDownRefresh": false,
+  "usingComponents": {
+    "dialog": "../../../components/dialog/index"
+  }
+}

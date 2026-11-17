@@ -1,0 +1,22 @@
+{
+  "name": "@nmg/worker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "内蒙古北京大学校友会数字化平台 · Outbox 消费与通知投递 Worker",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "start:dev": "ts-node src/index.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "bullmq": "^5.34.5",
+    "ioredis": "^5.4.2",
+    "mysql2": "^3.12.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.6",
+    "typescript": "5.7.2"
+  }
+}

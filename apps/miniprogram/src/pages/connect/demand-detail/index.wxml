@@ -1,0 +1,54 @@
+<view class="detail-page">
+  <state-view
+    status="{{loading ? 'loading' : error ? 'error' : 'idle'}}"
+    error-text="{{error}}"
+    bind:retry="onRetry"
+  ></state-view>
+
+  <block wx:if="{{post}}">
+    <view class="detail-hero">
+      <text class="detail-hero-kind">{{post.typeLabel}} · {{post.industryName || '综合'}}</text>
+      <view class="detail-hero-title">{{post.title}}</view>
+      <text class="detail-hero-status" wx:if="{{post.status !== 'published'}}">{{post.statusLabel}}</text>
+    </view>
+
+    <view class="detail-rows card">
+      <view class="detail-row">
+        <text class="detail-label">发布身份</text>
+        <text class="detail-value">{{post.authorName}}</text>
+      </view>
+      <view class="detail-row">
+        <text class="detail-label">所属地区</text>
+        <text class="detail-value">{{post.regionName || '未填写'}}</text>
+      </view>
+      <view class="detail-row">
+        <text class="detail-label">所属领域</text>
+        <text class="detail-value">{{post.industryName || '未填写'}}</text>
+      </view>
+      <view class="detail-row">
+        <text class="detail-label">发布时间</text>
+        <text class="detail-value">{{post.publishedAt || '待发布'}}</text>
+      </view>
+    </view>
+
+    <view class="section">
+      <view class="section-head"><text class="section-title">需求说明</text></view>
+      <view class="card">
+        <view class="card-desc">{{post.body}}</view>
+      </view>
+    </view>
+
+    <view class="section">
+      <view class="notice-box">
+        合作联系采用意向申请与双方确认的方式，不默认公开校友联系方式；所有发布内容需经校友会审核后才会出现在列表中。
+      </view>
+    </view>
+
+    <view class="page-bottom-space"></view>
+  </block>
+
+  <view class="fixed-bar" wx:if="{{post}}">
+    <button class="btn-main btn-block" wx:if="{{post.isMine}}" bindtap="onStatusTap">查看审核状态</button>
+    <button class="btn-main btn-block" wx:else bindtap="onIntentTap">表达合作意向</button>
+  </view>
+</view>

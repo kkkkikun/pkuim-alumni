@@ -1,0 +1,145 @@
+/* 自定义底部导航：沿用原型的白底细线 + 选中红色与桃色下划线 */
+.tabbar {
+  display: flex;
+  align-items: stretch;
+  height: 100rpx;
+  padding-bottom: env(safe-area-inset-bottom);
+  background: #fffcfb;
+  border-top: 1rpx solid #f0edeb;
+}
+
+.tab-item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6rpx;
+  color: #a29c99;
+  font-size: 21rpx;
+  font-weight: 600;
+}
+
+.tab-item.on {
+  color: #a51e28;
+}
+
+.tab-text {
+  line-height: 1;
+}
+
+.tab-icon {
+  position: relative;
+  width: 46rpx;
+  height: 46rpx;
+}
+
+.tab-item.on .tab-icon::after {
+  content: "";
+  position: absolute;
+  bottom: -14rpx;
+  left: 50%;
+  margin-left: -6rpx;
+  width: 12rpx;
+  height: 6rpx;
+  border-radius: 8rpx;
+  background: #d4a085;
+  opacity: 0.65;
+}
+
+/* 首页：屋顶 + 房屋 */
+.icon-home::before {
+  content: "";
+  position: absolute;
+  top: 4rpx;
+  left: 3rpx;
+  width: 0;
+  height: 0;
+  border-left: 20rpx solid transparent;
+  border-right: 20rpx solid transparent;
+  border-bottom: 19rpx solid currentColor;
+}
+
+.icon-home::after {
+  content: "";
+  position: absolute;
+  bottom: 4rpx;
+  left: 9rpx;
+  width: 28rpx;
+  height: 22rpx;
+  border: 3rpx solid currentColor;
+  border-top: none;
+  border-radius: 0 0 8rpx 8rpx;
+}
+
+/* 通讯录：头像 + 肩线 */
+.icon-users::before {
+  content: "";
+  position: absolute;
+  top: 5rpx;
+  left: 14rpx;
+  width: 17rpx;
+  height: 17rpx;
+  border: 3rpx solid currentColor;
+  border-radius: 50%;
+}
+
+.icon-users::after {
+  content: "";
+  position: absolute;
+  bottom: 5rpx;
+  left: 6rpx;
+  width: 34rpx;
+  height: 17rpx;
+  border: 3rpx solid currentColor;
+  border-bottom: none;
+  border-radius: 20rpx 20rpx 0 0;
+}
+
+/* 连接：三个节点 */
+.icon-connect::before {
+  content: "";
+  position: absolute;
+  top: 6rpx;
+  left: 4rpx;
+  width: 10rpx;
+  height: 10rpx;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 28rpx 0 0 currentColor, 14rpx 26rpx 0 currentColor;
+}
+
+.icon-connect::after {
+  content: "";
+  position: absolute;
+  top: 20rpx;
+  left: 9rpx;
+  width: 30rpx;
+  height: 3rpx;
+  background: currentColor;
+  transform: rotate(28deg);
+}
+
+/* 我的：头像 + 肩线 */
+.icon-person::before {
+  content: "";
+  position: absolute;
+  top: 5rpx;
+  left: 14rpx;
+  width: 18rpx;
+  height: 18rpx;
+  border: 3rpx solid currentColor;
+  border-radius: 50%;
+}
+
+.icon-person::after {
+  content: "";
+  position: absolute;
+  bottom: 5rpx;
+  left: 6rpx;
+  width: 34rpx;
+  height: 18rpx;
+  border: 3rpx solid currentColor;
+  border-bottom: none;
+  border-radius: 20rpx 20rpx 0 0;
+}

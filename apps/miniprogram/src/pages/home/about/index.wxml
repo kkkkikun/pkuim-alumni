@@ -1,0 +1,26 @@
+<view class="detail-page">
+  <view class="about-hero">
+    <view class="about-stamp">燕</view>
+    <view class="about-name">内蒙古北京大学校友会</view>
+    <view class="about-slogan">心系燕园 · 情连北疆</view>
+  </view>
+
+  <view class="card">
+    <view class="card-desc">{{intro}}</view>
+  </view>
+
+  <view class="section">
+    <view class="detail-rows card">
+      <view class="detail-row" wx:for="{{rows}}" wx:key="label">
+        <text class="detail-label">{{item.label}}</text>
+        <text class="detail-value">{{item.value}}</text>
+      </view>
+    </view>
+  </view>
+
+  <view class="section">
+    <view class="notice-box">
+      组织名称与服务构想用于讨论。正式上线前需校友会确认内容、运营职责与账号资质；平台内的人物、动态与活动信息均以校友会审核发布的内容为准。
+    </view>
+  </view>
+</view>

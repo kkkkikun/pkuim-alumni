@@ -1,0 +1,67 @@
+<view class="connect">
+  <view class="link-hero">
+    <view class="link-hero-text">
+      <view class="link-kicker">从认识校友，到彼此成就</view>
+      <view class="link-title">让每一份专长<text class="link-title-line">遇见新的可能</text></view>
+      <view class="link-desc">交流行业经验，分享资源需求，<text class="link-desc-line">在信任与自愿的基础上建立连接。</text></view>
+      <view class="link-actions">
+        <view class="link-action primary" bindtap="onPublishDemand">＋ 我有需求</view>
+        <view class="link-action ghost" bindtap="onPublishResource">♡ 我能提供</view>
+      </view>
+    </view>
+  </view>
+
+  <view class="link-body">
+    <view class="connect-toolbar">
+      <view class="filter-button {{regionLabel !== '全部地区' ? 'active' : ''}}" bindtap="onRegionFilterTap">
+        地区：{{regionLabel}} ▾
+      </view>
+      <text class="connect-result-count">找到 {{total}} 条连接信息</text>
+    </view>
+
+    <view class="link-section-title">
+      <text class="section-title">按行业方向查看</text>
+      <text class="section-sub">资源与需求双向连接</text>
+    </view>
+
+    <scroll-view class="sector-scroll" scroll-x>
+      <view class="sector-row">
+        <view class="sector-chip {{industryLabel === '全部' ? 'on' : ''}}" data-code="" bindtap="onIndustryTap">全部</view>
+        <view
+          class="sector-chip {{industryLabel === item.name ? 'on' : ''}}"
+          wx:for="{{industries}}"
+          wx:key="code"
+          data-code="{{item.code}}"
+          bindtap="onIndustryTap"
+        >{{item.name}}</view>
+      </view>
+    </scroll-view>
+
+    <state-view
+      status="{{loading && posts.length === 0 ? 'loading' : error ? 'error' : posts.length === 0 ? 'empty' : 'idle'}}"
+      error-text="{{error}}"
+      empty-text="当前筛选下暂时没有连接信息"
+      empty-desc="可以切换地区或行业，也可以发布一条资源与需求"
+      bind:retry="onRetry"
+    ></state-view>
+
+    <view class="post-list" wx:if="{{posts.length}}">
+      <opportunity-card wx:for="{{posts}}" wx:key="id" post="{{item}}" bind:tap="onPostTap"></opportunity-card>
+    </view>
+
+    <view class="list-foot" wx:if="{{posts.length}}">{{hasMore ? '上拉加载更多' : '— 已经到底了 —'}}</view>
+
+    <view class="flow-card">
+      <view class="flow-title">一次连接，是怎样发生的？</view>
+      <view class="flow-steps">
+        <view class="flow-step"><text class="flow-bubble">1</text><text class="flow-label">发现方向</text></view>
+        <text class="flow-arrow">›</text>
+        <view class="flow-step"><text class="flow-bubble">2</text><text class="flow-label">提交意向</text></view>
+        <text class="flow-arrow">›</text>
+        <view class="flow-step"><text class="flow-bubble">3</text><text class="flow-label">双向确认</text></view>
+        <text class="flow-arrow">›</text>
+        <view class="flow-step"><text class="flow-bubble">4</text><text class="flow-label">建立联系</text></view>
+      </view>
+    </view>
+  </view>
+</view>

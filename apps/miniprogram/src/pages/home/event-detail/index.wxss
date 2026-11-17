@@ -1,0 +1,6 @@
+@import "../../../styles/blocks.wxss";
+
+.btn-row {
+  display: flex;
+  gap: 20rpx;
+}

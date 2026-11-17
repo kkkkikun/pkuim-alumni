@@ -1,0 +1,60 @@
+<view class="detail-page">
+  <state-view
+    status="{{loading ? 'loading' : error ? 'error' : 'idle'}}"
+    error-text="{{error}}"
+    bind:retry="onRetry"
+  ></state-view>
+
+  <block wx:if="{{event}}">
+    <view class="detail-hero">
+      <text class="detail-hero-kind">{{event.kind}}</text>
+      <view class="detail-hero-title">{{event.title}}</view>
+      <text class="detail-hero-status" wx:if="{{event.status === 'published'}}">报名进行中</text>
+    </view>
+
+    <view class="detail-rows card">
+      <view class="detail-row">
+        <text class="detail-label">活动时间</text>
+        <text class="detail-value">{{event.startsAt ? event.startsAt : '时间待定'}}</text>
+      </view>
+      <view class="detail-row">
+        <text class="detail-label">所在地区</text>
+        <text class="detail-value">{{event.regionName || '内蒙古'}}</text>
+      </view>
+      <view class="detail-row">
+        <text class="detail-label">活动地点</text>
+        <text class="detail-value">{{event.place || '待公布'}}</text>
+      </view>
+      <view class="detail-row">
+        <text class="detail-label">报名情况</text>
+        <text class="detail-value">已报名 {{event.registeredCount}} / 限 {{event.capacity}} 人</text>
+      </view>
+      <view class="detail-row" wx:if="{{registrationText}}">
+        <text class="detail-label">我的状态</text>
+        <text class="detail-value text-red">{{registrationText}}</text>
+      </view>
+    </view>
+
+    <view class="section">
+      <view class="section-head"><text class="section-title">活动介绍</text></view>
+      <view class="card">
+        <view class="card-desc">{{event.description || '活动介绍待补充，报名成功后会收到详细通知。'}}</view>
+      </view>
+    </view>
+
+    <view class="section">
+      <view class="card">
+        <view class="card-desc">报名成功与否以校友会审核与现场通知为准；如无法出席，请提前在「我的报名」中说明。</view>
+      </view>
+    </view>
+
+    <view class="page-bottom-space"></view>
+  </block>
+
+  <view class="fixed-bar" wx:if="{{event}}">
+    <button class="btn-main btn-block" wx:if="{{!registered}}" bindtap="onRegisterTap">立即报名</button>
+    <view class="btn-row" wx:else>
+      <button class="btn-soft btn-block" bindtap="onMyRegistrationsTap">查看我的报名</button>
+    </view>
+  </view>
+</view>

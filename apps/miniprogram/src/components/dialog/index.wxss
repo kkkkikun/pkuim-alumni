@@ -1,0 +1,66 @@
+.dialog-mask {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  z-index: 100;
+  background: rgba(41, 32, 32, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 60rpx;
+}
+
+.dialog {
+  width: 100%;
+  max-width: 620rpx;
+  background: #fff;
+  border-radius: 26rpx;
+  padding: 44rpx 40rpx 32rpx;
+  box-shadow: 0 20rpx 60rpx rgba(37, 27, 27, 0.2);
+}
+
+.dialog-title {
+  display: block;
+  font-size: 33rpx;
+  font-weight: 700;
+  color: #262322;
+  text-align: center;
+}
+
+.dialog-content {
+  display: block;
+  margin-top: 20rpx;
+  font-size: 26rpx;
+  color: #817873;
+  line-height: 1.8;
+  text-align: center;
+}
+
+.dialog-actions {
+  display: flex;
+  margin-top: 40rpx;
+}
+
+.dialog-btn {
+  flex: 1;
+  height: 82rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 28rpx;
+  border-radius: 16rpx;
+}
+
+.dialog-cancel {
+  background: #f7f3f1;
+  color: #88817d;
+  margin-right: 20rpx;
+}
+
+.dialog-confirm {
+  background: #a51e28;
+  color: #fff;
+  font-weight: 700;
+}

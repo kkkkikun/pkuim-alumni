@@ -1,0 +1,15 @@
+<view class="list-page">
+  <state-view
+    status="{{loading && events.length === 0 ? 'loading' : error ? 'error' : events.length === 0 ? 'empty' : 'idle'}}"
+    error-text="{{error}}"
+    empty-text="暂时没有活动安排"
+    empty-desc="校友会发布新的活动后，这里会第一时间展示"
+    bind:retry="onRetry"
+  ></state-view>
+
+  <view class="event-list" wx:if="{{events.length}}">
+    <event-card wx:for="{{events}}" wx:key="id" event="{{item}}" bind:tap="onEventTap"></event-card>
+  </view>
+
+  <view class="list-foot" wx:if="{{events.length}}">{{hasMore ? '上拉加载更多' : '— 已经到底了 —'}}</view>
+</view>

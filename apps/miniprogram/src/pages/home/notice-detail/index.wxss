@@ -1,0 +1,25 @@
+@import "../../../styles/blocks.wxss";
+
+.notice-badge {
+  display: inline-block;
+  font-size: 21rpx;
+  color: #b85f58;
+  background: #f9e8e6;
+  border-radius: 8rpx;
+  padding: 4rpx 14rpx;
+}
+
+.notice-title {
+  margin-top: 22rpx;
+  font-family: "Songti SC", "STSong", "SimSun", serif;
+  font-size: 40rpx;
+  font-weight: 700;
+  line-height: 1.5;
+  color: #262322;
+}
+
+.notice-meta {
+  margin-top: 18rpx;
+  font-size: 21rpx;
+  color: #a89b95;
+}

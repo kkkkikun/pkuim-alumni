@@ -1,0 +1,11 @@
+{
+  "navigationBarTitleText": "已建立联系",
+  "navigationBarBackgroundColor": "#ffffff",
+  "navigationBarTextStyle": "black",
+  "backgroundColor": "#f8f7f5",
+  "backgroundTextStyle": "light",
+  "enablePullDownRefresh": true,
+  "usingComponents": {
+    "state-view": "../../../components/state-view/index"
+  }
+}

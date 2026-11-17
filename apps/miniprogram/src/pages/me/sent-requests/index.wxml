@@ -1,0 +1,35 @@
+<view class="list-page">
+  <state-view
+    status="{{loading && items.length === 0 ? 'loading' : error ? 'error' : items.length === 0 ? 'empty' : 'idle'}}"
+    error-text="{{error}}"
+    empty-text="还没有发出的联系申请"
+    empty-desc="在通讯录或连接栏目发起申请后，记录会显示在这里"
+    bind:retry="onRetry"
+  ></state-view>
+
+  <view class="request-list" wx:if="{{items.length}}">
+    <view class="request-card" wx:for="{{items}}" wx:key="id">
+      <view class="request-head" data-id="{{item.id}}" bindtap="onDetailTap">
+        <text class="request-name">{{item.toName}}</text>
+        <text class="tag {{item.canCancel ? '' : 'tag-grey'}}">{{item.statusLabel}}</text>
+      </view>
+      <view class="request-message">{{item.message}}</view>
+      <view class="request-meta">{{item.createdAt}}</view>
+      <view class="request-actions" wx:if="{{item.canCancel}}">
+        <button class="btn-ghost btn-small" data-id="{{item.id}}" bindtap="onCancel">取消申请</button>
+      </view>
+    </view>
+  </view>
+
+  <text class="form-error" wx:if="{{actionError}}">{{actionError}}</text>
+</view>
+
+<dialog
+  visible="{{dialogVisible}}"
+  title="{{dialogTitle}}"
+  content="{{dialogContent}}"
+  confirm-text="{{dialogConfirmText}}"
+  cancel-text="{{dialogCancelText}}"
+  bind:confirm="onDialogConfirm"
+  bind:cancel="onDialogCancel"
+></dialog>

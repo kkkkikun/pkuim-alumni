@@ -1,0 +1,33 @@
+{
+  "name": "@nmg/admin-web",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "内蒙古北京大学校友会数字化平台 · 管理后台",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "vue-tsc --noEmit",
+    "lint": "echo \"[admin-web] lint 由根仓库 ESLint 统一配置，未在子包内单独配置\""
+  },
+  "dependencies": {
+    "@nmg/contracts": "workspace:*",
+    "axios": "^1.7.9",
+    "dayjs": "^1.11.13",
+    "pinia": "^2.3.0",
+    "tdesign-vue-next": "^1.9.6",
+    "vue": "^3.5.13",
+    "vue-router": "^4.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "typescript": "5.7.2",
+    "vite": "^6.0.11",
+    "vue-tsc": "^2.2.0"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}

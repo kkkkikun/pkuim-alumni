@@ -1,0 +1,21 @@
+@import "../../../styles/blocks.wxss";
+
+.status-hero {
+  padding: 46rpx 36rpx;
+  border-radius: 24rpx;
+  background: #fff;
+  text-align: center;
+}
+
+.status-hero-title {
+  font-size: 38rpx;
+  font-weight: 700;
+  color: #a51e28;
+}
+
+.status-hero-desc {
+  margin-top: 16rpx;
+  font-size: 25rpx;
+  color: #817873;
+  line-height: 1.8;
+}

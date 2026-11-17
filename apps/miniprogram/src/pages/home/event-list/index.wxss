@@ -1,0 +1,5 @@
+@import "../../../styles/blocks.wxss";
+
+.event-list {
+  margin-top: 6rpx;
+}

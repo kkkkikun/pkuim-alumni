@@ -1,0 +1,43 @@
+<view class="list-page">
+  <view class="notify-toolbar" wx:if="{{items.length}}">
+    <text class="notify-toolbar-title">站内通知</text>
+    <text class="notify-toolbar-action" bindtap="onMarkAllRead">全部已读</text>
+  </view>
+
+  <state-view
+    status="{{loading && items.length === 0 ? 'loading' : error ? 'error' : items.length === 0 ? 'empty' : 'idle'}}"
+    error-text="{{error}}"
+    empty-text="还没有通知"
+    empty-desc="联系申请、活动报名、审核结果都会在这里通知你"
+    bind:retry="onRetry"
+  ></state-view>
+
+  <view class="notify-list" wx:if="{{items.length}}">
+    <view
+      class="notify-card {{item.read ? '' : 'unread'}}"
+      wx:for="{{items}}"
+      wx:key="id"
+      data-id="{{item.id}}"
+      bindtap="onItemTap"
+    >
+      <view class="notify-icon">{{item.icon}}</view>
+      <view class="notify-main">
+        <view class="notify-head">
+          <text class="notify-title">{{item.title}}</text>
+          <text class="notify-dot" wx:if="{{!item.read}}"></text>
+        </view>
+        <text class="notify-body">{{item.body}}</text>
+        <view class="notify-foot">
+          <text class="notify-type">{{item.typeLabel}}</text>
+          <text class="notify-time">{{item.timeText}}</text>
+          <text class="notify-read-action" wx:if="{{!item.read}}" catchtap="onMarkRead" data-id="{{item.id}}">标为已读</text>
+        </view>
+      </view>
+    </view>
+  </view>
+
+  <view class="privacy-hint">
+    <text class="shield">盾</text>
+    <text>通知只推送给你本人；涉及联系方式的内容仍需对方授权后才能查看。</text>
+  </view>
+</view>

@@ -1,0 +1,73 @@
+<view class="detail-page">
+  <view class="card">
+    <view class="card-title">发布合作需求</view>
+    <view class="card-desc">描述你希望获得的帮助，资源与需求可以双向连接。发布内容需经校友会审核后才会公开展示。</view>
+  </view>
+
+  <view class="section">
+    <view class="form-item">
+      <text class="form-label">所属盟市<text class="required">*</text></text>
+      <picker mode="selector" range="{{regions}}" range-key="name" value="{{regionIndex}}" bindchange="onRegionChange">
+        <view class="picker-value {{regionIndex < 0 ? 'placeholder' : ''}}">
+          {{regionIndex < 0 ? '请选择所属盟市' : regions[regionIndex].name}}
+        </view>
+      </picker>
+    </view>
+
+    <view class="form-item">
+      <text class="form-label">所属领域<text class="required">*</text></text>
+      <picker mode="selector" range="{{industries}}" range-key="name" value="{{industryIndex}}" bindchange="onIndustryChange">
+        <view class="picker-value {{industryIndex < 0 ? 'placeholder' : ''}}">
+          {{industryIndex < 0 ? '请选择所属领域' : industries[industryIndex].name}}
+        </view>
+      </picker>
+    </view>
+
+    <view class="form-item">
+      <text class="form-label">简短标题<text class="required">*</text></text>
+      <input
+        class="form-input"
+        value="{{title}}"
+        maxlength="42"
+        placeholder="例如：寻求文旅项目运营与品牌合作"
+        bindinput="onTitleInput"
+      />
+      <text class="form-hint">5–42 字，让校友一眼明白你希望获得什么。</text>
+    </view>
+
+    <view class="form-item">
+      <text class="form-label">详细说明<text class="required">*</text></text>
+      <textarea
+        class="form-textarea"
+        value="{{body}}"
+        maxlength="400"
+        placeholder="说明需求背景、合作目标以及希望对接的资源……"
+        bindinput="onBodyInput"
+      ></textarea>
+      <text class="form-hint">10–400 字，可写明需求背景与合作目标。</text>
+    </view>
+
+    <text class="form-error" wx:if="{{submitError}}">{{submitError}}</text>
+
+    <view class="notice-box">
+      发布信息会进入校友会审核流程。未经审核通过的内容不会出现在连接广场，请确保内容真实、表述得体。
+    </view>
+  </view>
+
+  <view class="fixed-bar" wx:if="{{success}}">
+    <view class="success-panel">
+      <view class="success-title">发布已提交</view>
+      <view class="success-desc">校友会审核通过后，信息会出现在连接广场。</view>
+      <view class="btn-row">
+        <button class="btn-soft btn-block" bindtap="onBackToList">返回广场</button>
+        <button class="btn-main btn-block" bindtap="onViewStatus">查看审核状态</button>
+      </view>
+    </view>
+  </view>
+
+  <view class="fixed-bar" wx:elif="{{!success}}">
+    <button class="btn-main btn-block" loading="{{submitting}}" disabled="{{submitting}}" bindtap="onSubmit">
+      {{submitting ? '提交中…' : '提交发布'}}
+    </button>
+  </view>
+</view>

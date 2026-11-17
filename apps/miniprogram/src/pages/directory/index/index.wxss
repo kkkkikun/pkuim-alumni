@@ -1,0 +1,93 @@
+@import "../../../styles/blocks.wxss";
+
+.directory {
+  min-height: 100vh;
+  background: #fff;
+}
+
+.directory-head {
+  padding: 44rpx 38rpx 34rpx;
+  background: linear-gradient(135deg, #ac252d, #9b1b26);
+  color: #fff;
+  position: relative;
+  overflow: hidden;
+}
+
+.directory-head::after {
+  content: "";
+  position: absolute;
+  width: 420rpx;
+  height: 420rpx;
+  right: -160rpx;
+  top: -220rpx;
+  border: 1rpx solid rgba(255, 255, 255, 0.15);
+  border-radius: 50%;
+  box-shadow: 0 0 0 48rpx rgba(255, 255, 255, 0.04), 0 0 0 110rpx rgba(255, 255, 255, 0.03);
+}
+
+.directory-title {
+  position: relative;
+  font-family: "Songti SC", "STSong", "SimSun", serif;
+  font-size: 44rpx;
+  font-weight: 700;
+  letter-spacing: 1rpx;
+}
+
+.directory-sub {
+  position: relative;
+  margin-top: 16rpx;
+  font-size: 22rpx;
+  color: #fad9d4;
+}
+
+.search-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 14rpx;
+  margin-top: 34rpx;
+  background: #fff;
+  border-radius: 20rpx;
+  height: 88rpx;
+  padding: 0 22rpx;
+  color: #b9aeb0;
+}
+
+.search-icon {
+  font-size: 24rpx;
+  color: #b9aeb0;
+}
+
+.search-input {
+  flex: 1;
+  min-width: 0;
+  font-size: 26rpx;
+  color: #302d2d;
+}
+
+.search-clear {
+  font-size: 32rpx;
+  color: #b4aaa6;
+  padding: 0 8rpx;
+}
+
+.filter-tools {
+  display: flex;
+  align-items: center;
+  gap: 18rpx;
+  padding: 30rpx 38rpx;
+  background: #fff;
+  border-bottom: 1rpx solid #f2efeb;
+}
+
+.filter-count {
+  margin-left: auto;
+  font-size: 22rpx;
+  color: #b2a6a0;
+}
+
+.roster-list {
+  padding: 24rpx 38rpx 60rpx;
+  background: #f8f7f5;
+  min-height: 60vh;
+}

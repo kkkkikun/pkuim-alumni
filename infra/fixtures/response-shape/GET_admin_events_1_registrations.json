@@ -1,0 +1,15 @@
+{
+  "code": "OK",
+  "message": "success",
+  "data": [
+    {
+      "id": 1,
+      "eventId": 1,
+      "userId": 10,
+      "userName": "夹具报名人",
+      "status": "registered",
+      "note": "希望参加",
+      "createdAt": "2026-01-11T00:00:00.000Z"
+    }
+  ]
+}

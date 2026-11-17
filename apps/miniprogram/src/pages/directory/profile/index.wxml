@@ -1,0 +1,60 @@
+<view class="detail-page">
+  <state-view
+    status="{{loading ? 'loading' : error ? 'error' : 'idle'}}"
+    error-text="{{error}}"
+    bind:retry="onRetry"
+  ></state-view>
+
+  <block wx:if="{{profile}}">
+    <view class="profile-head">
+      <view class="profile-avatar">{{profile.avatarText}}</view>
+      <view class="profile-copy">
+        <view class="profile-name">
+          <text>{{profile.displayName}}</text>
+          <text class="verified" wx:if="{{profile.verified}}">已认证</text>
+        </view>
+        <view class="profile-meta">
+          <text wx:if="{{profile.yearLabel}}">{{profile.yearLabel}}</text>
+          <text wx:if="{{profile.regionLabel}}"> · {{profile.regionLabel}}</text>
+        </view>
+      </view>
+    </view>
+
+    <view class="detail-rows card">
+      <view class="detail-row">
+        <text class="detail-label">毕业院系</text>
+        <text class="detail-value">{{profile.college || '校友未公开'}}</text>
+      </view>
+      <view class="detail-row">
+        <text class="detail-label">所在行业</text>
+        <text class="detail-value">{{profile.industryLabel || '校友未公开'}}</text>
+      </view>
+      <view class="detail-row">
+        <text class="detail-label">专业方向</text>
+        <text class="detail-value">{{profile.direction || '校友未公开'}}</text>
+      </view>
+      <view class="detail-row">
+        <text class="detail-label">所在地区</text>
+        <text class="detail-value">{{profile.regionLabel || '校友未公开'}}</text>
+      </view>
+    </view>
+
+    <view class="section" wx:if="{{profile.intro}}">
+      <view class="section-head"><text class="section-title">交流意向</text></view>
+      <view class="card">
+        <view class="card-desc">{{profile.intro}}</view>
+      </view>
+    </view>
+
+    <view class="notice-box" style="margin-top:26rpx">
+      平台仅展示校友本人授权公开的资料，不公开手机号、微信号等私人联系方式；联系申请需要对方明确接受。
+    </view>
+
+    <view class="page-bottom-space"></view>
+  </block>
+
+  <view class="fixed-bar" wx:if="{{profile}}">
+    <button class="btn-main btn-block" bindtap="onActionTap">{{profile.actionText}}</button>
+    <text class="action-hint">{{profile.actionHint}}</text>
+  </view>
+</view>

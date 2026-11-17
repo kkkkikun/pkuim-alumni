@@ -1,0 +1,50 @@
+<view class="detail-page">
+  <view class="card">
+    <view class="card-title">账号设置</view>
+    <view class="card-desc">当前身份：{{stageText}}<text wx:if="{{logged}}"> · {{displayName}}</text></view>
+    <view class="card-desc" wx:if="{{mockMode}}">当前为开发期 Mock 登录模式，正式注册小程序后可切换为微信登录。</view>
+  </view>
+
+  <view class="section">
+    <view class="menu-group card">
+      <view class="menu-row" bindtap="onPrivacyTap">
+        <text class="menu-icon">隐</text>
+        <text class="menu-label">隐私与授权</text>
+        <text class="menu-arrow">›</text>
+      </view>
+      <view class="menu-row" bindtap="onAboutTap">
+        <text class="menu-icon">燕</text>
+        <text class="menu-label">关于内蒙古校友会</text>
+        <text class="menu-arrow">›</text>
+      </view>
+      <view class="menu-row" bindtap="onClearCacheTap">
+        <text class="menu-icon">清</text>
+        <text class="menu-label">清理本地缓存</text>
+        <text class="menu-arrow">›</text>
+      </view>
+    </view>
+  </view>
+
+  <view class="section">
+    <button class="btn-soft btn-block" wx:if="{{logged}}" bindtap="onLogoutTap">退出登录</button>
+    <view class="card" wx:else>
+      <view class="card-desc">尚未登录。登录后可以提交校友认证、发起联系申请、发布资源与需求、报名活动。</view>
+    </view>
+  </view>
+
+  <view class="section">
+    <view class="notice-box">
+      小程序不会获取你的微信 OpenID、Session Key 等敏感凭据；登录凭证由服务端签发并保存在本地，退出登录后立即清除。
+    </view>
+  </view>
+</view>
+
+<dialog
+  visible="{{dialogVisible}}"
+  title="{{dialogTitle}}"
+  content="{{dialogContent}}"
+  confirm-text="{{dialogConfirmText}}"
+  cancel-text="{{dialogCancelText}}"
+  bind:confirm="onDialogConfirm"
+  bind:cancel="onDialogCancel"
+></dialog>

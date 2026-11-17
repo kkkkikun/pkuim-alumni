@@ -1,0 +1,81 @@
+<view class="detail-page">
+  <state-view
+    status="{{loading ? 'loading' : error ? 'error' : 'idle'}}"
+    error-text="{{error}}"
+    bind:retry="onRetry"
+  ></state-view>
+
+  <block wx:if="{{!loading && !error}}">
+    <view class="card">
+      <view class="card-title">隐私与授权</view>
+      <view class="card-desc">校友通讯录涉及个人信息，请坚持本人授权、最小公开、随时可调整。关闭相应开关后立即生效。</view>
+    </view>
+
+    <view class="section">
+      <view class="section-head"><text class="section-title">资料公开范围</text></view>
+      <view class="card">
+        <view class="toggle-row">
+          <view class="toggle-copy">
+            <text class="toggle-title">公开我的校友名片</text>
+            <text class="toggle-desc">关闭后其他校友无法在通讯录中找到你的资料</text>
+          </view>
+          <switch checked="{{showInDirectory}}" data-field="showInDirectory" bindchange="onToggle" color="#a51e28" />
+        </view>
+        <view class="toggle-row">
+          <view class="toggle-copy">
+            <text class="toggle-title">公开毕业院系</text>
+            <text class="toggle-desc">在通讯录中显示你的毕业院系</text>
+          </view>
+          <switch checked="{{showCollege}}" data-field="showCollege" bindchange="onToggle" color="#a51e28" />
+        </view>
+        <view class="toggle-row">
+          <view class="toggle-copy">
+            <text class="toggle-title">公开所在行业</text>
+            <text class="toggle-desc">在通讯录中显示你的行业方向</text>
+          </view>
+          <switch checked="{{showIndustry}}" data-field="showIndustry" bindchange="onToggle" color="#a51e28" />
+        </view>
+        <view class="toggle-row">
+          <view class="toggle-copy">
+            <text class="toggle-title">公开所在地区</text>
+            <text class="toggle-desc">在通讯录中显示你所在的盟市</text>
+          </view>
+          <switch checked="{{showRegion}}" data-field="showRegion" bindchange="onToggle" color="#a51e28" />
+        </view>
+        <view class="toggle-row">
+          <view class="toggle-copy">
+            <text class="toggle-title">公开我的方向</text>
+            <text class="toggle-desc">在通讯录中显示你的行业方向</text>
+          </view>
+          <switch checked="{{showDirection}}" data-field="showDirection" bindchange="onToggle" color="#a51e28" />
+        </view>
+      </view>
+    </view>
+
+    <view class="section">
+      <view class="section-head"><text class="section-title">联系方式与联系申请</text></view>
+      <view class="card">
+        <view class="toggle-row">
+          <view class="toggle-copy">
+            <text class="toggle-title">允许收到联系申请</text>
+            <text class="toggle-desc">允许他人发起联系申请，不直接公开联系方式</text>
+          </view>
+          <switch checked="{{acceptContactRequests}}" data-field="acceptContactRequests" bindchange="onToggle" color="#a51e28" />
+        </view>
+        <view class="toggle-row">
+          <view class="toggle-copy">
+            <text class="toggle-title">允许共享我的联系方式</text>
+            <text class="toggle-desc">对已建立联系的校友共享我的联系方式，可随时撤回</text>
+          </view>
+          <switch checked="{{allowContactShare}}" data-field="allowContactShare" bindchange="onToggle" color="#a51e28" />
+        </view>
+      </view>
+    </view>
+
+    <view class="section">
+      <view class="notice-box">
+        关闭「公开我的校友名片」后，你仍可以浏览通讯录并发起联系申请；已建立的联系与历史记录不受影响。联系方式共享需要对方同样授权才会生效。
+      </view>
+    </view>
+  </block>
+</view>

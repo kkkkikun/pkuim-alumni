@@ -1,0 +1,23 @@
+<view class="list-page">
+  <state-view
+    status="{{loading && posts.length === 0 ? 'loading' : error ? 'error' : posts.length === 0 ? 'empty' : 'idle'}}"
+    error-text="{{error}}"
+    empty-text="还没有发布过资源或需求"
+    empty-desc="可在连接栏目发布一条资源或需求"
+    bind:retry="onRetry"
+  ></state-view>
+
+  <view class="post-list" wx:if="{{posts.length}}">
+    <view class="post-item" wx:for="{{posts}}" wx:key="id" data-id="{{item.id}}" bindtap="onPostTap">
+      <view class="post-head">
+        <text class="tag {{item.type === 'resource' ? 'tag-offer' : ''}}">{{item.typeLabel}}</text>
+        <text class="post-status">{{item.statusLabel}}</text>
+      </view>
+      <text class="post-title">{{item.title}}</text>
+      <text class="post-body">{{item.body}}</text>
+      <text class="post-time">更新于 {{item.updatedAt}}</text>
+    </view>
+  </view>
+
+  <view class="list-foot" wx:if="{{posts.length}}">{{hasMore ? '上拉加载更多' : '— 已经到底了 —'}}</view>
+</view>

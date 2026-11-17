@@ -1,0 +1,49 @@
+# =============================================================================
+# NMG-PKU-Alumni —— Prometheus 抓取配置（可选监控栈）
+#
+# 启用方式（服务器侧，独立 compose 项目，不影响主栈）：
+#   docker compose --project-name nmg-pku-alumni-monitor \
+#     -f infra/monitoring/docker-compose.monitoring.yml up -d
+#
+# 抓取目标：
+#   - prometheus   自身
+#   - node-exporter 宿主机指标（CPU / 内存 / 磁盘 / 负载）
+#   - cadvisor     容器指标（CPU / 内存 / 网络 / 磁盘 IO）
+#   - nginx        需在 nginx.conf 中开启 stub_status（可选，见文件末尾说明）
+# =============================================================================
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    project: nmg-pku-alumni
+    env: private-test
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: node
+    static_configs:
+      - targets: ["node-exporter:9100"]
+
+  - job_name: cadvisor
+    static_configs:
+      - targets: ["cadvisor:8080"]
+
+  - job_name: nginx
+    metrics_path: /nginx_status
+    static_configs:
+      - targets: ["host.docker.internal:18081"]
+
+  # ---------------------------------------------------------------------------
+  # 业务容器（cAdvisor 提供的容器级指标）
+  # ---------------------------------------------------------------------------
+  - job_name: containers
+    static_configs:
+      - targets: ["cadvisor:8080"]
+    relabel_configs:
+      - source_labels: [__name__]
+        regex: container_.*
+        action: keep

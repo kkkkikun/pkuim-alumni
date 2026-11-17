@@ -1,0 +1,44 @@
+@import "../../../styles/blocks.wxss";
+
+.article-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.article-category {
+  font-size: 21rpx;
+  color: #b85f58;
+  background: #f9e8e6;
+  border-radius: 8rpx;
+  padding: 4rpx 12rpx;
+}
+
+.article-date {
+  font-size: 21rpx;
+  color: #a89b95;
+}
+
+.article-title {
+  margin-top: 22rpx;
+  font-family: "Songti SC", "STSong", "SimSun", serif;
+  font-size: 42rpx;
+  font-weight: 700;
+  line-height: 1.5;
+  color: #262322;
+}
+
+.article-summary {
+  margin-top: 20rpx;
+  font-size: 26rpx;
+  color: #817b77;
+  line-height: 1.8;
+}
+
+.article-meta {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 40rpx;
+  font-size: 21rpx;
+  color: #a89b95;
+}

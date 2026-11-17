@@ -1,0 +1,61 @@
+<view class="detail-page">
+  <state-view
+    status="{{loading ? 'loading' : error ? 'error' : 'idle'}}"
+    error-text="{{error}}"
+    bind:retry="onRetry"
+  ></state-view>
+
+  <block wx:if="{{progress}}">
+    <view class="status-hero">
+      <view class="status-hero-title">{{progress.statusLabel}}</view>
+      <view class="status-hero-desc">{{progress.stepText}}</view>
+    </view>
+
+    <view class="section">
+      <view class="status-steps">
+        <view class="status-step done">
+          <view class="status-dot">✓</view>
+          <text class="status-label">已提交</text>
+        </view>
+        <view class="status-line"></view>
+        <view class="status-step {{progress.status === 'pending' ? 'done' : ''}}">
+          <view class="status-dot">2</view>
+          <text class="status-label">审核中</text>
+        </view>
+        <view class="status-line"></view>
+        <view class="status-step {{progress.status === 'approved' ? 'done' : ''}}">
+          <view class="status-dot">3</view>
+          <text class="status-label">已完成</text>
+        </view>
+      </view>
+    </view>
+
+    <view class="section">
+      <view class="detail-rows card">
+        <view class="detail-row">
+          <text class="detail-label">提交时间</text>
+          <text class="detail-value">{{progress.submittedAt || '—'}}</text>
+        </view>
+        <view class="detail-row">
+          <text class="detail-label">审核时间</text>
+          <text class="detail-value">{{progress.decidedAt || '待审核'}}</text>
+        </view>
+        <view class="detail-row" wx:if="{{progress.note}}">
+          <text class="detail-label">审核意见</text>
+          <text class="detail-value">{{progress.note}}</text>
+        </view>
+      </view>
+    </view>
+
+    <view class="section">
+      <view class="notice-box">
+        审核由校友会管理员人工完成，通常 1–3 个工作日。审核历史完整保留，不会被覆盖。
+      </view>
+    </view>
+
+    <view class="btn-row section">
+      <button class="btn-ghost btn-block" bindtap="onHistoryTap">认证历史</button>
+      <button class="btn-main btn-block" bindtap="onRestartTap">重新填写资料</button>
+    </view>
+  </block>
+</view>

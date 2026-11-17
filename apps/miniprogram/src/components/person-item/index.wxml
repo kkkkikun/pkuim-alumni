@@ -1,0 +1,17 @@
+<view class="person" bindtap="onTap">
+  <view class="avatar avatar-sm">{{entry.displayInitial || '燕'}}</view>
+  <view class="person-info">
+    <view class="person-line1">
+      <text class="person-name">{{entry.displayName}}</text>
+      <text class="verified" wx:if="{{entry.verified}}">已认证</text>
+      <text class="person-city" wx:if="{{entry.regionName}}">{{entry.regionName}}</text>
+    </view>
+    <text class="person-direction" wx:if="{{entry.direction}}">{{entry.direction}}</text>
+    <view class="person-dim">
+      <text wx:if="{{entry.graduationYear}}">{{entry.graduationYear}}届</text>
+      <text wx:if="{{entry.college}}"> · {{entry.college}}</text>
+      <text wx:if="{{entry.industryName}}"> · {{entry.industryName}}</text>
+    </view>
+  </view>
+  <text class="person-arrow">›</text>
+</view>

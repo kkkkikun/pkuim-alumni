@@ -1,0 +1,28 @@
+<view class="list-page">
+  <scroll-view class="category-scroll" scroll-x wx:if="{{categories.length}}">
+    <view class="chip-row">
+      <view class="chip {{categoryId === 0 ? 'active' : ''}}" data-id="0" bindtap="onCategoryTap">全部</view>
+      <view
+        class="chip {{categoryId === item.id ? 'active' : ''}}"
+        wx:for="{{categories}}"
+        wx:key="id"
+        data-id="{{item.id}}"
+        bindtap="onCategoryTap"
+      >{{item.name}}</view>
+    </view>
+  </scroll-view>
+
+  <state-view
+    status="{{loading && articles.length === 0 ? 'loading' : error ? 'error' : articles.length === 0 ? 'empty' : 'idle'}}"
+    error-text="{{error}}"
+    empty-text="暂无校友资讯"
+    empty-desc="校友会发布新的动态后，这里会第一时间展示"
+    bind:retry="onRetry"
+  ></state-view>
+
+  <view class="article-list" wx:if="{{articles.length}}">
+    <article-card wx:for="{{articles}}" wx:key="id" article="{{item}}" bind:tap="onArticleTap"></article-card>
+  </view>
+
+  <view class="list-foot" wx:if="{{articles.length}}">{{hasMore ? '上拉加载更多' : '— 已经到底了 —'}}</view>
+</view>

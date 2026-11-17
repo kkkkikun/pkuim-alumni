@@ -1,0 +1,357 @@
+# =============================================================================
+# NMG-PKU-Alumni —— 本地/开发栈（安全默认值）
+#
+#   项目名 : nmg-pku-alumni-dev
+#   数据卷 : nmg-dev-*                （与生产 nmg-* 完全隔离）
+#   端口   : 全部绑定 127.0.0.1
+#
+# 默认只启动基础设施（mysql / redis / minio），应用在宿主机用 pnpm dev 跑：
+#   docker compose -f docker-compose.yml up -d
+#
+# 需要整套容器化应用时（需 apps/* 已存在）：
+#   docker compose -f docker-compose.yml --profile app up -d
+#
+# 开发端口（与生产 18xxx 段错开）：
+#   mysql  13307 | redis 16380 | minio 19002/19003 | api 13000 | admin 18090 | nginx 18091
+# =============================================================================
+
+name: nmg-pku-alumni-dev
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-restart: &default-restart
+  restart: unless-stopped
+
+services:
+  mysql:
+    image: ${MYSQL_IMAGE:-swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/mysql:8.4}
+    container_name: nmg-dev-mysql
+    <<: *default-restart
+    logging: *default-logging
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+      - --max-connections=500
+      - --innodb-buffer-pool-size=2G
+      - --default-time-zone=+08:00
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-dev_root}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-nmg_alumni_dev}
+      MYSQL_USER: ${MYSQL_USER:-nmg}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-dev_app}
+      TZ: ${TZ:-Asia/Shanghai}
+    ports:
+      - "127.0.0.1:${MYSQL_PORT:-13307}:3306"
+    volumes:
+      - nmg-dev-mysql-data:/var/lib/mysql
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - mysqladmin ping -h 127.0.0.1 -uroot -p"$$MYSQL_ROOT_PASSWORD" --silent
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          cpus: "4"
+          memory: 8G
+    networks:
+      - nmg-dev-net
+
+  redis:
+    image: ${REDIS_IMAGE:-swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/redis:7-alpine}
+    container_name: nmg-dev-redis
+    <<: *default-restart
+    logging: *default-logging
+    command:
+      - sh
+      - -c
+      - >
+        exec redis-server
+        --requirepass "$$REDIS_PASSWORD"
+        --appendonly yes
+        --maxmemory 1gb
+        --maxmemory-policy noeviction
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-dev_redis}
+      TZ: ${TZ:-Asia/Shanghai}
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-16380}:6379"
+    volumes:
+      - nmg-dev-redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", 'redis-cli -a "$$REDIS_PASSWORD" --no-auth-warning ping | grep -q PONG']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 2G
+    networks:
+      - nmg-dev-net
+
+  minio:
+    image: ${MINIO_IMAGE:-swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/minio/minio:latest}
+    container_name: nmg-dev-minio
+    <<: *default-restart
+    logging: *default-logging
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-nmgdev}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-dev_minio}
+      TZ: ${TZ:-Asia/Shanghai}
+    ports:
+      - "127.0.0.1:${MINIO_API_PORT:-19002}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-19003}:9001"
+    volumes:
+      - nmg-dev-minio-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/minio/health/live || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 4G
+    networks:
+      - nmg-dev-net
+
+  minio-init:
+    image: ${MINIO_MC_IMAGE:-swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/minio/mc:latest}
+    container_name: nmg-dev-minio-init
+    restart: "no"
+    logging: *default-logging
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-nmgdev}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-dev_minio}
+      MINIO_BUCKET_PUBLIC: ${MINIO_BUCKET_PUBLIC:-nmg-public}
+      MINIO_BUCKET_PRIVATE: ${MINIO_BUCKET_PRIVATE:-nmg-private}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"
+        mc mb --ignore-existing "local/$$MINIO_BUCKET_PUBLIC"
+        mc mb --ignore-existing "local/$$MINIO_BUCKET_PRIVATE"
+        echo "minio-init: buckets ready"
+    healthcheck:
+      test: ["CMD-SHELL", "mc alias set probe http://minio:9000 \"$$MINIO_ROOT_USER\" \"$$MINIO_ROOT_PASSWORD\" >/dev/null 2>&1 && mc ls probe/$$MINIO_BUCKET_PUBLIC >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
+    networks:
+      - nmg-dev-net
+
+  # ---------------------------------------------------------------------------
+  # 应用层（profile=app 才会启动）：容器内跑构建后的产物，端口仅 127.0.0.1
+  # ---------------------------------------------------------------------------
+  api:
+    image: nmg-pku-alumni-dev/api:latest
+    profiles: ["app"]
+    build:
+      context: .
+      dockerfile: infra/docker/api.Dockerfile
+      args:
+        NODE_IMAGE: ${NODE_IMAGE:-swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/node:22-alpine}
+        PNPM_VERSION: ${PNPM_VERSION:-11.7.0}
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com/}
+        INSTALL_FLAGS: ${INSTALL_FLAGS:---frozen-lockfile}
+    container_name: nmg-dev-api
+    <<: *default-restart
+    logging: *default-logging
+    environment:
+      NODE_ENV: development
+      PORT: "3000"
+      TZ: ${TZ:-Asia/Shanghai}
+      API_PREFIX: ${API_PREFIX:-/api/v1}
+      AUTH_MODE: ${AUTH_MODE:-mock}
+      JWT_SECRET: ${JWT_SECRET:-dev_jwt_secret_min_32_chars_long}
+      DATABASE_URL: mysql://${MYSQL_USER:-nmg}:${MYSQL_PASSWORD:-dev_app}@mysql:3306/${MYSQL_DATABASE:-nmg_alumni_dev}
+      DB_HOST: mysql
+      DB_PORT: "3306"
+      DB_NAME: ${MYSQL_DATABASE:-nmg_alumni_dev}
+      DB_USER: ${MYSQL_USER:-nmg}
+      DB_PASSWORD: ${MYSQL_PASSWORD:-dev_app}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-dev_redis}@redis:6379
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-dev_redis}
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_HOST: minio
+      MINIO_PORT: "9000"
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-nmgdev}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-dev_minio}
+      MINIO_BUCKET_PUBLIC: ${MINIO_BUCKET_PUBLIC:-nmg-public}
+      MINIO_BUCKET_PRIVATE: ${MINIO_BUCKET_PRIVATE:-nmg-private}
+    ports:
+      - "127.0.0.1:${API_PORT:-13000}:3000"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 4G
+    networks:
+      - nmg-dev-net
+
+  worker:
+    image: nmg-pku-alumni-dev/worker:latest
+    profiles: ["app"]
+    build:
+      context: .
+      dockerfile: infra/docker/worker.Dockerfile
+      args:
+        NODE_IMAGE: ${NODE_IMAGE:-swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/node:22-alpine}
+        PNPM_VERSION: ${PNPM_VERSION:-11.7.0}
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com/}
+        INSTALL_FLAGS: ${INSTALL_FLAGS:---frozen-lockfile}
+    container_name: nmg-dev-worker
+    <<: *default-restart
+    logging: *default-logging
+    environment:
+      NODE_ENV: development
+      TZ: ${TZ:-Asia/Shanghai}
+      WORKER_CONCURRENCY: "4"
+      AUTH_MODE: ${AUTH_MODE:-mock}
+      JWT_SECRET: ${JWT_SECRET:-dev_jwt_secret_min_32_chars_long}
+      DATABASE_URL: mysql://${MYSQL_USER:-nmg}:${MYSQL_PASSWORD:-dev_app}@mysql:3306/${MYSQL_DATABASE:-nmg_alumni_dev}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-dev_redis}@redis:6379
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_HOST: minio
+      MINIO_PORT: "9000"
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-nmgdev}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-dev_minio}
+      MINIO_BUCKET_PUBLIC: ${MINIO_BUCKET_PUBLIC:-nmg-public}
+      MINIO_BUCKET_PRIVATE: ${MINIO_BUCKET_PRIVATE:-nmg-private}
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "const fs=require('fs');const c=fs.readFileSync('/proc/1/cmdline','utf8');process.exit(c.includes('node')?0:1)"
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 2G
+    networks:
+      - nmg-dev-net
+
+  admin-web:
+    image: nmg-pku-alumni-dev/admin-web:latest
+    profiles: ["app"]
+    build:
+      context: .
+      dockerfile: infra/docker/admin-web.Dockerfile
+      args:
+        NODE_IMAGE: ${NODE_IMAGE:-swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/node:22-alpine}
+        NGINX_IMAGE: ${NGINX_IMAGE:-swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/nginx:alpine}
+        PNPM_VERSION: ${PNPM_VERSION:-11.7.0}
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com/}
+        INSTALL_FLAGS: ${INSTALL_FLAGS:---frozen-lockfile}
+    container_name: nmg-dev-admin-web
+    <<: *default-restart
+    logging: *default-logging
+    ports:
+      - "127.0.0.1:${ADMIN_PORT:-18090}:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/healthz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1G
+    networks:
+      - nmg-dev-net
+
+  nginx:
+    image: ${NGINX_IMAGE:-swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/nginx:alpine}
+    profiles: ["app"]
+    container_name: nmg-dev-nginx
+    <<: *default-restart
+    logging: *default-logging
+    ports:
+      - "127.0.0.1:${NGINX_HTTP_PORT:-18091}:80"
+    volumes:
+      - ./infra/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      api:
+        condition: service_healthy
+      admin-web:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/healthz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1G
+    networks:
+      - nmg-dev-net
+
+volumes:
+  nmg-dev-mysql-data:
+    name: nmg-dev-mysql-data
+  nmg-dev-redis-data:
+    name: nmg-dev-redis-data
+  nmg-dev-minio-data:
+    name: nmg-dev-minio-data
+
+networks:
+  nmg-dev-net:
+    name: nmg-pku-alumni-dev-net
+    driver: bridge

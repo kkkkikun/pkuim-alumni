@@ -1,0 +1,31 @@
+{
+  "code": "OK",
+  "message": "success",
+  "data": {
+    "items": [
+      {
+        "id": 1,
+        "title": "夹具活动",
+        "kind": "校友交流",
+        "regionCode": "HHS",
+        "regionName": "呼和浩特市",
+        "place": "会议室 A",
+        "description": "合成数据，用于校验报名列表的元素结构。",
+        "startsAt": "2026-02-01T02:00:00.000Z",
+        "endsAt": "2026-02-01T04:00:00.000Z",
+        "capacity": 50,
+        "registeredCount": 1,
+        "status": "published",
+        "coverMediaId": null,
+        "myRegistration": null,
+        "createdAt": "2026-01-10T00:00:00.000Z"
+      }
+    ],
+    "meta": {
+      "page": 1,
+      "pageSize": 20,
+      "total": 1,
+      "totalPages": 1
+    }
+  }
+}

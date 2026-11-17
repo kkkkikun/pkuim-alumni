@@ -1,0 +1,22 @@
+<view class="list-page">
+  <state-view
+    status="{{loading && events.length === 0 ? 'loading' : error ? 'error' : events.length === 0 ? 'empty' : 'idle'}}"
+    error-text="{{error}}"
+    empty-text="还没有报名记录"
+    empty-desc="在首页选择一场活动报名，记录会显示在这里"
+    bind:retry="onRetry"
+  ></state-view>
+
+  <view class="registration-list" wx:if="{{events.length}}">
+    <view class="registration-card" wx:for="{{events}}" wx:key="id" data-id="{{item.id}}" bindtap="onEventTap">
+      <view class="registration-main">
+        <text class="registration-title">{{item.title}}</text>
+        <text class="registration-meta">{{item.kind}} · {{item.startsAt || '时间待定'}}</text>
+        <text class="registration-place">{{item.regionName || '内蒙古'}}{{item.place ? ' · ' + item.place : ''}}</text>
+      </view>
+      <text class="tag {{item.myRegistration === 'registered' ? '' : 'tag-grey'}}">{{item.statusLabel}}</text>
+    </view>
+  </view>
+
+  <view class="list-foot" wx:if="{{events.length}}">{{hasMore ? '上拉加载更多' : '— 已经到底了 —'}}</view>
+</view>

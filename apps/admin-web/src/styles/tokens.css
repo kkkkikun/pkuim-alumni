@@ -1,0 +1,52 @@
+/**
+ * 品牌设计变量：与小程序 HTML 原型保持同一套色板与字体，
+ * 取值来源 prototype/html-v1/index.html 的 :root 定义。
+ */
+:root {
+  --red: #a51e28;
+  --reddeep: #8e1621;
+  --redbright: #c53b42;
+  --pink: #f9e8e6;
+  --peach: #f1c0ac;
+  --sand: #ddbb9e;
+  --bg: #f8f7f5;
+  --white: #ffffff;
+  --ink: #262322;
+  --text: #414044;
+  --muted: #918c8a;
+  --line: #efebe7;
+
+  --serif: 'Songti SC', 'STSong', 'SimSun', 'Noto Serif CJK SC', serif;
+  --sans: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei',
+    'Noto Sans CJK SC', sans-serif;
+
+  --admin-bg: var(--bg);
+  --admin-surface: var(--white);
+  --admin-surface-alt: #fdfaf8;
+  --admin-border: var(--line);
+  --admin-text: var(--text);
+  --admin-text-strong: var(--ink);
+  --admin-text-muted: var(--muted);
+  --admin-brand: var(--red);
+  --admin-brand-deep: var(--reddeep);
+  --admin-brand-soft: var(--pink);
+  --admin-radius: 14px;
+  --admin-radius-sm: 10px;
+  --admin-shadow: 0 10px 30px rgba(38, 35, 34, 0.07);
+  --admin-shadow-soft: 0 4px 16px rgba(38, 35, 34, 0.05);
+
+  /* TDesign 主题变量覆写，让组件库与品牌色一致 */
+  --td-brand-color: var(--red);
+  --td-brand-color-hover: var(--redbright);
+  --td-brand-color-focus: var(--reddeep);
+  --td-brand-color-light: var(--pink);
+  --td-brand-color-active: var(--reddeep);
+  --td-bg-color-page: var(--bg);
+  --td-bg-color-container: var(--white);
+  --td-text-color-primary: var(--ink);
+  --td-text-color-secondary: var(--text);
+  --td-text-color-placeholder: var(--muted);
+  --td-border-color: var(--line);
+  --td-border-radius: var(--admin-radius-sm);
+  --td-font-family: var(--sans);
+}

@@ -1,0 +1,28 @@
+<view class="detail-page">
+  <view class="card">
+    <view class="card-title">上传证明材料</view>
+    <view class="card-desc">可上传学信网在线验证报告、毕业证书、学位证书等，单个文件不超过 10MB。</view>
+  </view>
+
+  <view class="section">
+    <view class="upload-box" bindtap="onChooseFile">
+      <text class="upload-plus">＋</text>
+      <text class="upload-title">{{uploading ? '上传中…' : '选择文件上传'}}</text>
+      <text class="upload-desc">支持图片与 PDF</text>
+    </view>
+
+    <text class="form-error" wx:if="{{error}}">{{error}}</text>
+
+    <view class="section" wx:if="{{attachments.length}}">
+      <view class="section-head"><text class="section-title">已上传材料</text></view>
+      <view class="upload-item" wx:for="{{attachments}}" wx:key="mediaId">
+        <text class="upload-item-name">{{item.fileName}}</text>
+        <text class="upload-item-remove" data-id="{{item.mediaId}}" catchtap="onRemove">移除</text>
+      </view>
+    </view>
+
+    <view class="notice-box">
+      材料仅用于校友会人工核验。若审核人员认为材料不足，会退回并标注「待补充材料」，你可以重新上传后再次提交。
+    </view>
+  </view>
+</view>

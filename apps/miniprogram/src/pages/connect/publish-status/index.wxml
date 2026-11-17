@@ -1,0 +1,73 @@
+<view class="detail-page">
+  <state-view
+    status="{{loading ? 'loading' : error ? 'error' : 'idle'}}"
+    error-text="{{error}}"
+    bind:retry="onRetry"
+  ></state-view>
+
+  <block wx:if="{{post}}">
+    <view class="card">
+      <view class="card-title">{{post.title}}</view>
+      <view class="card-desc">{{post.typeLabel}} · {{post.industryName || '综合'}} · {{post.regionName || '未填写'}}</view>
+    </view>
+
+    <view class="section">
+      <view class="section-head"><text class="section-title">当前状态</text></view>
+      <view class="status-steps">
+        <view class="status-step done">
+          <view class="status-dot">✓</view>
+          <text class="status-label">已提交</text>
+        </view>
+        <view class="status-line"></view>
+        <view class="status-step {{post.status === 'pending' ? 'done' : ''}}">
+          <view class="status-dot">2</view>
+          <text class="status-label">审核中</text>
+        </view>
+        <view class="status-line"></view>
+        <view class="status-step {{post.status === 'published' ? 'done' : ''}}">
+          <view class="status-dot">3</view>
+          <text class="status-label">已发布</text>
+        </view>
+      </view>
+      <view class="card" style="margin-top:24rpx">
+        <view class="card-desc">
+          当前状态：<text class="text-red">{{post.statusLabel}}</text>
+        </view>
+        <view class="card-desc" wx:if="{{post.status === 'pending'}}">校友会正在审核，通常会在 1–3 个工作日内给出结果。</view>
+        <view class="card-desc" wx:if="{{post.status === 'rejected'}}">审核未通过时，管理员会在审核记录中说明原因，可修改后重新提交。</view>
+        <view class="card-desc" wx:if="{{post.status === 'published'}}">该内容已在连接广场公开展示，其他校友可以向你表达合作意向。</view>
+      </view>
+    </view>
+
+    <view class="section">
+      <view class="section-head"><text class="section-title">审核记录</text></view>
+      <view class="detail-rows card" wx:if="{{reviews.length}}">
+        <view class="detail-row" wx:for="{{reviews}}" wx:key="createdAt">
+          <text class="detail-label">{{item.actionLabel}}</text>
+          <text class="detail-value">{{item.note}}<text class="muted"> · {{item.createdAt}}</text></text>
+        </view>
+      </view>
+      <view class="card" wx:else>
+        <view class="card-desc">暂无审核记录。提交审核后，管理员的处理记录会显示在这里，审核历史不可覆盖。</view>
+      </view>
+    </view>
+
+    <text class="form-error" wx:if="{{actionError}}">{{actionError}}</text>
+    <view class="page-bottom-space"></view>
+  </block>
+
+  <view class="fixed-bar" wx:if="{{post}}">
+    <button class="btn-main btn-block" wx:if="{{post.canSubmit}}" bindtap="onSubmitReview">提交审核</button>
+    <button class="btn-soft btn-block" wx:if="{{post.canWithdraw}}" bindtap="onWithdraw">撤回发布</button>
+  </view>
+</view>
+
+<dialog
+  visible="{{dialogVisible}}"
+  title="{{dialogTitle}}"
+  content="{{dialogContent}}"
+  confirm-text="{{dialogConfirmText}}"
+  cancel-text="{{dialogCancelText}}"
+  bind:confirm="onDialogConfirm"
+  bind:cancel="onDialogCancel"
+></dialog>

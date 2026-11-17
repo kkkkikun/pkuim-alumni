@@ -1,0 +1,42 @@
+{
+  "code": "OK",
+  "message": "success",
+  "data": {
+    "id": 1,
+    "authorId": 10,
+    "authorName": "夹具发布人",
+    "type": "resource",
+    "title": "带附件与审核记录的资源",
+    "body": "这是一段用于校验嵌套元素结构的合成资源描述，长度满足校验要求。",
+    "industryCode": "DIGI",
+    "industryName": "数字科技",
+    "regionCode": "HHS",
+    "regionName": "呼和浩特市",
+    "status": "published",
+    "version": 2,
+    "attachments": [
+      {
+        "id": 1,
+        "mediaId": 21,
+        "fileName": "resource-doc.pdf",
+        "mimeType": "application/pdf",
+        "size": 2048,
+        "uploadedAt": "2026-01-05T00:00:00.000Z"
+      }
+    ],
+    "reviews": [
+      {
+        "id": 1,
+        "adminId": 1,
+        "adminName": "夹具审核员",
+        "action": "approve",
+        "note": "内容合规",
+        "snapshotVersion": 2,
+        "createdAt": "2026-01-06T00:00:00.000Z"
+      }
+    ],
+    "publishedAt": "2026-01-06T00:00:00.000Z",
+    "createdAt": "2026-01-04T00:00:00.000Z",
+    "updatedAt": "2026-01-06T00:00:00.000Z"
+  }
+}

@@ -1,0 +1,61 @@
+<view class="detail-page">
+  <state-view
+    status="{{loading ? 'loading' : error ? 'error' : 'idle'}}"
+    error-text="{{error}}"
+    bind:retry="onRetry"
+  ></state-view>
+
+  <block wx:if="{{profile}}">
+    <view class="profile-head">
+      <view class="profile-avatar">{{profile.avatarText}}</view>
+      <view class="profile-copy">
+        <view class="profile-name">
+          <text>{{profile.displayName}}</text>
+          <text class="verified" wx:if="{{profile.verified}}">已认证</text>
+        </view>
+        <view class="profile-meta">{{profile.yearLabel}} · {{profile.regionLabel}}</view>
+      </view>
+    </view>
+
+    <view class="detail-rows card">
+      <view class="detail-row">
+        <text class="detail-label">毕业院系</text>
+        <text class="detail-value">{{profile.college}}</text>
+      </view>
+      <view class="detail-row">
+        <text class="detail-label">所在行业</text>
+        <text class="detail-value">{{profile.industryLabel}}</text>
+      </view>
+      <view class="detail-row">
+        <text class="detail-label">专业方向</text>
+        <text class="detail-value">{{profile.direction}}</text>
+      </view>
+      <view class="detail-row">
+        <text class="detail-label">公开状态</text>
+        <text class="detail-value">{{profile.privacyLabel}}</text>
+      </view>
+    </view>
+
+    <view class="section">
+      <view class="section-head"><text class="section-title">个人介绍</text></view>
+      <view class="card">
+        <view class="card-desc">{{profile.intro}}</view>
+      </view>
+    </view>
+
+    <view class="section">
+      <view class="notice-box">
+        你的联系方式不会在通讯录中公开。只有在双方建立联系、且双方都开启联系方式共享之后，彼此才能看到联系方式。
+      </view>
+    </view>
+
+    <view class="page-bottom-space"></view>
+  </block>
+
+  <view class="fixed-bar" wx:if="{{profile}}">
+    <view class="btn-row">
+      <button class="btn-ghost btn-block" bindtap="onPrivacyTap">隐私设置</button>
+      <button class="btn-main btn-block" bindtap="onEditTap">编辑资料</button>
+    </view>
+  </view>
+</view>

@@ -1,0 +1,13 @@
+<view class="opportunity" bindtap="onTap">
+  <view class="op-top">
+    <text class="type-tag {{post.type === 'resource' ? 'offer' : ''}}">{{post.type === 'resource' ? '我能提供' : '我有需求'}}</text>
+    <text class="op-category" wx:if="{{post.industryName}}">{{post.industryName}}</text>
+    <text class="op-category" wx:if="{{showStatus}}">{{post.status}}</text>
+  </view>
+  <text class="op-title">{{post.title}}</text>
+  <text class="op-desc">{{post.body}}</text>
+  <view class="op-foot">
+    <text class="op-author">{{post.regionName ? post.regionName + ' · ' : ''}}{{post.authorName}}</text>
+    <text class="op-more">了解详情 ›</text>
+  </view>
+</view>

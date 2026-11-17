@@ -1,0 +1,36 @@
+@import "../../../styles/blocks.wxss";
+
+.about-hero {
+  padding: 60rpx 40rpx;
+  border-radius: 26rpx;
+  background: linear-gradient(155deg, #b52832 0%, #a51e28 42%, #911a25 100%);
+  color: #fff;
+  text-align: center;
+  margin-bottom: 30rpx;
+}
+
+.about-stamp {
+  width: 96rpx;
+  height: 96rpx;
+  margin: 0 auto;
+  border: 3rpx solid #fff;
+  border-radius: 50%;
+  font-family: "Songti SC", "STSong", "SimSun", serif;
+  font-size: 44rpx;
+  line-height: 96rpx;
+}
+
+.about-name {
+  margin-top: 26rpx;
+  font-family: "Songti SC", "STSong", "SimSun", serif;
+  font-size: 38rpx;
+  font-weight: 700;
+  letter-spacing: 2rpx;
+}
+
+.about-slogan {
+  margin-top: 14rpx;
+  font-size: 22rpx;
+  letter-spacing: 4rpx;
+  color: #fad8c9;
+}

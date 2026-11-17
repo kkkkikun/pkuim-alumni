@@ -1,0 +1,26 @@
+<view class="detail-page">
+  <state-view
+    status="{{loading ? 'loading' : error ? 'error' : 'idle'}}"
+    error-text="{{error}}"
+    bind:retry="onRetry"
+  ></state-view>
+
+  <block wx:if="{{!loading && !error}}">
+    <view class="result-card">
+      <view class="result-mark {{tone === 'accepted' ? 'ok' : tone === 'rejected' ? 'no' : ''}}">燕</view>
+      <view class="result-title">{{statusText}}</view>
+      <view class="result-desc">{{statusDesc}}</view>
+    </view>
+
+    <view class="section">
+      <view class="notice-box">
+        联系申请必须由接收方明确接受，拒绝不会产生正式连接关系；联系方式由双方独立授权，可随时撤回。
+      </view>
+    </view>
+
+    <view class="btn-row section">
+      <button class="btn-ghost btn-block" bindtap="onViewSent">查看我发出的申请</button>
+      <button class="btn-main btn-block" bindtap="onBackToDirectory">返回通讯录</button>
+    </view>
+  </block>
+</view>

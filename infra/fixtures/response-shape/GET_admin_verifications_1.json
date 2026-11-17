@@ -1,0 +1,44 @@
+{
+  "code": "OK",
+  "message": "success",
+  "data": {
+    "id": 1,
+    "userId": 4,
+    "applicantName": "夹具校友",
+    "college": "经济学院",
+    "graduationYear": 2015,
+    "degree": "学士",
+    "studentIdMasked": "2015****1234",
+    "status": "pending",
+    "attachments": [
+      {
+        "id": 1,
+        "mediaId": 1,
+        "fileName": "proof.png",
+        "mimeType": "image/png",
+        "size": 128,
+        "uploadedAt": "2026-01-01T00:00:00.000Z"
+      },
+      {
+        "id": 2,
+        "mediaId": 2,
+        "fileName": "transcript.pdf",
+        "mimeType": "application/pdf",
+        "size": 2048,
+        "uploadedAt": "2026-01-02T00:00:00.000Z"
+      }
+    ],
+    "reviews": [
+      {
+        "id": 1,
+        "adminId": 1,
+        "adminName": "夹具审核员",
+        "action": "request_changes",
+        "note": "请补充成绩单",
+        "createdAt": "2026-01-03T00:00:00.000Z"
+      }
+    ],
+    "submittedAt": "2026-01-01T00:00:00.000Z",
+    "decidedAt": null
+  }
+}

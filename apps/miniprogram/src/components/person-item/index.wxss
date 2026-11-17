@@ -1,0 +1,77 @@
+.person {
+  display: flex;
+  align-items: center;
+  gap: 20rpx;
+  padding: 26rpx 28rpx;
+  background: #fff;
+  border-radius: 20rpx;
+  margin-bottom: 18rpx;
+  box-shadow: 0 6rpx 18rpx rgba(122, 69, 43, 0.03);
+}
+
+.avatar {
+  width: 80rpx;
+  height: 80rpx;
+  border-radius: 50%;
+  background: #ad3137;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: "Songti SC", "STSong", "SimSun", serif;
+  font-size: 30rpx;
+  flex: none;
+}
+
+.person-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.person-line1 {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+}
+
+.person-name {
+  font-size: 30rpx;
+  font-weight: 700;
+  color: #262322;
+}
+
+.verified {
+  font-size: 18rpx;
+  color: #a51e28;
+  background: #fbeae7;
+  border-radius: 8rpx;
+  padding: 3rpx 10rpx;
+}
+
+.person-city {
+  font-size: 22rpx;
+  color: #a19893;
+  margin-left: auto;
+}
+
+.person-direction {
+  display: block;
+  margin-top: 8rpx;
+  font-size: 24rpx;
+  color: #817b77;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.person-dim {
+  margin-top: 6rpx;
+  font-size: 21rpx;
+  color: #a19893;
+}
+
+.person-arrow {
+  color: #c8c0bb;
+  font-size: 34rpx;
+  flex: none;
+}

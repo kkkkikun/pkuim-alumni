@@ -1,0 +1,5 @@
+@import "../../../styles/blocks.wxss";
+
+.register-summary {
+  margin-bottom: 8rpx;
+}

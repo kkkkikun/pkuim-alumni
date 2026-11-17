@@ -1,0 +1,21 @@
+<view class="list-page">
+  <state-view
+    status="{{loading && notices.length === 0 ? 'loading' : error ? 'error' : notices.length === 0 ? 'empty' : 'idle'}}"
+    error-text="{{error}}"
+    empty-text="暂时没有公告"
+    empty-desc="校友会发布通知后会显示在这里"
+    bind:retry="onRetry"
+  ></state-view>
+
+  <view class="notice-list" wx:if="{{notices.length}}">
+    <view class="notice-item" wx:for="{{notices}}" wx:key="id" data-id="{{item.id}}" bindtap="onNoticeTap">
+      <view class="notice-item-main">
+        <text class="notice-item-title">{{item.title}}</text>
+        <text class="notice-item-date">{{item.publishedAt}} · 阅读 {{item.viewCount}}</text>
+      </view>
+      <text class="notice-arrow">›</text>
+    </view>
+  </view>
+
+  <view class="list-foot" wx:if="{{notices.length}}">{{hasMore ? '上拉加载更多' : '— 已经到底了 —'}}</view>
+</view>

@@ -1,0 +1,17 @@
+@import "../../../styles/blocks.wxss";
+
+.upload-entry {
+  display: flex;
+  align-items: center;
+  gap: 16rpx;
+  background: #fff;
+  border: 1rpx solid #ebe5e2;
+  border-radius: 18rpx;
+  padding: 24rpx 22rpx;
+}
+
+.upload-entry-text {
+  flex: 1;
+  font-size: 28rpx;
+  color: #332d2b;
+}

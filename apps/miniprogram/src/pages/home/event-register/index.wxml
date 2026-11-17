@@ -1,0 +1,50 @@
+<view class="detail-page">
+  <state-view
+    status="{{loading ? 'loading' : error ? 'error' : 'idle'}}"
+    error-text="{{error}}"
+    bind:retry="onRetry"
+  ></state-view>
+
+  <block wx:if="{{event}}">
+    <view class="card register-summary">
+      <view class="card-title">{{event.title}}</view>
+      <view class="card-desc">{{event.kind}} · {{event.regionName || '内蒙古'}}</view>
+      <view class="card-desc">{{event.startsAt || '时间待定'}}</view>
+    </view>
+
+    <view class="section">
+      <view class="form-item">
+        <text class="form-label">报名备注</text>
+        <textarea
+          class="form-textarea"
+          value="{{note}}"
+          maxlength="200"
+          placeholder="如有特殊情况（例如饮食、同行人数）可在此说明"
+          bindinput="onNoteInput"
+        ></textarea>
+        <text class="form-hint">备注是可选的，将随报名信息一同提交给校友会。</text>
+      </view>
+      <view class="notice-box">
+        提交报名即表示同意校友会使用报名信息组织本次活动。报名信息仅用于活动联络，不会在通讯录中公开。
+      </view>
+      <text class="form-error" wx:if="{{submitError}}">{{submitError}}</text>
+    </view>
+  </block>
+
+  <view class="fixed-bar" wx:if="{{success}}">
+    <view class="success-panel">
+      <view class="success-title">报名已提交</view>
+      <view class="success-desc">请留意校友会后续通知；如需修改信息，请联系校友会。</view>
+      <view class="btn-row">
+        <button class="btn-soft btn-block" bindtap="onBackToEvent">返回活动</button>
+        <button class="btn-main btn-block" bindtap="onMyRegistrationsTap">查看我的报名</button>
+      </view>
+    </view>
+  </view>
+
+  <view class="fixed-bar" wx:elif="{{event}}">
+    <button class="btn-main btn-block" disabled="{{submitting}}" loading="{{submitting}}" bindtap="onSubmit">
+      {{submitting ? '提交中…' : '确认报名'}}
+    </button>
+  </view>
+</view>

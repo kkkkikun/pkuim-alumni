@@ -1,0 +1,93 @@
+<view class="home">
+  <view class="demo-banner" wx:if="{{demoMode}}" bindtap="onDemoTipTap">
+    <text class="demo-banner-dot"></text>
+    <text class="demo-banner-text">演示数据模式 · 未连接后端服务</text>
+  </view>
+
+  <view class="hero">
+    <view class="hero-text">
+      <view class="hero-kicker">心系燕园 · 情连北疆</view>
+      <view class="hero-title">内蒙古北京大学<text class="hero-title-line">校友会</text></view>
+      <view class="hero-sub">同窗情谊 · 携手同行</view>
+    </view>
+    <view class="hero-art"></view>
+  </view>
+
+  <view class="home-content">
+    <view class="home-tabs">
+      <view class="home-tab {{tab === 'news' ? 'on' : ''}}" data-tab="news" bindtap="onTabChange">校友资讯</view>
+      <view class="home-tab {{tab === 'events' ? 'on' : ''}}" data-tab="events" bindtap="onTabChange">校友活动</view>
+      <view class="home-tab {{tab === 'notices' ? 'on' : ''}}" data-tab="notices" bindtap="onTabChange">通知公告</view>
+    </view>
+
+    <view class="article-spot" bindtap="onSpotTap">
+      <view class="spot-text">
+        <view class="spot-tag">{{spot.tag}}</view>
+        <view class="spot-title">{{spot.title}}</view>
+        <view class="spot-desc">{{spot.desc}}</view>
+      </view>
+      <view class="spot-deco"></view>
+    </view>
+
+    <view class="shortcut-grid">
+      <view class="shortcut" data-action="directory" bindtap="onShortcutTap">
+        <view class="shortcut-icon"><text class="shortcut-glyph">人</text></view>
+        <text class="shortcut-text">校友通讯录</text>
+      </view>
+      <view class="shortcut" data-action="connect" bindtap="onShortcutTap">
+        <view class="shortcut-icon"><text class="shortcut-glyph">连</text></view>
+        <text class="shortcut-text">校友连接</text>
+      </view>
+      <view class="shortcut" data-action="events" bindtap="onShortcutTap">
+        <view class="shortcut-icon"><text class="shortcut-glyph">历</text></view>
+        <text class="shortcut-text">校友活动</text>
+      </view>
+      <view class="shortcut" data-action="about" bindtap="onShortcutTap">
+        <view class="shortcut-icon"><text class="shortcut-glyph">燕</text></view>
+        <text class="shortcut-text">校友会介绍</text>
+      </view>
+    </view>
+
+    <view class="notice-row" bindtap="onMoreTap">
+      <text class="notice-label">公告</text>
+      <text class="notice-text">校友会通知与组织动态</text>
+      <text class="notice-arrow">›</text>
+    </view>
+
+    <view class="section-heading">
+      <text class="section-title">{{tab === 'notices' ? '通知公告' : tab === 'events' ? '活动与交流' : '校友动态'}}</text>
+      <text class="section-more" bindtap="onMoreTap">更多{{tab === 'events' ? '活动' : tab === 'notices' ? '公告' : '资讯'}} ›</text>
+    </view>
+
+    <view class="state-wrap" wx:if="{{loading}}">
+      <view class="loading-line"></view>
+      <view class="loading-line short"></view>
+      <view class="loading-line"></view>
+    </view>
+
+    <view class="error-tip" wx:elif="{{error}}" bindtap="onSpotTap">{{error}}</view>
+
+    <block wx:else>
+      <view class="notice-list" wx:if="{{tab === 'notices'}}">
+        <view class="notice-item" wx:for="{{notices}}" wx:key="id" data-id="{{item.id}}" bindtap="onNoticeTap">
+          <view class="notice-item-main">
+            <text class="notice-item-title">{{item.title}}</text>
+            <text class="notice-item-date">{{item.publishedAt}}</text>
+          </view>
+          <text class="notice-arrow">›</text>
+        </view>
+        <view class="empty-mini" wx:if="{{notices.length === 0}}">暂时没有公告</view>
+      </view>
+
+      <view class="event-list" wx:if="{{tab === 'events'}}">
+        <event-card wx:for="{{events}}" wx:key="id" event="{{item}}" bind:tap="onEventTap"></event-card>
+        <view class="empty-mini" wx:if="{{events.length === 0}}">暂时没有活动安排</view>
+      </view>
+
+      <view class="article-list" wx:if="{{tab === 'news'}}">
+        <article-card wx:for="{{articles}}" wx:key="id" article="{{item}}" bind:tap="onArticleTap"></article-card>
+        <view class="empty-mini" wx:if="{{articles.length === 0}}">暂时没有校友资讯</view>
+      </view>
+    </block>
+  </view>
+</view>

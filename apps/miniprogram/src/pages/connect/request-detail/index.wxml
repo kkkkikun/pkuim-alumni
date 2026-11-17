@@ -1,0 +1,51 @@
+<view class="detail-page">
+  <state-view
+    status="{{loading ? 'loading' : error ? 'error' : 'idle'}}"
+    error-text="{{error}}"
+    bind:retry="onRetry"
+  ></state-view>
+
+  <block wx:if="{{request}}">
+    <view class="card">
+      <view class="card-title">{{request.isIncoming ? request.fromName : request.toName}}</view>
+      <view class="card-desc">{{request.isIncoming ? '向你发起联系申请' : '你向对方发起了联系申请'}}</view>
+      <view class="card-desc">状态：<text class="text-red">{{request.statusLabel}}</text></view>
+      <view class="card-desc">发起时间：{{request.createdAt}}</view>
+    </view>
+
+    <view class="section">
+      <view class="section-head"><text class="section-title">交流说明</text></view>
+      <view class="card">
+        <view class="card-desc">{{request.message}}</view>
+      </view>
+    </view>
+
+    <view class="section">
+      <view class="notice-box">
+        联系申请需要接收方明确接受；双方联系方式独立授权，可随时撤回。平台不会因为申请被接受而自动公开联系方式。
+      </view>
+      <text class="form-error" wx:if="{{actionError}}">{{actionError}}</text>
+    </view>
+
+    <view class="page-bottom-space"></view>
+  </block>
+
+  <view class="fixed-bar" wx:if="{{request}}">
+    <view class="btn-row" wx:if="{{request.canAccept}}">
+      <button class="btn-ghost btn-block" bindtap="onReject">拒绝</button>
+      <button class="btn-main btn-block" bindtap="onAccept">接受申请</button>
+    </view>
+    <button class="btn-soft btn-block" wx:elif="{{request.canCancel}}" bindtap="onCancel">取消这条申请</button>
+    <button class="btn-main btn-block" wx:else bindtap="onContactShareTap">管理联系方式共享</button>
+  </view>
+</view>
+
+<dialog
+  visible="{{dialogVisible}}"
+  title="{{dialogTitle}}"
+  content="{{dialogContent}}"
+  confirm-text="{{dialogConfirmText}}"
+  cancel-text="{{dialogCancelText}}"
+  bind:confirm="onDialogConfirm"
+  bind:cancel="onDialogCancel"
+></dialog>

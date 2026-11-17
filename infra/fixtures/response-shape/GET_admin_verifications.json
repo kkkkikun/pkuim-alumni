@@ -1,0 +1,86 @@
+{
+  "code": "OK",
+  "message": "success",
+  "data": {
+    "items": [
+      {
+        "id": 1,
+        "userId": 4,
+        "applicantName": "夹具校友",
+        "college": "经济学院",
+        "graduationYear": 2015,
+        "degree": "学士",
+        "studentIdMasked": "2015****1234",
+        "status": "pending",
+        "attachments": [
+          {
+            "id": 1,
+            "mediaId": 1,
+            "fileName": "proof.png",
+            "mimeType": "image/png",
+            "size": 128,
+            "uploadedAt": "2026-01-01T00:00:00.000Z"
+          },
+          {
+            "id": 2,
+            "mediaId": 2,
+            "fileName": "transcript.pdf",
+            "mimeType": "application/pdf",
+            "size": 2048,
+            "uploadedAt": "2026-01-02T00:00:00.000Z"
+          }
+        ],
+        "reviews": [
+          {
+            "id": 1,
+            "adminId": 1,
+            "adminName": "夹具审核员",
+            "action": "request_changes",
+            "note": "请补充成绩单",
+            "createdAt": "2026-01-03T00:00:00.000Z"
+          }
+        ],
+        "submittedAt": "2026-01-01T00:00:00.000Z",
+        "decidedAt": null
+      },
+      {
+        "id": 2,
+        "userId": 5,
+        "applicantName": "另一位夹具校友",
+        "college": null,
+        "graduationYear": null,
+        "degree": null,
+        "studentIdMasked": null,
+        "status": "approved",
+        "attachments": [
+          {
+            "id": 3,
+            "mediaId": 3,
+            "fileName": "id-card.png",
+            "mimeType": "image/png",
+            "size": 512,
+            "uploadedAt": "2026-01-04T00:00:00.000Z"
+          }
+        ],
+        "reviews": [
+          {
+            "id": 2,
+            "adminId": 1,
+            "adminName": "夹具审核员",
+            "action": "approve",
+            "note": "材料齐全",
+            "createdAt": "2026-01-05T00:00:00.000Z"
+          }
+        ],
+        "submittedAt": "2026-01-04T00:00:00.000Z",
+        "decidedAt": "2026-01-05T00:00:00.000Z"
+      }
+    ],
+    "meta": {
+      "page": 1,
+      "pageSize": 20,
+      "total": 2,
+      "totalPages": 1
+    }
+  }
+}

@@ -1,0 +1,42 @@
+<view class="detail-page">
+  <view class="verify-hero">
+    <view class="verify-stamp">燕</view>
+    <view class="verify-hero-title">校友身份认证</view>
+    <view class="verify-hero-desc">完成认证后，你可以在通讯录中被其他校友找到，并发起联系申请。</view>
+  </view>
+
+  <view class="section">
+    <view class="section-head"><text class="section-title">认证流程</text></view>
+    <view class="card">
+      <view class="verify-step" wx:for="{{steps}}" wx:key="title">
+        <view class="verify-step-index">{{index + 1}}</view>
+        <view class="verify-step-main">
+          <view class="verify-step-title">{{item.title}}</view>
+          <view class="verify-step-desc">{{item.desc}}</view>
+        </view>
+      </view>
+    </view>
+  </view>
+
+  <view class="section">
+    <view class="section-head"><text class="section-title">材料要求</text></view>
+    <view class="card">
+      <view class="card-desc">可提交的材料包括：学信网学籍/学历在线验证报告、毕业证书、学位证书等。</view>
+      <view class="card-desc">材料仅用于校友会人工审核，审核完成后按平台规则保存；审核历史会完整保留，你也可以随时查看。</view>
+    </view>
+  </view>
+
+  <view class="section">
+    <view class="notice-box">
+      认证通过后才获得正式校友权限：公开资料、发起联系申请、发布资源与需求、报名活动等。未认证用户可以浏览公开内容。
+    </view>
+  </view>
+
+  <view class="fixed-bar">
+    <button class="btn-main btn-block" bindtap="onStartTap">开始认证</button>
+    <view class="btn-row">
+      <button class="btn-ghost btn-block" bindtap="onProgressTap">查看认证进度</button>
+      <button class="btn-ghost btn-block" bindtap="onHistoryTap">认证历史</button>
+    </view>
+  </view>
+</view>

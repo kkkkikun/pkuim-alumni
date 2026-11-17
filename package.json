@@ -1,0 +1,29 @@
+{
+  "name": "nmg-pku-alumni",
+  "version": "1.0.0",
+  "private": true,
+  "description": "内蒙古北京大学校友会数字化平台 V1",
+  "packageManager": "pnpm@11.7.0",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "build": "pnpm -r --filter=./apps/* --filter=./packages/* build",
+    "build:api": "pnpm --filter @nmg/api build",
+    "build:admin": "pnpm --filter @nmg/admin-web build",
+    "dev:api": "pnpm --filter @nmg/api start:dev",
+    "dev:worker": "pnpm --filter @nmg/worker start:dev",
+    "dev:admin": "pnpm --filter @nmg/admin-web dev",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "pnpm -r lint",
+    "test": "pnpm -r test",
+    "test:integration": "pnpm --filter @nmg/api test:integration",
+    "db:migrate": "pnpm --filter @nmg/api db:migrate",
+    "db:seed": "pnpm --filter @nmg/api db:seed",
+    "typeorm": "pnpm --filter @nmg/api typeorm"
+  },
+  "devDependencies": {
+    "prettier": "3.4.2",
+    "typescript": "5.7.2"
+  }
+}

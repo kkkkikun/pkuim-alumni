@@ -1,0 +1,75 @@
+@import "../../../styles/blocks.wxss";
+
+.verify-hero {
+  padding: 60rpx 40rpx;
+  border-radius: 26rpx;
+  background: linear-gradient(155deg, #b52832 0%, #a51e28 42%, #911a25 100%);
+  color: #fff;
+  text-align: center;
+}
+
+.verify-stamp {
+  width: 104rpx;
+  height: 104rpx;
+  margin: 0 auto;
+  border: 3rpx solid #fff;
+  border-radius: 50%;
+  font-family: "Songti SC", "STSong", "SimSun", serif;
+  font-size: 48rpx;
+  line-height: 104rpx;
+}
+
+.verify-hero-title {
+  margin-top: 26rpx;
+  font-family: "Songti SC", "STSong", "SimSun", serif;
+  font-size: 38rpx;
+  font-weight: 700;
+  letter-spacing: 2rpx;
+}
+
+.verify-hero-desc {
+  margin-top: 16rpx;
+  font-size: 23rpx;
+  color: #fad8c9;
+  line-height: 1.75;
+}
+
+.verify-step {
+  display: flex;
+  gap: 20rpx;
+  padding: 24rpx 0;
+  border-bottom: 1rpx solid #f5f2ef;
+}
+
+.verify-step:last-child {
+  border-bottom: none;
+}
+
+.verify-step-index {
+  width: 48rpx;
+  height: 48rpx;
+  flex: none;
+  border-radius: 50%;
+  background: #fbeae7;
+  color: #a51e28;
+  font-size: 24rpx;
+  text-align: center;
+  line-height: 48rpx;
+}
+
+.verify-step-main {
+  flex: 1;
+}
+
+.verify-step-title {
+  font-size: 28rpx;
+  font-weight: 700;
+  color: #262322;
+}
+
+.verify-step-desc {
+  margin-top: 8rpx;
+  font-size: 23rpx;
+  color: #a19893;
+  line-height: 1.7;
+}

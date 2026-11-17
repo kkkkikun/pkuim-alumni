@@ -1,0 +1,334 @@
+import { BadRequestException, Body, ConflictException, Controller, Delete, Get, HttpCode, HttpStatus, NotFoundException, Param, ParseIntPipe, Patch, Post, Put, Query } from '@nestjs/common';
+import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { InjectRepository } from '@nestjs/typeorm';
+import { DataSource, EntityManager, Repository } from 'typeorm';
+import { PaginationQueryDto } from '../../common/dto/pagination.dto';
+import { CurrentUser, RequirePermissions } from '../../common/decorators';
+import type { RequestUser } from '../../common/decorators';
+import { AdminUser, AdminUserRole, Role } from '../../database/entities/admin.entity';
+import { AdminActionLog } from '../../database/entities/admin.entity';
+import { User } from '../../database/entities/user.entity';
+import { ContentService } from '../content/content.service';
+import {
+  CreateAdminUserBodyDto,
+  UpdateAdminUserBodyDto,
+  UpdateUserStatusBodyDto,
+} from './dto/admin-body.dto';
+import {
+  CreateCategoryBodyDto,
+  UpdateCategoryBodyDto,
+  UpsertSettingBodyDto,
+} from '../content/dto/content.dto';
+
+@ApiTags('管理后台 · 用户与设置')
+@Controller('admin')
+export class AdminUsersController {
+  constructor(
+    @InjectRepository(User) private readonly users: Repository<User>,
+    private readonly dataSource: DataSource,
+    private readonly contentService: ContentService,
+  ) {}
+
+  @Post('users')
+  @RequirePermissions('admin:manage')
+  @ApiOperation({ summary: '创建管理员' })
+  async createAdmin(@CurrentUser() actor: RequestUser, @Body() body: CreateAdminUserBodyDto) {
+    // ⚠️ 三步写（建账号 → 同步角色 → 写审计）必须同事务（缺陷 #115）：
+    // 中途失败若不回滚，账号会以「有账号、没角色」的半成品状态留在库里，
+    // 而且接口已经返回 500，管理员无从得知发生了什么。
+    const result = await this.dataSource.transaction(async (manager) => {
+      const adminUsers = manager.getRepository(AdminUser);
+      const passwordHash = await this.hashPassword(body.password ?? 'Admin@2026');
+      let admin: AdminUser;
+      try {
+        admin = await adminUsers.save(
+          adminUsers.create({
+            username: body.username,
+            displayName: body.displayName ?? body.username,
+            passwordHash,
+            status: body.status ?? 'active',
+          }),
+        );
+      } catch (error) {
+        // 登录名唯一索引冲突：这是**客户端可修正**的输入问题，
+        // 不能以 500 抛给前端（缺陷 #112）。
+        throw this.toDuplicateUsernameError(error);
+      }
+      const appliedRoles = await this.syncRoles(manager, admin.id, body.roles ?? ['alumni_reviewer']);
+      await this.log(manager, actor, 'admin.user.create', 'admin_user', admin.id, {
+        username: admin.username,
+        roles: appliedRoles,
+      });
+      return { admin, appliedRoles };
+    });
+
+    const { admin, appliedRoles } = result;
+    return {
+      id: admin.id,
+      username: admin.username,
+      displayName: admin.displayName,
+      status: admin.status,
+      roles: appliedRoles,
+      lastLoginAt: admin.lastLoginAt,
+      createdAt: admin.createdAt,
+    };
+  }
+
+  @Patch('users/:id')
+  @RequirePermissions('admin:manage')
+  @ApiOperation({ summary: '更新管理员（角色 / 状态 / 口令）' })
+  async updateAdmin(
+    @CurrentUser() actor: RequestUser,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: UpdateAdminUserBodyDto,
+  ) {
+    // 同上：改资料 / 改角色 / 写审计必须同事务（缺陷 #115）
+    const { admin, appliedRoles } = await this.dataSource.transaction(async (manager) => {
+      const adminUsers = manager.getRepository(AdminUser);
+      const admin = await adminUsers.findOne({ where: { id } });
+      if (!admin) throw new NotFoundException('管理员不存在');
+      if (body.displayName !== undefined) admin.displayName = body.displayName;
+      if (body.status !== undefined) admin.status = body.status;
+      if (body.password) {
+        admin.passwordHash = await this.hashPassword(body.password);
+      }
+      await adminUsers.save(admin);
+      // 角色：请求里没带就保持原样；带了才同步
+      const appliedRoles = body.roles
+        ? await this.syncRoles(manager, id, body.roles)
+        : await this.roleCodesOf(manager, id);
+      // 只在「动了权限」时才校验不变量：单纯改显示名不该被这条规则拦下。
+      if (body.status !== undefined || body.roles !== undefined) {
+        await this.assertStillHasAdminManager(manager);
+      }
+      await this.log(manager, actor, 'admin.user.update', 'admin_user', id, {
+        displayName: body.displayName,
+        status: body.status,
+        roles: appliedRoles,
+        passwordChanged: body.password !== undefined,
+      });
+      return { admin, appliedRoles };
+    });
+
+    return {
+      id: admin.id,
+      username: admin.username,
+      displayName: admin.displayName,
+      status: admin.status,
+      roles: appliedRoles,
+      lastLoginAt: admin.lastLoginAt,
+      createdAt: admin.createdAt,
+    };
+  }
+
+  /**
+   * 普通账号状态变更。
+   *
+   * 管理端路由统一收敛在 `/admin` 命名空间下（契约 `ApiPaths.adminUserStatus`）。
+   * POST 版本作为 PATCH 的兼容别名保留。
+   */
+  @Patch('users/:id/status')
+  @RequirePermissions('alumni:manage')
+  @ApiOperation({ summary: '启用 / 停用普通账号' })
+  async patchUserStatus(
+    @CurrentUser() actor: RequestUser,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: UpdateUserStatusBodyDto,
+  ) {
+    return this.setUserStatus(actor, id, body);
+  }
+
+  @Post('users/:id/status')
+  // ⚠️ 这个 POST **不创建任何资源**（只是改状态）→
+  // Nest 对 POST 的默认是 201 Created，而 201 的语义是「本次请求创建了新资源」，
+  // 且应当带 Location 头 —— 这里两样都不成立（缺陷 #126）。
+  @HttpCode(HttpStatus.OK)
+  @RequirePermissions('alumni:manage')
+  @ApiOperation({ summary: '启用 / 停用普通账号（兼容路径）' })
+  async updateUserStatus(
+    @CurrentUser() actor: RequestUser,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: UpdateUserStatusBodyDto,
+  ) {
+    return this.setUserStatus(actor, id, body);
+  }
+
+  @Get('users/:id')
+  @RequirePermissions('alumni:view')
+  @ApiOperation({ summary: '普通账号详情' })
+  async getUser(@Param('id', ParseIntPipe) id: number) {
+    const user = await this.users.findOne({ where: { id } });
+    if (!user) throw new NotFoundException('用户不存在');
+    return {
+      id: user.id,
+      openid: user.openid,
+      nickname: user.nickname,
+      avatarUrl: user.avatarUrl,
+      status: user.status,
+      stage: user.stage,
+      createdAt: user.createdAt,
+      lastLoginAt: user.lastLoginAt,
+    };
+  }
+
+  /**
+   * 启用 / 停用普通账号。
+   *
+   * `reason`（停用原因）必须落进审计日志 ——
+   * 后台弹窗里让管理员填写原因，服务端却直接丢弃（缺陷 #83），
+   * 等于让管理员白填。
+   */
+  private async setUserStatus(
+    actor: RequestUser,
+    id: number,
+    body: UpdateUserStatusBodyDto,
+  ): Promise<{ id: number; status: string }> {
+    // 改状态与写审计日志同事务（缺陷 #115）
+    return this.dataSource.transaction(async (manager) => {
+      const users = manager.getRepository(User);
+      const user = await users.findOne({ where: { id } });
+      if (!user) throw new NotFoundException('用户不存在');
+      const previous = user.status;
+      user.status = body.status;
+      await users.save(user);
+      await this.log(manager, actor, 'user.status.change', 'user', id, {
+        from: previous,
+        to: body.status,
+        reason: body.reason ?? null,
+      });
+      return { id: user.id, status: user.status };
+    });
+  }
+
+  @Post('articles/categories')
+  @RequirePermissions('content:manage')
+  @ApiOperation({ summary: '创建资讯分类' })
+  createCategory(
+    @Body() body: CreateCategoryBodyDto,
+  ) {
+    return this.contentService.createCategory(body);
+  }
+
+  @Patch('articles/categories/:id')
+  @RequirePermissions('content:manage')
+  updateCategory(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: UpdateCategoryBodyDto,
+  ) {
+    return this.contentService.updateCategory(id, body);
+  }
+
+  @Delete('articles/categories/:id')
+  @RequirePermissions('content:manage')
+  deleteCategory(@Param('id', ParseIntPipe) id: number) {
+    return this.contentService.deleteCategory(id);
+  }
+
+  @Put('settings')
+  @RequirePermissions('settings:manage')
+  upsertSetting(@Body() body: UpsertSettingBodyDto) {
+    return this.contentService.upsertSetting(body);
+  }
+
+  /**
+   * 同步管理员的角色，返回**实际生效**的角色编码。
+   *
+   * 不存在的角色编码会被静默忽略（数据库里没有该 role），
+   * 所以响应不能直接回显请求里的列表 ——
+   * 否则接口会「声称」给了一个其实没生效的角色（缺陷 #81）。
+   *
+   * ⚠️ 必须走 `manager.getRepository(...)`：
+   * 注入的默认仓储走的是**另一条连接**，在事务里用它写数据会**跳出事务**，
+   * 「先删后插」的中间态会被真正提交出去（缺陷 #115）。
+   */
+  private async syncRoles(
+    manager: EntityManager,
+    adminId: number,
+    roleCodes: string[],
+  ): Promise<string[]> {
+    const roles = await manager
+      .getRepository(Role)
+      .find({ where: roleCodes.map((code) => ({ code })) });
+    const links = manager.getRepository(AdminUserRole);
+    await links.delete({ adminUserId: adminId });
+    for (const role of roles) {
+      await links.save(links.create({ adminUserId: adminId, roleId: role.id }));
+    }
+    return roles.map((role) => role.code);
+  }
+
+  /**
+   * 守住一条硬不变量：**系统里至少要有一个「活的」能管管理员的人**。
+   *
+   * 没有这条保护时，一个管理员可以：
+   *   - 把自己停用；
+   *   - 或把最后一个持有 `admin:manage` 的管理员降权；
+   * 结果是**再没有任何人能登录后台**（缺陷 #116），
+   * 只能进数据库手工救。因此这里在**事务内、提交前**校验。
+   */
+  private async assertStillHasAdminManager(manager: EntityManager): Promise<void> {
+    const rows = await manager.query(
+      `SELECT COUNT(DISTINCT au.id) AS total
+         FROM admin_users au
+         JOIN admin_user_roles aur ON aur.admin_user_id = au.id
+         JOIN role_permissions rp ON rp.role_id = aur.role_id
+         JOIN permissions p ON p.id = rp.permission_id
+        WHERE au.status = 'active' AND p.code = 'admin:manage'`,
+    );
+    const total = Number(rows?.[0]?.total ?? 0);
+    if (total === 0) {
+      throw new BadRequestException(
+        '该操作会导致系统里不再有任何可用的管理员（admin:manage），已拒绝执行',
+      );
+    }
+  }
+
+  /** 登录名重复（唯一索引冲突）→ 409，而不是 500（缺陷 #112） */
+  private toDuplicateUsernameError(error: unknown): Error {
+    const code =
+      (error as { code?: string })?.code ??
+      (error as { driverError?: { code?: string } })?.driverError?.code;
+    if (code === 'ER_DUP_ENTRY') {
+      return new ConflictException('登录名已存在');
+    }
+    return error instanceof Error ? error : new Error(String(error));
+  }
+
+  /** 写审计日志（管理端账号类操作此前完全没有留痕，缺陷 #84） */
+  private async log(
+    manager: EntityManager,
+    admin: RequestUser,
+    action: string,
+    targetType: string,
+    targetId: number,
+    detail: Record<string, unknown>,
+  ): Promise<void> {
+    const actionLogs = manager.getRepository(AdminActionLog);
+    await actionLogs.save(
+      actionLogs.create({
+        adminId: admin.id,
+        action,
+        targetType,
+        targetId: String(targetId),
+        detail,
+      }),
+    );
+  }
+
+  /** 读取管理员当前实际拥有的角色编码 */
+  private async roleCodesOf(manager: EntityManager, adminId: number): Promise<string[]> {
+    const links = await manager
+      .getRepository(AdminUserRole)
+      .find({ where: { adminUserId: adminId } });
+    if (!links.length) return [];
+    const roles = await manager.getRepository(Role).find({
+      where: links.map((link) => ({ id: link.roleId })),
+    });
+    return roles.map((role) => role.code);
+  }
+
+  private async hashPassword(password: string): Promise<string> {
+    const bcryptjs = await import('bcryptjs');
+    return bcryptjs.hash(password, 10);
+  }
+}

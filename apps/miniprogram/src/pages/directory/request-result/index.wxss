@@ -1,0 +1,44 @@
+@import "../../../styles/blocks.wxss";
+
+.result-card {
+  background: #fff;
+  border-radius: 24rpx;
+  padding: 60rpx 40rpx;
+  text-align: center;
+}
+
+.result-mark {
+  width: 112rpx;
+  height: 112rpx;
+  margin: 0 auto;
+  border-radius: 50%;
+  background: #fbeae7;
+  color: #a51e28;
+  font-family: "Songti SC", "STSong", "SimSun", serif;
+  font-size: 46rpx;
+  line-height: 112rpx;
+}
+
+.result-mark.ok {
+  background: #e9f2ea;
+  color: #4f7d55;
+}
+
+.result-mark.no {
+  background: #f1efed;
+  color: #8d8784;
+}
+
+.result-title {
+  margin-top: 30rpx;
+  font-size: 36rpx;
+  font-weight: 700;
+  color: #262322;
+}
+
+.result-desc {
+  margin-top: 18rpx;
+  font-size: 25rpx;
+  color: #817873;
+  line-height: 1.8;
+}

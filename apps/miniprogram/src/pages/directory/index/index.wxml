@@ -1,0 +1,43 @@
+<view class="directory">
+  <view class="directory-head">
+    <view class="directory-title">燕园同窗，天涯比邻</view>
+    <view class="directory-sub">寻找志趣相投的校友 · 连接熟悉又崭新的朋友</view>
+    <view class="search-box">
+      <text class="search-icon">搜</text>
+      <input
+        class="search-input"
+        value="{{keyword}}"
+        placeholder="搜索姓名、学院或专业方向"
+        confirm-type="search"
+        bindinput="onSearchInput"
+        bindconfirm="onSearchConfirm"
+      />
+      <text class="search-clear" wx:if="{{keyword}}" bindtap="onClearSearch">×</text>
+    </view>
+  </view>
+
+  <view class="filter-tools">
+    <view class="filter-button {{regionLabel !== '全部地区' ? 'active' : ''}}" bindtap="onFilterTap">{{regionLabel}} ▾</view>
+    <view class="filter-button {{industryLabel !== '全部行业' ? 'active' : ''}}" bindtap="onFilterTap">{{industryLabel}} ▾</view>
+    <text class="filter-count" wx:if="{{total}}">共 {{total}} 位校友</text>
+  </view>
+
+  <view class="roster-list">
+    <state-view
+      status="{{loading && entries.length === 0 ? 'loading' : error ? 'error' : entries.length === 0 ? 'empty' : 'idle'}}"
+      error-text="{{error}}"
+      empty-text="没有找到符合条件的校友"
+      empty-desc="可以更换盟市或行业筛选条件，也可以清空搜索关键词"
+      bind:retry="onRetry"
+    ></state-view>
+
+    <person-item wx:for="{{entries}}" wx:key="userId" entry="{{item}}" bind:tap="onEntryTap"></person-item>
+
+    <view class="list-foot" wx:if="{{entries.length}}">{{hasMore ? '上拉加载更多' : '— 已经到底了 —'}}</view>
+  </view>
+
+  <view class="privacy-hint">
+    <text class="shield">盾</text>
+    <text>平台仅展示校友本人授权公开的资料；联系方式不直接公开，需经过双方同意。</text>
+  </view>
+</view>

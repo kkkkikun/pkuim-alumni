@@ -1,0 +1,36 @@
+@import "../../../styles/blocks.wxss";
+
+.notice-item {
+  display: flex;
+  align-items: center;
+  gap: 16rpx;
+  padding: 26rpx 4rpx;
+  border-bottom: 1rpx solid #f4f1ee;
+}
+
+.notice-item-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.notice-item-title {
+  display: block;
+  font-size: 27rpx;
+  color: #332d2b;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.notice-item-date {
+  display: block;
+  margin-top: 8rpx;
+  font-size: 21rpx;
+  color: #a89b95;
+}
+
+.notice-arrow {
+  color: #c3b8b3;
+  font-size: 30rpx;
+  flex: none;
+}

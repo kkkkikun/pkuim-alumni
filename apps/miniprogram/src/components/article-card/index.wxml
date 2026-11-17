@@ -1,0 +1,12 @@
+<view class="article" bindtap="onTap">
+  <view class="article-head">
+    <text class="article-category" wx:if="{{article.categoryName}}">{{article.categoryName}}</text>
+    <text class="article-date">{{article.publishedAt}}</text>
+  </view>
+  <text class="article-title">{{article.title}}</text>
+  <text class="article-summary" wx:if="{{article.summary}}">{{article.summary}}</text>
+  <view class="article-foot">
+    <text class="article-views">阅读 {{article.viewCount}}</text>
+    <text class="article-more">阅读全文 ›</text>
+  </view>
+</view>

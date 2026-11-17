@@ -1,0 +1,11 @@
+{
+  "navigationBarTitleText": "认证进度",
+  "navigationBarBackgroundColor": "#ffffff",
+  "navigationBarTextStyle": "black",
+  "backgroundColor": "#f8f7f5",
+  "backgroundTextStyle": "light",
+  "enablePullDownRefresh": false,
+  "usingComponents": {
+    "state-view": "../../../components/state-view/index"
+  }
+}

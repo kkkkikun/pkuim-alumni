@@ -1,0 +1,28 @@
+{
+  "code": "OK",
+  "message": "success",
+  "data": {
+    "items": [
+      {
+        "id": 1,
+        "categoryId": 1,
+        "categoryName": "夹具分类",
+        "title": "夹具资讯标题",
+        "summary": "夹具摘要",
+        "body": "夹具正文内容",
+        "coverMediaId": null,
+        "status": "draft",
+        "publishedAt": null,
+        "viewCount": 0,
+        "createdAt": "2026-01-01T00:00:00.000Z",
+        "updatedAt": "2026-01-01T00:00:00.000Z"
+      }
+    ],
+    "meta": {
+      "page": 1,
+      "pageSize": 20,
+      "total": 1,
+      "totalPages": 1
+    }
+  }
+}

@@ -1,0 +1,188 @@
+@import "../../../styles/blocks.wxss";
+
+.connect {
+  min-height: 100vh;
+  background: #f8f7f5;
+}
+
+.link-hero {
+  position: relative;
+  padding: 48rpx 40rpx 58rpx;
+  background: linear-gradient(145deg, #ab222e, #961b29);
+  color: #fff;
+  overflow: hidden;
+}
+
+.link-hero::after {
+  content: "";
+  position: absolute;
+  width: 320rpx;
+  height: 320rpx;
+  right: -140rpx;
+  top: -120rpx;
+  border: 1rpx solid rgba(255, 255, 255, 0.16);
+  border-radius: 50%;
+  box-shadow: 0 0 0 40rpx rgba(255, 255, 255, 0.05);
+}
+
+.link-hero-text {
+  position: relative;
+  z-index: 1;
+}
+
+.link-kicker {
+  font-family: "Songti SC", "STSong", "SimSun", serif;
+  font-size: 23rpx;
+  letter-spacing: 5rpx;
+  color: #fad5cf;
+}
+
+.link-title {
+  margin-top: 22rpx;
+  font-family: "Songti SC", "STSong", "SimSun", serif;
+  font-size: 54rpx;
+  font-weight: 700;
+  line-height: 1.4;
+  letter-spacing: 2rpx;
+}
+
+.link-title-line {
+  display: block;
+}
+
+.link-desc {
+  margin-top: 18rpx;
+  font-size: 24rpx;
+  color: #f1d1d1;
+  line-height: 1.7;
+}
+
+.link-desc-line {
+  display: block;
+}
+
+.link-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 22rpx;
+  margin-top: 46rpx;
+}
+
+.link-action {
+  height: 88rpx;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  border-radius: 20rpx;
+  font-size: 27rpx;
+  font-weight: 700;
+}
+
+.link-action.primary {
+  background: #fffaf8;
+  color: #9c2630;
+}
+
+.link-action.ghost {
+  border: 1rpx solid rgba(243, 192, 184, 0.6);
+  background: rgba(255, 255, 255, 0.09);
+  color: #fff;
+}
+
+.link-body {
+  padding: 40rpx 38rpx 60rpx;
+}
+
+.connect-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20rpx;
+  margin-bottom: 34rpx;
+}
+
+.connect-result-count {
+  font-size: 22rpx;
+  color: #a59d99;
+}
+
+.link-section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 22rpx;
+}
+
+.sector-scroll {
+  white-space: nowrap;
+  margin-bottom: 26rpx;
+}
+
+.sector-row {
+  display: inline-flex;
+  gap: 16rpx;
+}
+
+.sector-chip {
+  flex: none;
+  white-space: nowrap;
+  padding: 18rpx 24rpx;
+  font-size: 24rpx;
+  border-radius: 40rpx;
+  background: #f7f4f1;
+  color: #77706b;
+}
+
+.sector-chip.on {
+  background: #a51e28;
+  color: #fff;
+}
+
+.flow-card {
+  margin-top: 30rpx;
+  background: #fff;
+  border-radius: 24rpx;
+  padding: 32rpx 28rpx;
+}
+
+.flow-title {
+  font-size: 30rpx;
+  font-weight: 700;
+  color: #262322;
+}
+
+.flow-steps {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 28rpx;
+}
+
+.flow-step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12rpx;
+  flex: none;
+}
+
+.flow-bubble {
+  width: 56rpx;
+  height: 56rpx;
+  border-radius: 50%;
+  background: #fbeae7;
+  color: #a51e28;
+  font-size: 22rpx;
+  text-align: center;
+  line-height: 56rpx;
+}
+
+.flow-label {
+  font-size: 21rpx;
+  color: #8a807c;
+}
+
+.flow-arrow {
+  color: #d8cfc9;
+  font-size: 28rpx;
+}

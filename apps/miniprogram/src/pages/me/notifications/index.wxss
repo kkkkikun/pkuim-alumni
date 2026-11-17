@@ -1,0 +1,153 @@
+@import "../../../styles/blocks.wxss";
+
+.notify-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 24rpx 8rpx 8rpx;
+}
+
+.notify-toolbar-title {
+  font-size: 30rpx;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.notify-toolbar-action {
+  font-size: 26rpx;
+  color: var(--red);
+}
+
+.notify-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16rpx;
+}
+
+.notify-card {
+  display: flex;
+  gap: 20rpx;
+  padding: 26rpx 24rpx;
+  background: var(--white);
+  border-radius: 18rpx;
+  border: 2rpx solid var(--line);
+}
+
+.notify-card.unread {
+  border-color: var(--red);
+  background: #fffdfd;
+}
+
+.notify-icon {
+  flex: none;
+  width: 72rpx;
+  height: 72rpx;
+  border-radius: 50%;
+  background: var(--pink);
+  color: var(--red);
+  font-size: 30rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.notify-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.notify-head {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+}
+
+.notify-title {
+  font-size: 30rpx;
+  font-weight: 600;
+  color: var(--ink);
+  flex: 1;
+}
+
+.notify-dot {
+  width: 14rpx;
+  height: 14rpx;
+  border-radius: 50%;
+  background: var(--red);
+}
+
+.notify-body {
+  display: block;
+  margin-top: 8rpx;
+  font-size: 26rpx;
+  color: var(--text);
+}
+
+.notify-foot {
+  display: flex;
+  align-items: center;
+  gap: 20rpx;
+  margin-top: 12rpx;
+}
+
+.notify-type,
+.notify-time {
+  font-size: 22rpx;
+  color: var(--muted);
+}
+
+.notify-read-action {
+  margin-left: auto;
+  font-size: 22rpx;
+  color: var(--red);
+}
+
+.notify-detail {
+  padding: 30rpx 28rpx;
+}
+
+.notify-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.notify-detail-type {
+  font-size: 24rpx;
+  color: var(--red);
+  background: var(--pink);
+  padding: 6rpx 18rpx;
+  border-radius: 999rpx;
+}
+
+.notify-detail-time {
+  font-size: 22rpx;
+  color: var(--muted);
+}
+
+.notify-detail-title {
+  display: block;
+  margin-top: 22rpx;
+  font-size: 34rpx;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.notify-detail-body {
+  display: block;
+  margin-top: 18rpx;
+  font-size: 28rpx;
+  color: var(--text);
+  white-space: pre-wrap;
+}
+
+.notify-detail-foot {
+  margin-top: 30rpx;
+  padding-top: 20rpx;
+  border-top: 2rpx solid var(--line);
+}
+
+.notify-detail-state {
+  font-size: 24rpx;
+  color: var(--muted);
+}

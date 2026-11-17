@@ -1,0 +1,18 @@
+<view class="state-view" wx:if="{{status !== 'idle'}}">
+  <view class="state-loading" wx:if="{{status === 'loading'}}">
+    <view class="spinner"></view>
+    <text class="state-text">正在加载…</text>
+  </view>
+
+  <view class="state-block" wx:elif="{{status === 'error'}}">
+    <text class="state-title">加载失败</text>
+    <text class="state-desc">{{errorText || '请检查网络后重试'}}</text>
+    <button class="state-btn" wx:if="{{retryable}}" bindtap="onRetry">重新加载</button>
+  </view>
+
+  <view class="state-block" wx:elif="{{status === 'empty'}}">
+    <text class="state-title">{{emptyText}}</text>
+    <text class="state-desc" wx:if="{{emptyDesc}}">{{emptyDesc}}</text>
+    <slot name="empty-action"></slot>
+  </view>
+</view>
