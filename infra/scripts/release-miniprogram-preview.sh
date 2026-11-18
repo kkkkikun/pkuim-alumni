@@ -32,6 +32,8 @@ source "${SCRIPT_DIR}/common.sh"
 APPID=""
 PRIVATE_KEY=""
 API_BASE_URL=""
+MOCK_LOGIN="false"
+DATA_MODE="auto"
 VERSION="0.1.0"
 DESC="内蒙古北京大学校友会 · 临时预览版"
 QR_OUT="${MINIPROGRAM_QR_OUT:-/tmp/nmg-miniprogram-preview.jpg}"
@@ -43,8 +45,10 @@ while [ $# -gt 0 ]; do
     --appid)        APPID="${2:-}"; [ -n "$APPID" ] || die "--appid 需要一个值"; shift 2 ;;
     --private-key)  PRIVATE_KEY="${2:-}"; [ -n "$PRIVATE_KEY" ] || die "--private-key 需要一个值"; shift 2 ;;
     --api-base-url) API_BASE_URL="${2:-}"; [ -n "$API_BASE_URL" ] || die "--api-base-url 需要一个值"; shift 2 ;;
+    --mock-login)   MOCK_LOGIN="${2:-}"; [ -n "$MOCK_LOGIN" ] || die "--mock-login 需要一个值"; shift 2 ;;
+    --data-mode)    DATA_MODE="${2:-}"; [ -n "$DATA_MODE" ] || die "--data-mode 需要一个值"; shift 2 ;;
     --version)      VERSION="${2:-}"; [ -n "$VERSION" ] || die "--version 需要一个值"; shift 2 ;;
-    --desc)         DESC="${2:-}"; shift ;;
+    --desc)         DESC="${2:-}"; [ -n "$DESC" ] || die "--desc 需要一个值"; shift 2 ;;
     --qr-out)       QR_OUT="${2:-}"; [ -n "$QR_OUT" ] || die "--qr-out 需要一个值"; shift 2 ;;
     --skip-upload)  SKIP_UPLOAD=1; shift ;;
     --skip-preview) SKIP_PREVIEW=1; shift ;;
@@ -79,11 +83,12 @@ else
   warn "找不到 miniprogram-compile-check.mjs，跳过离线编译自检"
 fi
 
-log "=== 第 2 步：写 AppID + 注入 API 基址并上传 ==="
+log "=== 第 2 步：写 AppID + 注入运行配置并上传 ==="
 if [ "$SKIP_UPLOAD" -eq 0 ]; then
   bash "$UPLOAD_SH" --upload \
     --appid "$APPID" --private-key "$PRIVATE_KEY" \
     --write-appid --api-base-url "$API_BASE_URL" \
+    --mock-login "$MOCK_LOGIN" --data-mode "$DATA_MODE" \
     --version "$VERSION" --desc "$DESC"
 else
   warn "跳过上传（--skip-upload）"
@@ -94,6 +99,7 @@ if [ "$SKIP_PREVIEW" -eq 0 ]; then
   bash "$UPLOAD_SH" --preview \
     --appid "$APPID" --private-key "$PRIVATE_KEY" \
     --api-base-url "$API_BASE_URL" \
+    --mock-login "$MOCK_LOGIN" --data-mode "$DATA_MODE" \
     --desc "$DESC" --qr-out "$QR_OUT"
 else
   warn "跳过预览二维码（--skip-preview）"
@@ -106,6 +112,8 @@ cat <<EOF
   版本号：${VERSION}
   备注：  ${DESC}
   API 基址：${API_BASE_URL}
+  登录方式：$( [ "$MOCK_LOGIN" = "false" ] && echo '真实微信登录（wx.login）' || echo 'Mock 登录（演示账号）' )
+  数据模式：${DATA_MODE}
   二维码：${QR_OUT}
 
 接下来两件事（都在微信公众平台操作）：

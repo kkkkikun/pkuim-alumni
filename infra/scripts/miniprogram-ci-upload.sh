@@ -7,6 +7,11 @@
 #   bash infra/scripts/miniprogram-ci-upload.sh --upload  --appid wxXXXX --private-key /path/private.wxXXXX.key \
 #        --version 0.1.0 --desc "测试版本"
 #
+# 可选的**构建期注入**（改完自动还原，不污染源码）：
+#   --api-base-url http://<公网IP>/api/v1   注入 API 基址（真机必须能访问后端）
+#   --mock-login false                      关闭 Mock 登录 → 走真实 wx.login
+#   --data-mode live|demo|auto              注入数据模式（live=只走真实接口）
+#
 # 作用：
 #   1) **预览**（preview）：生成二维码，扫码就能在手机上打开**开发版**；
 #   2) **上传**（upload）：把代码传到微信公众平台，之后在后台点「设为体验版」即可。
@@ -39,6 +44,8 @@ DESC="内蒙古北京大学校友会 · 测试版本"
 MODE="check"
 WRITE_APPID=0
 API_BASE_URL_OVERRIDE=""
+MOCK_LOGIN_OVERRIDE=""
+DATA_MODE_OVERRIDE=""
 PROJECT_DIR="${PROJECT_ROOT}/apps/miniprogram"
 CI_DIR="${MINIPROGRAM_CI_DIR:-/tmp/nmg-miniprogram-ci}"
 QR_OUT="${MINIPROGRAM_QR_OUT:-/tmp/nmg-miniprogram-preview.jpg}"
@@ -53,10 +60,13 @@ while [ $# -gt 0 ]; do
     --project) PROJECT_DIR="${2:-}"; [ -n "$PROJECT_DIR" ] || die "--project 需要一个值"; shift 2 ;;
     --qr-out) QR_OUT="${2:-}"; [ -n "$QR_OUT" ] || die "--qr-out 需要一个值"; shift 2 ;;
     --api-base-url) API_BASE_URL_OVERRIDE="${2:-}"; [ -n "$API_BASE_URL_OVERRIDE" ] || die "--api-base-url 需要一个值"; shift 2 ;;
+    --mock-login)   MOCK_LOGIN_OVERRIDE="${2:-}"; [ -n "$MOCK_LOGIN_OVERRIDE" ] || die "--mock-login 需要一个值"; shift 2 ;;
+    --data-mode)    DATA_MODE_OVERRIDE="${2:-}"; [ -n "$DATA_MODE_OVERRIDE" ] || die "--data-mode 需要一个值"; shift 2 ;;
     --preview) MODE="preview"; shift ;;
     --upload) MODE="upload"; shift ;;
     --write-appid) WRITE_APPID=1; shift ;;
     --check) MODE="check"; shift ;;
+    --inject-only) MODE="inject-only"; shift ;;
     -h|--help) sed -n '2,38p' "$0"; exit 0 ;;
     *) die "未知参数：$1" ;;
   esac
@@ -76,30 +86,58 @@ trap restore_config EXIT
 
 inject_api_base_url() {
   local url="$1"
+  inject_const "API_BASE_URL" "'${url}'"
+}
+
+# 通用注入：把 `export const <NAME>[: <Type>] = <旧值>;` 的**值**换掉，
+# 但**保留类型注解**（`DATA_MODE: DataMode` 少了注解就变成 string，
+# 赋给 DataMode 类型的参数会直接编译报错）。
+#
+# 参数：$1=常量名，$2=完整 TS 字面量（含引号，如 "'live'" 或 "false"）。
+inject_const() {
+  local name="$1"
+  local value="$2"
   CONFIG_FILE="${PROJECT_DIR}/src/config/index.ts"
   [ -f "$CONFIG_FILE" ] || die "找不到配置文件：${CONFIG_FILE}"
-  CONFIG_BACKUP="$(mktemp /tmp/nmg-config-index.XXXXXX.ts)"
-  cp -p "$CONFIG_FILE" "$CONFIG_BACKUP"
+  if [ -z "$CONFIG_BACKUP" ]; then
+    CONFIG_BACKUP="$(mktemp /tmp/nmg-config-index.XXXXXX.ts)"
+    cp -p "$CONFIG_FILE" "$CONFIG_BACKUP"
+  fi
 
-  # 整行替换（原来用单引号还是双引号都无所谓）
-  awk -v url="$url" '
-    /^export const API_BASE_URL[[:space:]]*=/ {
-      print "export const API_BASE_URL = \x27" url "\x27;"
+  # ⚠️ 输入必须是**当前文件**，不能是原始备份。
+  #    第一次写成「读备份」→ 三次注入时，后一次注入会从**原始**文件出发，
+  #    把前一次注入的结果**冲掉** → 最终产物里基址与 mock 标志都是原值。
+  #    （这个 bug 被「上传前产物对账」当场拦下过一次，见 KNOWN-ISSUES #150）
+  #    备份只用于**还原**，不参与注入。
+  #
+  # 只替换声明行里「第一个 = 之后」的部分；前缀（含类型注解）原样保留。
+  awk -v name="$name" -v value="$value" '
+    $0 ~ ("^export const " name "([[:space:]]*:[[:space:]]*[A-Za-z_][A-Za-z0-9_]*)?" "[[:space:]]*=") {
+      idx = index($0, "=")
+      prefix = substr($0, 1, idx - 1)
+      sub(/[[:space:]]+$/, "", prefix)
+      print prefix " = " value ";"
       found = 1
       next
     }
     { print }
     END { if (!found) exit 3 }
-  ' "$CONFIG_BACKUP" > "${CONFIG_FILE}.new" || {
+  ' "$CONFIG_FILE" > "${CONFIG_FILE}.new" || {
     # awk 因「找不到声明」返回 3 → 原文件未被改动，这里只清理临时文件
-    [ -f "${CONFIG_FILE}.new" ] && mv "${CONFIG_FILE}.new" "$CONFIG_FILE"
-    die "配置里找不到 API_BASE_URL 声明 —— 注入失败（源文件未改动）"
+    if [ -f "${CONFIG_FILE}.new" ]; then unlink "${CONFIG_FILE}.new" 2>/dev/null || true; fi
+    die "配置里找不到 ${name} 声明 —— 注入失败（源文件未改动）"
   }
   mv "${CONFIG_FILE}.new" "$CONFIG_FILE"
 
-  grep -q "API_BASE_URL = '${url}'" "$CONFIG_FILE" \
-    || die "API 基址注入后校验失败"
-  log "已注入 API 基址：${url}"
+  # 反向校验：注入后必须真的能读到这个值（防止 awk 静默写了个别的行）
+  local injected
+  injected="$(grep -E "^export const ${name}([[:space:]]*:[[:space:]]*[A-Za-z_][A-Za-z0-9_]*)?[[:space:]]*=" \
+    "$CONFIG_FILE" | head -1)"
+  case "$injected" in
+    *"= ${value};"*) : ;;
+    *) die "注入 ${name} 后校验失败：${injected:-（未找到声明）}" ;;
+  esac
+  log "已注入 ${name} = ${value}"
 }
 
 log "=== 小程序 CI（${MODE}）==="
@@ -142,15 +180,19 @@ if [ "$MODE" = "check" ]; then
 fi
 
 # --- 3. 上传 / 预览的真实前置条件 -------------------------------------------
-[ -n "$APPID" ] || die "缺少 --appid"
-[ "$APPID" != "touristappid" ] || die "appid 仍是占位值 touristappid，无法上传"
-[ -n "$PRIVATE_KEY" ] || die "缺少 --private-key"
-[ -f "$PRIVATE_KEY" ] || die "上传密钥文件不存在：${PRIVATE_KEY}"
+# ⚠️ `--inject-only` 只需要**工程**，不需要凭据 ——
+#    它的用途是「快速自测注入逻辑」（不联网、不上传）。
+if [ "$MODE" != "inject-only" ]; then
+  [ -n "$APPID" ] || die "缺少 --appid"
+  [ "$APPID" != "touristappid" ] || die "appid 仍是占位值 touristappid，无法上传"
+  [ -n "$PRIVATE_KEY" ] || die "缺少 --private-key"
+  [ -f "$PRIVATE_KEY" ] || die "上传密钥文件不存在：${PRIVATE_KEY}"
 
-# 私钥必须放在仓库外 —— 放在仓库里会被 rsync 同步出去
-case "$(cd "$(dirname "$PRIVATE_KEY")" && pwd)" in
-  "${PROJECT_ROOT}"*) die "上传密钥不能放在仓库内（会被同步出去）：${PRIVATE_KEY}" ;;
-esac
+  # 私钥必须放在仓库外 —— 放在仓库里会被 rsync 同步出去
+  case "$(cd "$(dirname "$PRIVATE_KEY")" && pwd)" in
+    "${PROJECT_ROOT}"*) die "上传密钥不能放在仓库内（会被同步出去）：${PRIVATE_KEY}" ;;
+  esac
+fi
 
 if [ "$WRITE_APPID" -eq 1 ] && [ "$CURRENT_APPID" != "$APPID" ]; then
   log "把 appid 写入 project.config.json：${CURRENT_APPID} → ${APPID}"
@@ -173,6 +215,58 @@ else
   log "未指定 --api-base-url，沿用工程里的当前基址（真机若连不上请显式指定）"
 fi
 
+# --- 3.2 构建期注入登录方式与数据模式 ----------------------------------------
+# 为什么必须能注入 `USE_MOCK_LOGIN`：
+#   源码默认是 `true`（Mock 登录），那是**开发态**的默认值 ——
+#   交付给客户的包必须走真实 `wx.login`。
+#   以前只能靠「改源码再上传」，极易漏改（改漏了 → 客户看到的是演示账号）。
+#   现在改成构建期注入：值写死在命令行里，脚本 trap 保证事后还原源码。
+if [ -n "$MOCK_LOGIN_OVERRIDE" ]; then
+  case "$MOCK_LOGIN_OVERRIDE" in
+    true|false) : ;;
+    *) die "--mock-login 只能是 true 或 false：${MOCK_LOGIN_OVERRIDE}" ;;
+  esac
+  inject_const "USE_MOCK_LOGIN" "$MOCK_LOGIN_OVERRIDE"
+else
+  log "未指定 --mock-login，沿用工程里的当前设置"
+fi
+
+if [ -n "$DATA_MODE_OVERRIDE" ]; then
+  case "$DATA_MODE_OVERRIDE" in
+    live|demo|auto) : ;;
+    *) die "--data-mode 只能是 live / demo / auto：${DATA_MODE_OVERRIDE}" ;;
+  esac
+  inject_const "DATA_MODE" "'${DATA_MODE_OVERRIDE}'"
+else
+  log "未指定 --data-mode，沿用工程里的当前设置"
+fi
+
+# --- 3.3 聚合校验：三个值必须**同时**生效 ------------------------------------
+# ⚠️ 为什么单项校验不够（真实踩到过）：
+#   每次 `inject_const` 只校验「自己那一个值在不在」，
+#   但**注入是累积的** —— 如果第二次注入从原始备份出发，
+#   第一次注入的结果会被冲掉，而两次单项校验**都会通过**。
+#   所以必须再验一次「三个值同时在文件里」。
+if [ -n "$API_BASE_URL_OVERRIDE" ] && [ -n "$MOCK_LOGIN_OVERRIDE" ] && [ -n "$DATA_MODE_OVERRIDE" ]; then
+  MISSING_VALUES=""
+  grep -q "API_BASE_URL = '${API_BASE_URL_OVERRIDE}';" "$CONFIG_FILE" || MISSING_VALUES="${MISSING_VALUES} API_BASE_URL"
+  grep -q "USE_MOCK_LOGIN = ${MOCK_LOGIN_OVERRIDE};" "$CONFIG_FILE" || MISSING_VALUES="${MISSING_VALUES} USE_MOCK_LOGIN"
+  grep -q "DATA_MODE: DataMode = '${DATA_MODE_OVERRIDE}';" "$CONFIG_FILE" || MISSING_VALUES="${MISSING_VALUES} DATA_MODE"
+  if [ -n "$MISSING_VALUES" ]; then
+    die "构建期注入未全部生效，缺少：${MISSING_VALUES} —— 不会上传"
+  fi
+  log "构建期注入聚合校验通过（基址 / 登录方式 / 数据模式三者同时生效）"
+fi
+
+# --- 3.4 只注入、不上传（用于快速自测注入逻辑，不联网、不需要凭据）------------
+if [ "$MODE" = "inject-only" ]; then
+  log "=== 只注入不上传（--inject-only）：校验注入逻辑用 ==="
+  log "当前注入后的配置（退出时会被 trap 还原）："
+  grep -E "^export const (API_BASE_URL|USE_MOCK_LOGIN|DATA_MODE)" "$CONFIG_FILE" | sed 's/^/    /'
+  exit 0
+fi
+
+
 # --- 4. 安装 miniprogram-ci（临时目录，不进 workspace）----------------------
 require_cmd node
 require_cmd npm
@@ -185,6 +279,27 @@ fi
 CI_MODULE="${CI_DIR}/node_modules/miniprogram-ci"
 [ -d "$CI_MODULE" ] || die "miniprogram-ci 安装失败：${CI_MODULE}"
 log "miniprogram-ci：${CI_MODULE}"
+
+# --- 4.5 上传前「产物对账」（证明待上传的包配置是对的）------------------------
+# ⚠️ 为什么必须做这一步：
+#   `ci.upload` 成功只说明「代码传到微信服务器了」，
+#   **不代表包里的配置是对的**。以下三种事故它一个都拦不住：
+#     1) 基址没注入 → 客户端连的是 127.0.0.1 → 真机一个接口都调不通；
+#     2) USE_MOCK_LOGIN 还是 true → 客户用「演示账号」而不是自己的微信身份；
+#     3) DATA_MODE 落在 demo → 全是假数据。
+#   所以这里在**注入之后、上传之前**离编译一次，
+#   直接在**产物**里找这些值 —— 找不到就不上传。
+if [ -f "${SCRIPT_DIR}/miniprogram-compile-check.mjs" ]; then
+  AUDIT_ARGS=("${PROJECT_DIR}")
+  [ -n "$API_BASE_URL_OVERRIDE" ] && AUDIT_ARGS+=(--expect-api-base "$API_BASE_URL_OVERRIDE")
+  [ -n "$MOCK_LOGIN_OVERRIDE" ] && AUDIT_ARGS+=(--expect-mock-login "$MOCK_LOGIN_OVERRIDE")
+  [ -n "$DATA_MODE_OVERRIDE" ] && AUDIT_ARGS+=(--expect-data-mode "$DATA_MODE_OVERRIDE")
+  log "=== 上传前产物对账（离线编译 + 在产物里验运行配置）==="
+  MINIPROGRAM_CI_DIR="$CI_DIR" node "${SCRIPT_DIR}/miniprogram-compile-check.mjs" "${AUDIT_ARGS[@]}" \
+    || die "产物对账未通过 —— 已中止，不会上传一个配置不对的包"
+else
+  warn "找不到 miniprogram-compile-check.mjs，跳过产物对账（不推荐）"
+fi
 
 # --- 5. 执行 -----------------------------------------------------------------
 cat > "${CI_DIR}/run.js" <<'JS'

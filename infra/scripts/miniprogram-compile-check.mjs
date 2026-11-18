@@ -13,6 +13,15 @@
  *
  * 用法：
  *   node miniprogram-compile-check.mjs <工程目录> [--json]
+ *   node miniprogram-compile-check.mjs <工程目录> \
+ *        --expect-api-base http://8.160.116.34:18080/api/v1 \
+ *        --expect-mock-login false \
+ *        --expect-data-mode auto
+ *
+ * `--expect-*` 是**产物对账**：不看源码，直接在**编译产物**里验运行配置。
+ * 为什么必须在产物里验：
+ *   源码改了不等于包里有 —— 编译器会转译、压缩、可能剪枝，
+ *   唯一能证明「客户打开的包里配置是对的」的办法是**看产物**。
  *
  * 退出码：0 编译通过且产物完整；1 编译失败 / 产物异常。
  *
@@ -29,6 +38,23 @@ const require = createRequire(resolve(CI_DIR, 'index.js'));
 
 const projectPath = resolve(process.argv[2] || 'apps/miniprogram');
 const asJson = process.argv.includes('--json');
+
+/** 读取 --expect-xxx 参数 */
+function readExpectation(name) {
+  const flag = `--expect-${name}`;
+  const index = process.argv.indexOf(flag);
+  if (index < 0) return null;
+  const value = process.argv[index + 1];
+  if (!value || value.startsWith('--')) {
+    console.error(`${flag} 需要一个值`);
+    process.exit(1);
+  }
+  return value;
+}
+
+const expectApiBase = readExpectation('api-base');
+const expectMockLogin = readExpectation('mock-login');
+const expectDataMode = readExpectation('data-mode');
 
 function log(...args) {
   if (!asJson) console.log(...args);
@@ -195,6 +221,68 @@ try {
 }
 const dropped = expectedJs.filter((f) => !files.includes(f));
 
+/**
+ * 断言四（可选，由 `--expect-*` 开启）：**产物里的运行配置**必须与本次发布期望一致。
+ *
+ * 为什么必须看产物、而不是看源码：
+ *   源码改了 ≠ 包里对了。编译器会转译、压缩、还可能把没被引用的模块剪掉
+ *   （见上面的缺陷 #145）。唯一能证明「客户打开的包里配置是对的」的办法，
+ *   是**在产物里找那个值**。
+ *
+ * 这道断言挡住的是最阴险的一类交付事故：
+ *   基址没注入 → 小程序连的是 `127.0.0.1:3000` → 真机上一个接口都调不通；
+ *   `USE_MOCK_LOGIN` 还是 true → 客户看到的不是自己的微信身份，而是演示账号；
+ *   `DATA_MODE` 落在 `demo` → 全是假数据，演示效果与真实效果不一致。
+ */
+const configModuleText = files
+  .filter((f) => f === 'config/index.js' || f.endsWith('/config/index.js'))
+  .map((f) => result[f].toString('utf8'))
+  .join('\n');
+const bundleText = files
+  .filter((f) => f.endsWith('.js'))
+  .map((f) => result[f].toString('utf8'))
+  .join('\n');
+
+const configChecks = [];
+if (expectApiBase) {
+  configChecks.push({
+    name: 'API 基址',
+    expected: expectApiBase,
+    ok: bundleText.includes(expectApiBase),
+    hint: '产物里找不到这个基址 —— 客户端会连到别的地址（或 127.0.0.1），真机必然连不通',
+  });
+}
+if (expectMockLogin) {
+  // minify 后 false/true 可能被写成 !1 / !0，两种写法都要认
+  const reTrue = /USE_MOCK_LOGIN[^;\n]{0,60}?(?:!0|\btrue\b)/;
+  const reFalse = /USE_MOCK_LOGIN[^;\n]{0,60}?(?:!1|\bfalse\b)/;
+  const wantFalse = expectMockLogin === 'false';
+  const ok = wantFalse
+    ? reFalse.test(configModuleText) && !reTrue.test(configModuleText)
+    : reTrue.test(configModuleText) && !reFalse.test(configModuleText);
+  configChecks.push({
+    name: '登录方式',
+    expected: `USE_MOCK_LOGIN = ${expectMockLogin}`,
+    ok,
+    hint:
+      wantFalse
+        ? '产物里 USE_MOCK_LOGIN 不是 false —— 客户会用「演示账号」而不是自己的微信身份登录'
+        : '产物里 USE_MOCK_LOGIN 不是 true —— 与本次发布预期不符',
+  });
+}
+if (expectDataMode) {
+  const re = new RegExp(
+    `DATA_MODE[^;\\n]{0,60}?['"]${expectDataMode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}['"]`,
+  );
+  configChecks.push({
+    name: '数据模式',
+    expected: `DATA_MODE = '${expectDataMode}'`,
+    ok: re.test(configModuleText),
+    hint: '产物里的 DATA_MODE 与本次发布预期不符（live / demo / auto）',
+  });
+}
+const configFailed = configChecks.filter((c) => !c.ok);
+
 const summary = {
   projectPath,
   files: files.length,
@@ -205,6 +293,8 @@ const summary = {
   tsLeaks: tsLeaks.length,
   demoMissing,
   droppedModules: dropped.length,
+  configChecks,
+  configFailed: configFailed.length,
   elapsedMs: Date.now() - started,
 };
 
@@ -216,6 +306,9 @@ if (asJson) {
   log(`产物文件数：${summary.files}（页面 ${summary.pages} 个，演示模块 ${summary.demoModules} 个）`);
   log(`产物体积：${(totalBytes / 1024).toFixed(1)} KB`);
   log(`源模块全部入包：${summary.droppedModules === 0 ? '是 ✅' : '否 ❌'}`);
+  for (const check of configChecks) {
+    log(`产物配置 · ${check.name}：${check.ok ? '符合预期 ✅' : '不符合 ❌'}（期望 ${check.expected}）`);
+  }
   log(`耗时：${summary.elapsedMs} ms`);
 }
 
@@ -246,6 +339,17 @@ if (dropped.length) {
       `小程序包会因 module not found 直接崩）：\n  - ` +
       dropped.join('\n  - ')
   );
+  process.exit(1);
+}
+
+if (configFailed.length > 0) {
+  console.error('产物里的运行配置与本次发布预期不符（客户端会连错地址 / 用错登录方式）：');
+  for (const check of configFailed) {
+    console.error(`  - ${check.name}：期望 ${check.expected} —— ${check.hint}`);
+  }
+  console.error('');
+  console.error('产物的 config/index.js 片段（便于定位）：');
+  console.error(configModuleText.slice(0, 1200) || '（产物里没有 config/index.js）');
   process.exit(1);
 }
 
