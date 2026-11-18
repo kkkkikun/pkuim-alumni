@@ -2545,6 +2545,95 @@
   实现要点：**先剥注释再判定** ——
   第一版把注释里写的「`require('*.json')`」当成了真引用，误报了一次。
 
+### 148. 微信登录失败一律返回 **500 服务器内部错误** → 用户明明是「code 不对」，却看到「服务器故障」
+
+- **动机**：小程序接入真实微信登录后，第一次打真实链路就撞上了：
+  ```bash
+  curl -X POST http://8.160.116.34:18080/api/v1/auth/wechat/login \
+       -d '{"code":"invalid_code_for_test"}'
+  # → HTTP 500 {"code":"INTERNAL_ERROR","message":"服务器内部错误"}
+  ```
+  `auth.service.ts` 里其实**已经有** `authFailed()` 助手（缺陷 #110 修「死码」时加的），
+  但 `loginWithWechat` **没有用它**；
+  `WechatAuthProvider` 抛的是**普通 `Error`**，
+  被 `AllExceptionsFilter` 按「非 HttpException」一律映射成 500。
+  → 契约里的 `AUTH_FAILED`（401）**在微信登录路径上从未出现过**。
+- **更糟的是「两种失败被混为一谈」**：
+  | 真实情况 | 应当返回 | 修复前返回 |
+  |---|---|---|
+  | 微信拒绝凭据（code 过期 / 被用掉 / 不是真 code） | 401 `AUTH_FAILED` | 500 `INTERNAL_ERROR` |
+  | 微信接口不可达（超时 / 被拒 / 微信挂了） | 502（服务端故障，让用户稍后再试） | 500 `INTERNAL_ERROR` |
+  | Mock 登录入参非法（`mock:` 去掉前缀为空） | 400 `VALIDATION_ERROR` | 500 `INTERNAL_ERROR` |
+- **处理**：
+  1. provider 引入**可分类**的 `WechatAuthError`（`invalid_code` / `unavailable`），
+     网络层异常（axios 抛错）也归入 `unavailable`；
+  2. `AuthService.toWechatAuthException()` 把三类失败分别映射到
+     **401 AUTH_FAILED / 502 INTERNAL_ERROR / 400 VALIDATION_ERROR**；
+  3. 微信返回的 `errmsg`（含 `hints` / `req_id`）**只进服务端日志**，不返回给客户端；
+  4. Mock 登录的入参错误也一并从 500 改成 400。
+- **对照用例**（新增 2 个套件 / 10 个用例，真实 MySQL + Redis 容器内跑）：
+  `apps/api/test/integration/wechat-login.e2e-spec.ts` 用
+  **本地假微信服务器**（`WECHAT_API_BASE` 是现成的测试缝）精确制造四类情形：
+  成功 / `errcode` 拒绝 / 200 但无 openid / 连接被掐断。
+  `apps/api/test/integration/auth-mode.e2e-spec.ts` 锁定 `AUTH_MODE` 三种取值的语义。
+  - **防误报断言**：每个用例都断言假服务器**确实收到了请求** ——
+    否则「环境变量没生效、请求打到真实微信（同样返回 40029）」会让 401 变成假阳性。
+  - **反向验证**（把 provider 退回「抛普通 Error」= 修复前行为，重建镜像后重跑）：
+    | 用例组 | 修复后 | 退回旧行为 |
+    |---|---|---|
+    | `wechat-login`（6 例） | 6 通过 | **4 失败**（401/502 全变 500）✅ 用例确实抓得住 |
+    | `auth-mode`（4 例） | 4 通过 | 4 通过（该组不依赖 provider 错误类型） |
+  - 公网入口实测（`http://8.160.116.34:18080`）：
+    无效 code → **HTTP 401 `AUTH_FAILED`** ✅；code 过短 → HTTP 400 `VALIDATION_ERROR` ✅。
+
+### 149. `AUTH_MODE` 是**死配置** → 生产环境里 Mock 登录是个**公开后门**
+
+- **动机**：`.env.prod` 里一直写着 `AUTH_MODE=both`，
+  但**全仓库没有任何代码读它** → Mock 登录与微信登录**永远同时可用**。
+  后果有两个：
+  1. 生产环境里 `POST /api/v1/auth/mock/login` 是**公开可用的后门** ——
+     任何人都能凭空造出一个用户（写进 `users` 表）；
+  2. 运营想「只留微信登录」时**无计可施**，配置改了也没人读。
+- **处理**：`AuthService` 真正实现这个开关，取值 `mock` / `wechat` / `both`：
+  | 取值 | Mock 登录 | 微信登录 |
+  |---|---|---|
+  | `mock` | ✅ | 403 `FORBIDDEN` |
+  | `wechat` | 403 `FORBIDDEN` | ✅ |
+  | `both` | ✅ | ✅ |
+  - 非法取值一律按 `both` 处理 —— 配置写错不该让登录整个瘫掉。
+  - 被拒的请求**不会造出用户**（用例里有断言：403 之后 `users` 仍为空）。
+- **当前取值**：校园机 `.env.prod` 保持 `AUTH_MODE=both` ——
+  预览期要留 Mock 通道（小程序端走真实登录，但后端仍需可自测）。
+  **正式对外前建议改为 `wechat`**，把 Mock 后门彻底关掉。
+
+### 150. 流程缺口：上传「成功」不等于**包里的配置是对的**
+
+- **动机**：`ci.upload` 返回成功只说明「代码传到微信服务器了」。
+  以下三种事故它**一个都拦不住**：
+  | 事故 | 客户看到的表现 |
+  |---|---|
+  | API 基址没注入（还是 `127.0.0.1:3000`） | 真机上**一个接口都调不通**，页面全空 |
+  | `USE_MOCK_LOGIN` 还是 `true` | 客户用的是「演示账号」，不是自己的微信身份 |
+  | `DATA_MODE` 落在 `demo` | 全是假数据，演示效果与真实效果不一致 |
+  更隐蔽的是：以前要靠**手改源码**来切这三项，改漏了没有任何机制会发现。
+- **处理**：
+  1. 上传脚本支持**构建期注入** `--api-base-url` / `--mock-login` / `--data-mode`
+     （改完由 `trap` 自动还原源码，异常路径也还原）；
+  2. 注入点统一为一个 `inject_const` 函数 ——
+     **保留类型注解**（`DATA_MODE: DataMode` 少了注解会变成 `string`，
+     赋给 `DataMode` 类型的参数直接编译报错）；
+  3. **上传前在产物里对账**（新增于 `miniprogram-ci-upload.sh` 第 4.5 步）：
+     注入之后、上传之前离编译一次，直接在**编译产物**里找这三个值，
+     找不到就**中止上传**；
+  4. 产物里的写法必须容错 minify：实测产物为
+     `exports.USE_MOCK_LOGIN=!1` / `exports.DATA_MODE="auto"` ——
+     断言同时认 `false`/`!1` 与 `true`/`!0`。
+- **反向验证**（阿里云实测）：
+  | 对象 | 期望 | 实测 |
+  |---|---|---|
+  | 注入后的工程副本 | 退出码 0，三项配置全部符合预期 | ✅ `A_RC=0` |
+  | 未注入的工程副本（基址仍是 `127.0.0.1`、mock 仍 `true`） | 必须**失败**并点名哪几项不符 | ✅ `B_RC=1` |
+
 ## 待验证 / 未完成（不得声称已通过）
 > 以下均为**缺少外部资质或环境**导致的未验证项，与实现质量无关。
 > 已实测完成的项（冒烟 10/10、集成测试 39/39、k6 分级压测、备份恢复演练、管理后台构建）见 `docs/TEST-REPORT.md`。

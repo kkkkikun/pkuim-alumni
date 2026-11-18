@@ -246,14 +246,26 @@ ssh sqserver 'cd ~/MyProject/pkuim-alumni && D="docker compose --project-name nm
 
 ```bash
 bash infra/scripts/release-miniprogram-preview.sh \
-  --appid wxXXXXXXXXXXXX \
-  --private-key /secure/path/private.wxXXXXXXXXXXXX.key \
-  --api-base-url http://<公网IP>/api/v1 \
+  --appid wx6761deb1125d858f \
+  --private-key /secure/path/private.wx6761deb1125d858f.key \
+  --api-base-url http://8.160.116.34:18080/api/v1 \
+  --mock-login false \
   --version 0.1.0 --desc "临时预览版"
 ```
 
-它按顺序做完：预检 → **离线编译自检** → 写 AppID → 构建期注入 API 基址 →
-上传（体验版）→ 再出一张扫码即开的预览二维码。
+它按顺序做完：预检 → **离线编译自检** → 写 AppID → 构建期注入运行配置
+（API 基址 / 登录方式 / 数据模式）→ **上传前在产物里对账** → 上传（体验版）→
+再出一张扫码即开的预览二维码。
+
+> 💡 **不要手改 `apps/miniprogram/src/config/index.ts`**：
+> 那三个值（基址 / `USE_MOCK_LOGIN` / `DATA_MODE`）由脚本在**构建期注入**，
+> 上传完自动还原源码（`trap` 保证异常路径也还原）。
+> 手改极易漏 —— 漏了基址，真机上一个接口都调不通；漏了 `USE_MOCK_LOGIN`，
+> 客户用的是「演示账号」而不是自己的微信身份。
+>
+> ⚠️ 「上传成功」**不代表**「包里的配置是对的」——
+> 所以脚本在上传前会离编译一次，直接在**编译产物**里核对这三个值，
+> 不符合就**中止上传**（见 `docs/KNOWN-ISSUES.md` #150）。
 
 > ⚠️ 缺 AppID 与上传密钥时**没法上传**（微信公众平台「开发管理 → 开发设置 →
 > 小程序代码上传」生成下载；密钥**必须放仓库外**，脚本会拒绝仓库内的路径）。

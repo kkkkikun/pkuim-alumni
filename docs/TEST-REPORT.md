@@ -3033,6 +3033,119 @@ private_contacts => 0
 > ① 边缘 nginx 的 HTTPS 分支里两个 server 块都监听 443 → `nginx -t` 直接报错（已修）；
 > ② 隧道守护收到 TERM 后只杀 ssh 子进程，`while true` 又把它拉起来 → 端口一直被占（已修）。
 
+### 2.50 微信登录的真实失败语义 + 上传前产物对账（2 个缺陷 + 1 个流程缺口）
+
+> 本节对应 `docs/KNOWN-ISSUES.md` 的 #148 / #149 / #150。
+
+#### 2.50.1 #148 微信登录失败一律返回 500
+
+**触发方式**：小程序接入真实微信登录后，第一次打真实链路就撞上：
+
+```bash
+curl -X POST http://8.160.116.34:18080/api/v1/auth/wechat/login \
+     -H 'Content-Type: application/json' -d '{"code":"invalid_code_for_test"}'
+# → HTTP 500 {"code":"INTERNAL_ERROR","message":"服务器内部错误"}
+```
+
+**根因**：`auth.service.ts` 里**已经有** `authFailed()` 助手（#110 修死码时加的），
+但 `loginWithWechat` 没用它；provider 抛**普通 `Error`**，
+被 `AllExceptionsFilter` 按「非 HttpException」一律映射成 500。
+→ 契约里的 `AUTH_FAILED`（401）**在微信登录路径上从未出现过**。
+
+**修复**（provider 引入可分类的 `WechatAuthError`，service 负责翻译）：
+
+| 真实情况 | 修复后 | 修复前 |
+|---|---|---|
+| 微信拒绝凭据（errcode / 无 openid / code 为空） | **401 `AUTH_FAILED`** | 500 `INTERNAL_ERROR` |
+| 微信接口不可达（axios 抛错：超时 / 连接被拒） | **502 `INTERNAL_ERROR`** | 500 `INTERNAL_ERROR` |
+| Mock 登录入参非法（`mock:` 去前缀后为空） | **400 `VALIDATION_ERROR`** | 500 `INTERNAL_ERROR` |
+
+微信返回的 `errmsg`（含 `hints` / `req_id`）**只进服务端日志**，不返回给客户端。
+
+**对照用例**（新增 `apps/api/test/integration/wechat-login.e2e-spec.ts`，6 例）：
+用**本地假微信服务器**（`WECHAT_API_BASE` 是现成的测试缝）精确制造四类情形：
+
+| `js_code` 前缀 | 假服务器行为 | 期望 |
+|---|---|---|
+| `valid_` | 返回 openid | 200，登录成功并落库 |
+| `errcode_` | `errcode=40029` | 401 `AUTH_FAILED`，响应体不含 `hints` |
+| `noopenid_` | 200 但无 openid | 401 `AUTH_FAILED` |
+| `unreachable_` | 直接掐断连接 | 502 `INTERNAL_ERROR` |
+
+**防误报断言**：每个用例都断言假服务器**确实收到了请求**。
+没有这条，「环境变量没生效 → 请求打到真实微信（同样返回 40029）」会让 401 变成假阳性。
+
+**反向验证**（把 provider 退回「抛普通 Error」= 修复前行为，重建镜像后重跑）：
+
+| 用例组 | 修复后 | 退回旧行为 |
+|---|---|---|
+| `wechat-login`（6 例） | 6 通过 | **4 失败**（401 / 502 全变 500）✅ |
+| `auth-mode`（4 例） | 4 通过 | 4 通过（该组不依赖 provider 错误类型） |
+
+**公网入口实测**（`http://8.160.116.34:18080`）：
+无效 code → **HTTP 401 `AUTH_FAILED`** ✅；code 过短 → HTTP 400 `VALIDATION_ERROR` ✅。
+
+#### 2.50.2 #149 `AUTH_MODE` 是死配置 → 生产环境有 Mock 登录后门
+
+`.env.prod` 里一直写着 `AUTH_MODE=both`，但**全仓库没有任何代码读它** →
+Mock 登录与微信登录永远同时可用 → `POST /api/v1/auth/mock/login` 是**公开可用的后门**。
+
+修复后（`apps/api/test/integration/auth-mode.e2e-spec.ts`，4 例）：
+
+| `AUTH_MODE` | Mock 登录 | 微信登录 |
+|---|---|---|
+| `mock` | ✅ 200 | **403 `FORBIDDEN`** |
+| `wechat` | **403 `FORBIDDEN`** | ✅ |
+| `both` | ✅ | ✅ |
+
+- 非法取值按 `both` 处理（配置写错不该让登录瘫掉）；
+- 被拒的请求**不造用户**（用例断言 403 之后 `users` 仍为空）。
+
+#### 2.50.3 #150 流程缺口：上传「成功」≠ 包里的配置是对的
+
+`ci.upload` 返回成功只说明「代码传到微信服务器了」，以下三种事故它一个都拦不住：
+
+| 事故 | 客户看到的表现 |
+|---|---|
+| 基址没注入（还是 `127.0.0.1:3000`） | 真机**一个接口都调不通** |
+| `USE_MOCK_LOGIN` 还是 `true` | 客户用的是「演示账号」，不是自己的微信身份 |
+| `DATA_MODE` 落在 `demo` | 全是假数据 |
+
+**处置**：
+1. 上传脚本增**构建期注入** `--api-base-url` / `--mock-login` / `--data-mode`，
+   `trap` 保证上传完（含异常路径）**自动还原源码**；
+2. 注入统一走 `inject_const`，**保留类型注解**
+   （`DATA_MODE: DataMode` 少了注解会变成 `string`，赋给 `DataMode` 参数直接编译报错）；
+3. **上传前在产物里对账**（`miniprogram-ci-upload.sh` 第 4.5 步）：
+   注入之后、上传之前离编译一次，直接在**编译产物**里找这三个值，找不到就**中止上传**；
+4. 断言必须容错 minify：实测产物是 `exports.USE_MOCK_LOGIN=!1` / `exports.DATA_MODE="auto"`
+   —— 断言同时认 `false`/`!1` 与 `true`/`!0`。
+
+**反向验证**（阿里云实测，两次离线编译）：
+
+| 对象 | 期望 | 实测 |
+|---|---|---|
+| 注入后的工程副本 | 退出码 0，三项配置全部符合预期 | ✅ `A_RC=0` |
+| 未注入的工程副本 | 必须**失败**并点名哪几项不符 | ✅ `B_RC=1` |
+
+失败输出示例：
+
+```
+产物里的运行配置与本次发布预期不符（客户端会连错地址 / 用错登录方式）：
+  - API 基址：期望 http://8.160.116.34:18080/api/v1 —— 产物里找不到这个基址
+  - 登录方式：期望 USE_MOCK_LOGIN = false —— 产物里 USE_MOCK_LOGIN 不是 false
+```
+
+#### 2.50.4 发布链上抓到的两个真 bug
+
+| bug | 现象 | 处置 |
+|---|---|---|
+| `release-miniprogram-preview.sh` 的 `--desc` 只 `shift` 一次 | `--desc "临时预览版"` 被当成**未知参数**，发布直接退出 1 | 改 `shift 2` 并补空值检查 |
+| rsync 多个文件到同一目录会**丢掉子目录层级** | `src/config/index.ts` 被传到 `apps/miniprogram/index.ts`（静默污染工程） | 逐文件传完整路径，并核对目标目录顶层文件清单 |
+
+> 第二个不是「脚本 bug」而是**操作习惯**：rsync 的多文件目标必须是**目录**，
+> 目录一给，路径就塌成 basename。两次都踩到，已改为逐文件传完整路径 + 事后核对目录清单。
+
 ---
 
 ## 3. 管理后台构建
