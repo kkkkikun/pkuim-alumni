@@ -9,7 +9,7 @@
     <view class="card register-summary">
       <view class="card-title">{{event.title}}</view>
       <view class="card-desc">{{event.kind}} · {{event.regionName || '内蒙古'}}</view>
-      <view class="card-desc">{{event.startsAt || '时间待定'}}</view>
+      <view class="card-desc">{{event.timeText}}</view>
     </view>
 
     <view class="section">

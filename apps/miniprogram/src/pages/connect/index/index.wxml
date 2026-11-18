@@ -1,12 +1,13 @@
 <view class="connect">
   <view class="link-hero">
+    <image class="net-art" src="/assets/art/net-art.png" mode="aspectFit"></image>
     <view class="link-hero-text">
       <view class="link-kicker">从认识校友，到彼此成就</view>
       <view class="link-title">让每一份专长<text class="link-title-line">遇见新的可能</text></view>
       <view class="link-desc">交流行业经验，分享资源需求，<text class="link-desc-line">在信任与自愿的基础上建立连接。</text></view>
       <view class="link-actions">
-        <view class="link-action primary" bindtap="onPublishDemand">＋ 我有需求</view>
-        <view class="link-action ghost" bindtap="onPublishResource">♡ 我能提供</view>
+        <view class="link-action primary" bindtap="onPublishDemand"><image class="link-action-img" src="/assets/icons/action-plus.png" mode="aspectFit"></image>我有需求</view>
+        <view class="link-action ghost" bindtap="onPublishResource"><image class="link-action-img" src="/assets/icons/action-heart.png" mode="aspectFit"></image>我能提供</view>
       </view>
     </view>
   </view>
@@ -14,7 +15,9 @@
   <view class="link-body">
     <view class="connect-toolbar">
       <view class="filter-button {{regionLabel !== '全部地区' ? 'active' : ''}}" bindtap="onRegionFilterTap">
-        地区：{{regionLabel}} ▾
+        <image class="filter-icon" src="/assets/icons/filter-pin.png" mode="aspectFit"></image>
+        <text>地区：{{regionLabel}}</text>
+        <image class="filter-icon" src="/assets/icons/filter-down.png" mode="aspectFit"></image>
       </view>
       <text class="connect-result-count">找到 {{total}} 条连接信息</text>
     </view>
@@ -54,13 +57,13 @@
     <view class="flow-card">
       <view class="flow-title">一次连接，是怎样发生的？</view>
       <view class="flow-steps">
-        <view class="flow-step"><text class="flow-bubble">1</text><text class="flow-label">发现方向</text></view>
+        <view class="flow-step"><view class="flow-bubble"><image class="flow-bubble-img" src="/assets/icons/flow-search.png" mode="aspectFit"></image></view><text class="flow-label">发现方向</text></view>
         <text class="flow-arrow">›</text>
-        <view class="flow-step"><text class="flow-bubble">2</text><text class="flow-label">提交意向</text></view>
+        <view class="flow-step"><view class="flow-bubble"><image class="flow-bubble-img" src="/assets/icons/flow-message.png" mode="aspectFit"></image></view><text class="flow-label">提交意向</text></view>
         <text class="flow-arrow">›</text>
-        <view class="flow-step"><text class="flow-bubble">3</text><text class="flow-label">双向确认</text></view>
+        <view class="flow-step"><view class="flow-bubble"><image class="flow-bubble-img" src="/assets/icons/flow-shield.png" mode="aspectFit"></image></view><text class="flow-label">双向确认</text></view>
         <text class="flow-arrow">›</text>
-        <view class="flow-step"><text class="flow-bubble">4</text><text class="flow-label">建立联系</text></view>
+        <view class="flow-step"><view class="flow-bubble"><image class="flow-bubble-img" src="/assets/icons/flow-handshake.png" mode="aspectFit"></image></view><text class="flow-label">建立联系</text></view>
       </view>
     </view>
   </view>

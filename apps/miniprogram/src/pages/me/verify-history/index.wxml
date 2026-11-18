@@ -14,7 +14,7 @@
         <text class="tag {{item.status === 'approved' ? 'tag-green' : item.status === 'rejected' ? 'tag-grey' : ''}}">{{item.statusLabel}}</text>
       </view>
       <view class="history-meta">{{item.college || '未填写院系'}} · {{item.graduationYear ? item.graduationYear + '届' : '未填写年份'}}</view>
-      <view class="history-meta">提交于 {{item.submittedAt}}</view>
+      <view class="history-meta">提交于 {{item.submittedText}}</view>
       <view class="history-review">{{item.reviewText}}</view>
     </view>
   </view>

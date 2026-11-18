@@ -15,7 +15,7 @@
     <view class="detail-rows card">
       <view class="detail-row">
         <text class="detail-label">活动时间</text>
-        <text class="detail-value">{{event.startsAt ? event.startsAt : '时间待定'}}</text>
+        <text class="detail-value">{{event.timeText}}</text>
       </view>
       <view class="detail-row">
         <text class="detail-label">所在地区</text>

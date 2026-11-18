@@ -27,7 +27,7 @@
       </view>
       <view class="detail-row">
         <text class="detail-label">发布时间</text>
-        <text class="detail-value">{{post.publishedAt || '待发布'}}</text>
+        <text class="detail-value">{{post.dateText}}</text>
       </view>
     </view>
 

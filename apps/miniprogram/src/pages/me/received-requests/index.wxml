@@ -14,7 +14,7 @@
         <text class="tag {{item.canHandle ? '' : 'tag-grey'}}">{{item.statusLabel}}</text>
       </view>
       <view class="request-message">{{item.message}}</view>
-      <view class="request-meta">{{item.createdAt}}</view>
+      <view class="request-meta">{{item.dateText}}</view>
       <view class="request-actions" wx:if="{{item.canHandle}}">
         <button class="btn-ghost btn-small" data-id="{{item.id}}" bindtap="onReject">拒绝</button>
         <button class="btn-main btn-small" data-id="{{item.id}}" bindtap="onAccept">接受申请</button>

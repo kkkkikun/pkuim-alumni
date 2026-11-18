@@ -1,7 +1,8 @@
 import { getEvent, registerEvent } from '../../../services/index';
-import type { EventDto } from '../../../types/index';
 import { showSuccess } from '../../../utils/feedback';
 import { navigateTo } from '../../../utils/navigate';
+import { toEventView } from '../../../utils/view';
+import type { EventView } from '../../../utils/view';
 
 Page({
   data: {
@@ -11,7 +12,7 @@ Page({
     submitError: '',
     success: false,
     note: '',
-    event: null as EventDto | null,
+    event: null as EventView | null,
   },
 
   onLoad(options: Record<string, string | undefined>): void {
@@ -27,7 +28,7 @@ Page({
     this.setData({ loading: true, error: '' });
     try {
       const event = await getEvent(id);
-      this.setData({ event, loading: false });
+      this.setData({ event: toEventView(event), loading: false });
     } catch (error) {
       this.setData({ loading: false, error: '活动加载失败，请稍后重试' });
     }

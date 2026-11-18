@@ -1,6 +1,7 @@
 import { fetchMe } from '../../../services/index';
 import { getState } from '../../../store/index';
 import type { MyAlumniProfile } from '../../../types/index';
+import { avatarText } from '../../../utils/format';
 import { navigateTo } from '../../../utils/navigate';
 
 interface ProfileView {
@@ -56,7 +57,7 @@ Page({
         : '不在通讯录中公开';
     return {
       displayName: profile.displayName || '校友',
-      avatarText: (profile.displayName || '燕').charAt(0),
+      avatarText: avatarText(profile.displayName),
       college: profile.college || '待填写',
       yearLabel: profile.graduationYear ? `${profile.graduationYear}届` : '待填写',
       regionLabel: profile.regionName || '待填写',

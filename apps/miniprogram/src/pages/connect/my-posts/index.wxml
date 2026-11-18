@@ -15,7 +15,7 @@
       </view>
       <text class="post-title">{{item.title}}</text>
       <text class="post-body">{{item.body}}</text>
-      <text class="post-time">更新于 {{item.updatedAt}}</text>
+      <text class="post-time">更新于 {{item.updateText}}</text>
     </view>
   </view>
 

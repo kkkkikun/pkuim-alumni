@@ -3,17 +3,19 @@ import type { ResourcePostDto } from '../../../types/index';
 import { resourceStatusLabel } from '../../../utils/format';
 import { navigateTo } from '../../../utils/navigate';
 import { restorePageScroll, trackPageScroll } from '../../../utils/scroll';
+import { toOpportunityView } from '../../../utils/view';
+import type { OpportunityView } from '../../../utils/view';
 
 const PAGE_SIZE = 10;
 
-interface PostView extends ResourcePostDto {
+interface PostView extends OpportunityView {
   typeLabel: string;
   statusLabel: string;
 }
 
 function toView(post: ResourcePostDto): PostView {
   return {
-    ...post,
+    ...toOpportunityView(post),
     typeLabel: post.type === 'resource' ? '我能提供' : '我有需求',
     statusLabel: resourceStatusLabel(post.status),
   };

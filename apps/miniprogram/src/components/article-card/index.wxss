@@ -60,3 +60,9 @@
 .article-more {
   color: #a51e28;
 }
+
+/* 缺陷 #154：此前 WXML 用了 .article-views 但没有对应样式 */
+.article-views {
+  color: #a89b95;
+  font-size: 21rpx;
+}

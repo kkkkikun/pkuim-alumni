@@ -1,6 +1,8 @@
 import { listArticles } from '../../../services/index';
 import { getState } from '../../../store/index';
-import type { ArticleCategoryDto, ArticleDto } from '../../../types/index';
+import type { ArticleCategoryDto } from '../../../types/index';
+import { toArticleView } from '../../../utils/view';
+import type { ArticleView } from '../../../utils/view';
 import { articleDetailUrl, navigateTo } from '../../../utils/navigate';
 import { resetPageScroll, restorePageScroll, trackPageScroll } from '../../../utils/scroll';
 
@@ -10,7 +12,7 @@ Page({
   data: {
     loading: true,
     error: '',
-    articles: [] as ArticleDto[],
+    articles: [] as ReturnType<typeof toArticleView>[],
     categories: [] as ArticleCategoryDto[],
     categoryId: 0,
     page: 1,
@@ -49,7 +51,7 @@ Page({
         pageSize: PAGE_SIZE,
         categoryId: this.data.categoryId || undefined,
       });
-      const items = result.items || [];
+      const items = (result.items || []).map(toArticleView);
       const merged = page === 1 ? items : this.data.articles.concat(items);
       this.setData({
         articles: merged,
@@ -79,7 +81,7 @@ Page({
     void this.load(1);
   },
 
-  onArticleTap(event: WechatMiniprogram.CustomEvent<{ article: ArticleDto }>): void {
+  onArticleTap(event: WechatMiniprogram.CustomEvent<{ article: ArticleView }>): void {
     navigateTo(articleDetailUrl(event.detail.article.id));
   },
 });

@@ -1,5 +1,6 @@
 import { listEvents } from '../../../services/index';
 import type { EventDto } from '../../../types/index';
+import { toEventView } from '../../../utils/view';
 import { eventDetailUrl, navigateTo } from '../../../utils/navigate';
 import { resetPageScroll, restorePageScroll, trackPageScroll } from '../../../utils/scroll';
 
@@ -40,7 +41,7 @@ Page({
     this.setData({ loading: true, error: '' });
     try {
       const result = await listEvents({ page, pageSize: PAGE_SIZE });
-      const items = result.items || [];
+      const items = (result.items || []).map(toEventView);
       const merged = page === 1 ? items : this.data.events.concat(items);
       this.setData({
         events: merged,

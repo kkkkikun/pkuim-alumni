@@ -65,4 +65,19 @@
 
 .op-more {
   color: #a51e28;
+  display: flex;
+  align-items: center;
+  gap: 6rpx;
+}
+
+.op-more-arrow {
+  width: 22rpx;
+  height: 22rpx;
+  flex: none;
+}
+
+/* 缺陷 #154：此前 WXML 用了 .op-author 但没有对应样式 */
+.op-author {
+  color: #9c928e;
+  font-size: 22rpx;
 }

@@ -3,16 +3,18 @@ import type { EventDto } from '../../../types/index';
 import { registrationStatusLabel } from '../../../utils/format';
 import { navigateTo } from '../../../utils/navigate';
 import { restorePageScroll, trackPageScroll } from '../../../utils/scroll';
+import { toEventView } from '../../../utils/view';
+import type { EventView as EventViewModel } from '../../../utils/view';
 
 const PAGE_SIZE = 10;
 
-interface EventView extends EventDto {
+interface EventView extends EventViewModel {
   statusLabel: string;
 }
 
 function toView(event: EventDto): EventView {
   return {
-    ...event,
+    ...toEventView(event),
     statusLabel: event.myRegistration ? registrationStatusLabel(event.myRegistration) : '未报名',
   };
 }

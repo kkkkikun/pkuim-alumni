@@ -11,7 +11,7 @@
     <view class="registration-card" wx:for="{{events}}" wx:key="id" data-id="{{item.id}}" bindtap="onEventTap">
       <view class="registration-main">
         <text class="registration-title">{{item.title}}</text>
-        <text class="registration-meta">{{item.kind}} · {{item.startsAt || '时间待定'}}</text>
+        <text class="registration-meta">{{item.kind}} · {{item.timeText}}</text>
         <text class="registration-place">{{item.regionName || '内蒙古'}}{{item.place ? ' · ' + item.place : ''}}</text>
       </view>
       <text class="tag {{item.myRegistration === 'registered' ? '' : 'tag-grey'}}">{{item.statusLabel}}</text>

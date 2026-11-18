@@ -5,20 +5,21 @@ import {
   markNotificationRead,
 } from '../../../services/index';
 import type { NotificationDto } from '../../../types/index';
+import { formatRelativeTime } from '../../../utils/format';
 import { showToast } from '../../../utils/feedback';
 import { navigateTo } from '../../../utils/navigate';
 import { restorePageScroll, trackPageScroll } from '../../../utils/scroll';
 
 /** 通知类型 → 展示用图标与文案前缀 */
 const TYPE_META: Record<string, { icon: string; label: string }> = {
-  verification_submitted: { icon: '认', label: '认证' },
-  verification_decision: { icon: '认', label: '认证' },
-  connection_request: { icon: '连', label: '连接' },
-  connection_decision: { icon: '连', label: '连接' },
-  resource_review: { icon: '审', label: '资源' },
-  event_registration: { icon: '活', label: '活动' },
-  event_changed: { icon: '活', label: '活动' },
-  system: { icon: '通', label: '系统' },
+  verification_submitted: { icon: '/assets/icons/notify-shield.png', label: '认证' },
+  verification_decision: { icon: '/assets/icons/notify-check.png', label: '认证' },
+  connection_request: { icon: '/assets/icons/notify-connect.png', label: '连接' },
+  connection_decision: { icon: '/assets/icons/notify-handshake.png', label: '连接' },
+  resource_review: { icon: '/assets/icons/notify-file.png', label: '资源' },
+  event_registration: { icon: '/assets/icons/notify-calendar.png', label: '活动' },
+  event_changed: { icon: '/assets/icons/notify-bell.png', label: '活动' },
+  system: { icon: '/assets/icons/notify-info.png', label: '系统' },
 };
 
 interface NotificationView extends NotificationDto {
@@ -28,20 +29,13 @@ interface NotificationView extends NotificationDto {
 }
 
 function toView(item: NotificationDto): NotificationView {
-  const meta = TYPE_META[item.type] ?? { icon: '通', label: '通知' };
+  const meta = TYPE_META[item.type] ?? { icon: '/assets/icons/notify-info.png', label: '通知' };
   return {
     ...item,
     icon: meta.icon,
     typeLabel: meta.label,
-    timeText: formatTime(item.createdAt),
+    timeText: formatRelativeTime(item.createdAt),
   };
-}
-
-function formatTime(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
-  const pad = (n: number): string => (n < 10 ? `0${n}` : `${n}`);
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 Page({

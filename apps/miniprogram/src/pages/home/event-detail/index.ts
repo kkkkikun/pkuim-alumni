@@ -1,14 +1,15 @@
 import { getEvent } from '../../../services/index';
-import type { EventDto } from '../../../types/index';
-import { formatDateTime, formatEventTime, registrationStatusLabel } from '../../../utils/format';
+import { registrationStatusLabel } from '../../../utils/format';
 import { eventRegisterUrl, navigateTo } from '../../../utils/navigate';
 import { requireVerified } from '../../../utils/guard';
+import { toEventView } from '../../../utils/view';
+import type { EventView } from '../../../utils/view';
 
 Page({
   data: {
     loading: true,
     error: '',
-    event: null as EventDto | null,
+    event: null as EventView | null,
     registered: false,
     registrationText: '',
   },
@@ -27,7 +28,7 @@ Page({
     try {
       const event = await getEvent(id);
       this.setData({
-        event,
+        event: toEventView(event),
         loading: false,
         registered: event.myRegistration === 'registered' || event.myRegistration === 'attended',
         registrationText: event.myRegistration ? registrationStatusLabel(event.myRegistration) : '',
@@ -55,13 +56,5 @@ Page({
 
   onMyRegistrationsTap(): void {
     navigateTo('/pages/home/my-registrations/index');
-  },
-
-  formatDateTime(value: string): string {
-    return formatDateTime(value);
-  },
-
-  formatEventTime(startsAt: string, endsAt: string): string {
-    return formatEventTime(startsAt, endsAt);
   },
 });

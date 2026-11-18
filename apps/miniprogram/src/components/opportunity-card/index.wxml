@@ -8,6 +8,6 @@
   <text class="op-desc">{{post.body}}</text>
   <view class="op-foot">
     <text class="op-author">{{post.regionName ? post.regionName + ' · ' : ''}}{{post.authorName}}</text>
-    <text class="op-more">了解详情 ›</text>
+    <view class="op-more"><text>了解详情</text><image class="op-more-arrow" src="/assets/icons/op-right.png" mode="aspectFit"></image></view>
   </view>
 </view>

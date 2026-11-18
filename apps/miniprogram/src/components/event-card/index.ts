@@ -1,10 +1,10 @@
-import type { EventDto } from '../../types/index';
+import type { EventView } from '../../utils/view';
 
 Component({
   properties: {
     event: {
       type: Object,
-      value: null as unknown as EventDto,
+      value: null as unknown as EventView,
     },
   },
   methods: {

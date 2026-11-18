@@ -1,1 +1,58 @@
 @import "../../../styles/blocks.wxss";
+
+/* ------------------------------ 通知详情 ------------------------------ */
+/* ⚠️ 缺陷 #154：这一页此前只有一行 @import，整页 8 个类都没有样式，
+   真机上是一条裸文字。 */
+
+.notify-detail {
+  padding-top: 30rpx;
+}
+
+.notify-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 18rpx;
+}
+
+.notify-detail-type {
+  padding: 8rpx 18rpx;
+  border-radius: 12rpx;
+  background: #fcebea;
+  color: #a72f34;
+  font-size: 22rpx;
+  font-weight: 700;
+}
+
+.notify-detail-time {
+  font-size: 22rpx;
+  color: #a69a94;
+}
+
+.notify-detail-title {
+  display: block;
+  font-family: var(--serif);
+  font-size: 36rpx;
+  font-weight: 700;
+  line-height: 1.45;
+  color: #76252b;
+}
+
+.notify-detail-body {
+  display: block;
+  margin-top: 20rpx;
+  font-size: 27rpx;
+  line-height: 1.85;
+  color: #4a4341;
+}
+
+.notify-detail-foot {
+  margin-top: 26rpx;
+  padding-top: 20rpx;
+  border-top: 2rpx solid #f2eeeb;
+}
+
+.notify-detail-state {
+  font-size: 23rpx;
+  color: #a19893;
+}

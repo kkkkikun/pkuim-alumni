@@ -5,13 +5,14 @@ import {
   rejectConnectionRequest,
 } from '../../../services/index';
 import { getState } from '../../../store/index';
-import type { ConnectionRequestDto } from '../../../types/index';
 import { closeDialog, initialDialogState, openDialog } from '../../../utils/dialog';
 import { connectionRequestStatusLabel } from '../../../utils/format';
 import { showSuccess } from '../../../utils/feedback';
 import { navigateTo } from '../../../utils/navigate';
+import { toRequestView } from '../../../utils/view';
+import type { RequestView as RequestViewModel } from '../../../utils/view';
 
-interface RequestView extends ConnectionRequestDto {
+interface RequestView extends RequestViewModel {
   statusLabel: string;
   isIncoming: boolean;
   canAccept: boolean;
@@ -44,7 +45,7 @@ Page({
       const isIncoming = request.toUserId === myId;
       this.setData({
         request: {
-          ...request,
+          ...toRequestView(request),
           statusLabel: connectionRequestStatusLabel(request.status),
           isIncoming,
           canAccept: isIncoming && request.status === 'pending',

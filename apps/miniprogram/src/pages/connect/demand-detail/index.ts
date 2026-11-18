@@ -3,8 +3,10 @@ import { getState } from '../../../store/index';
 import type { ResourcePostDto } from '../../../types/index';
 import { resourceStatusLabel } from '../../../utils/format';
 import { navigateTo } from '../../../utils/navigate';
+import { toOpportunityView } from '../../../utils/view';
+import type { OpportunityView } from '../../../utils/view';
 
-interface PostView extends ResourcePostDto {
+interface PostView extends OpportunityView {
   typeLabel: string;
   statusLabel: string;
   isMine: boolean;
@@ -13,7 +15,7 @@ interface PostView extends ResourcePostDto {
 function toView(post: ResourcePostDto): PostView {
   const myId = getState().user ? getState().user!.id : 0;
   return {
-    ...post,
+    ...toOpportunityView(post),
     typeLabel: '我有需求',
     statusLabel: resourceStatusLabel(post.status),
     isMine: post.authorId === myId,

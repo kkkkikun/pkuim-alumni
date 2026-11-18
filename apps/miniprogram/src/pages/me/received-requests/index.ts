@@ -9,15 +9,17 @@ import { closeDialog, initialDialogState, openDialog } from '../../../utils/dial
 import { connectionRequestStatusLabel } from '../../../utils/format';
 import { showSuccess } from '../../../utils/feedback';
 import { navigateTo } from '../../../utils/navigate';
+import { toRequestView } from '../../../utils/view';
+import type { RequestView as RequestViewModel } from '../../../utils/view';
 
-interface RequestView extends ConnectionRequestDto {
+interface RequestView extends RequestViewModel {
   statusLabel: string;
   canHandle: boolean;
 }
 
 function toView(item: ConnectionRequestDto): RequestView {
   return {
-    ...item,
+    ...toRequestView(item),
     statusLabel: connectionRequestStatusLabel(item.status),
     canHandle: item.status === 'pending',
   };

@@ -1,6 +1,7 @@
 import { getAlumniProfile, getDirectoryEntry } from '../../../services/index';
 import { isVerified } from '../../../store/index';
 import type { DirectoryEntry } from '../../../types/index';
+import { avatarText } from '../../../utils/format';
 import { navigateTo } from '../../../utils/navigate';
 import { showToast } from '../../../utils/feedback';
 import { settle } from '../../../utils/async';
@@ -79,7 +80,7 @@ Page({
     return {
       userId,
       displayName: name,
-      avatarText: name.charAt(0),
+      avatarText: avatarText(name),
       regionLabel: region,
       college,
       yearLabel: year ? `${year}届` : '',

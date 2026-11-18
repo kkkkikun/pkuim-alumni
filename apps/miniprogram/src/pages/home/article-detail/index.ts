@@ -1,12 +1,12 @@
 import { getArticle } from '../../../services/index';
-import type { ArticleDto } from '../../../types/index';
-import { formatDate } from '../../../utils/format';
+import { toArticleView } from '../../../utils/view';
+import type { ArticleView } from '../../../utils/view';
 
 Page({
   data: {
     loading: true,
     error: '',
-    article: null as ArticleDto | null,
+    article: null as ArticleView | null,
   },
 
   onLoad(options: Record<string, string | undefined>): void {
@@ -22,7 +22,7 @@ Page({
     this.setData({ loading: true, error: '' });
     try {
       const article = await getArticle(id);
-      this.setData({ article, loading: false });
+      this.setData({ article: toArticleView(article), loading: false });
       wx.setNavigationBarTitle({ title: article.categoryName || '资讯详情' });
     } catch (error) {
       this.setData({ loading: false, error: '资讯加载失败，请稍后重试' });
@@ -32,9 +32,5 @@ Page({
   onRetry(): void {
     const article = this.data.article;
     void this.load(article ? article.id : 0);
-  },
-
-  formatDate(value: string): string {
-    return formatDate(value);
   },
 });

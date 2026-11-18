@@ -1,10 +1,12 @@
 import { listVerifications } from '../../../services/index';
 import type { VerificationApplicationDto } from '../../../types/index';
-import { verificationStatusLabel } from '../../../utils/format';
+import { formatDateTime, verificationStatusLabel } from '../../../utils/format';
 
 interface HistoryView extends VerificationApplicationDto {
   statusLabel: string;
   reviewText: string;
+  /** 提交时间（已格式化，形如 `2026-01-08 19:30`） */
+  submittedText: string;
 }
 
 const ACTION_LABELS: Record<string, string> = {
@@ -24,6 +26,7 @@ function toView(item: VerificationApplicationDto): HistoryView {
     ...item,
     statusLabel: verificationStatusLabel(item.status),
     reviewText,
+    submittedText: formatDateTime(item.submittedAt),
   };
 }
 

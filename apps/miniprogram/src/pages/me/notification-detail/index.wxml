@@ -8,7 +8,7 @@
   <view class="notify-detail card" wx:if="{{!loading && !error}}">
     <view class="notify-detail-head">
       <text class="notify-detail-type">{{typeLabel}}</text>
-      <text class="notify-detail-time">{{createdAt}}</text>
+      <text class="notify-detail-time">{{createdText}}</text>
     </view>
     <text class="notify-detail-title">{{title}}</text>
     <text class="notify-detail-body">{{body}}</text>

@@ -30,6 +30,17 @@
   z-index: 1;
 }
 
+/* 右上角的「校友网络」线描（原型 .net-art，内联 SVG → PNG） */
+.net-art {
+  position: absolute;
+  right: -24rpx;
+  top: 43rpx;
+  width: 315rpx;
+  height: 301rpx;
+  opacity: 0.55;
+  pointer-events: none;
+}
+
 .link-kicker {
   font-family: "Songti SC", "STSong", "SimSun", serif;
   font-size: 23rpx;
@@ -87,6 +98,13 @@
   border: 1rpx solid rgba(243, 192, 184, 0.6);
   background: rgba(255, 255, 255, 0.09);
   color: #fff;
+}
+
+.link-action-img {
+  width: 33rpx;
+  height: 33rpx;
+  margin-right: 12rpx;
+  flex: none;
 }
 
 .link-body {
@@ -171,10 +189,14 @@
   height: 56rpx;
   border-radius: 50%;
   background: #fbeae7;
-  color: #a51e28;
-  font-size: 22rpx;
-  text-align: center;
-  line-height: 56rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.flow-bubble-img {
+  width: 30rpx;
+  height: 30rpx;
 }
 
 .flow-label {

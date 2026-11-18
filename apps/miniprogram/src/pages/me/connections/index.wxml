@@ -30,7 +30,7 @@
   </view>
 
   <view class="privacy-hint">
-    <text class="shield">盾</text>
+    <view class="shield"><image class="shield-img" src="/assets/icons/plain-shield.png" mode="aspectFit"></image></view>
     <text>联系方式由双方独立授权，可随时撤回；撤回后对方将立即无法查看。</text>
   </view>
 </view>

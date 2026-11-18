@@ -42,9 +42,9 @@
     <view class="section">
       <view class="section-head"><text class="section-title">审核记录</text></view>
       <view class="detail-rows card" wx:if="{{reviews.length}}">
-        <view class="detail-row" wx:for="{{reviews}}" wx:key="createdAt">
+        <view class="detail-row" wx:for="{{reviews}}" wx:key="id">
           <text class="detail-label">{{item.actionLabel}}</text>
-          <text class="detail-value">{{item.note}}<text class="muted"> · {{item.createdAt}}</text></text>
+          <text class="detail-value">{{item.note}}<text class="muted"> · {{item.createdText}}</text></text>
         </view>
       </view>
       <view class="card" wx:else>

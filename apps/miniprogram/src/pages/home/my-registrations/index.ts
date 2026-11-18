@@ -3,17 +3,19 @@ import type { EventDto } from '../../../types/index';
 import { registrationStatusLabel } from '../../../utils/format';
 import { eventDetailUrl, navigateTo } from '../../../utils/navigate';
 import { restorePageScroll, trackPageScroll } from '../../../utils/scroll';
+import { toEventView } from '../../../utils/view';
+import type { EventView } from '../../../utils/view';
 
 const PAGE_SIZE = 10;
 
 /** 列表展示模型：预先算好状态文案（WXML 不能调用页面方法） */
-interface RegistrationView extends EventDto {
+interface RegistrationView extends EventView {
   statusLabel: string;
 }
 
 function toView(event: EventDto): RegistrationView {
   return {
-    ...event,
+    ...toEventView(event),
     statusLabel: event.myRegistration ? registrationStatusLabel(event.myRegistration) : '未报名',
   };
 }

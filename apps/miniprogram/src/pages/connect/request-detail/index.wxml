@@ -10,7 +10,7 @@
       <view class="card-title">{{request.isIncoming ? request.fromName : request.toName}}</view>
       <view class="card-desc">{{request.isIncoming ? '向你发起联系申请' : '你向对方发起了联系申请'}}</view>
       <view class="card-desc">状态：<text class="text-red">{{request.statusLabel}}</text></view>
-      <view class="card-desc">发起时间：{{request.createdAt}}</view>
+      <view class="card-desc">发起时间：{{request.timeText}}</view>
     </view>
 
     <view class="section">

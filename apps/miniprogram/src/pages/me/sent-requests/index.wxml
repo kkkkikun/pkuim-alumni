@@ -14,7 +14,7 @@
         <text class="tag {{item.canCancel ? '' : 'tag-grey'}}">{{item.statusLabel}}</text>
       </view>
       <view class="request-message">{{item.message}}</view>
-      <view class="request-meta">{{item.createdAt}}</view>
+      <view class="request-meta">{{item.dateText}}</view>
       <view class="request-actions" wx:if="{{item.canCancel}}">
         <button class="btn-ghost btn-small" data-id="{{item.id}}" bindtap="onCancel">取消申请</button>
       </view>

@@ -1,5 +1,6 @@
 import { getConnection, grantContact } from '../../../services/index';
 import type { ConnectionPairDto } from '../../../types/index';
+import { formatDateTime } from '../../../utils/format';
 import { showSuccess } from '../../../utils/feedback';
 
 interface ConnectionView extends ConnectionPairDto {
@@ -8,6 +9,8 @@ interface ConnectionView extends ConnectionPairDto {
   peerPhone: string;
   peerWechat: string;
   peerEmail: string;
+  /** 建立时间（已格式化，形如 `2026-01-08 19:30`） */
+  establishedText: string;
 }
 
 Page({
@@ -44,6 +47,7 @@ Page({
           peerPhone: contact && contact.phone ? contact.phone : '',
           peerWechat: contact && contact.wechat ? contact.wechat : '',
           peerEmail: contact && contact.email ? contact.email : '',
+          establishedText: formatDateTime(pair.establishedAt),
         },
         loading: false,
       });

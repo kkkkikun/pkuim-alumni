@@ -10,23 +10,37 @@
 }
 
 .event-mark {
+  position: relative;
   width: 88rpx;
   height: 88rpx;
   border-radius: 20rpx;
-  background: #fbeae7;
-  color: #a51e28;
+  background: linear-gradient(135deg, #f9e7dc, #f3d5bd);
+  overflow: hidden;
   display: flex;
   align-items: center;
   justify-content: center;
   flex: none;
 }
 
-.event-mark-text {
-  font-family: "Songti SC", "STSong", "SimSun", serif;
-  font-size: 24rpx;
-  font-weight: 700;
-  padding: 0 10rpx;
-  text-align: center;
+/* 原型 .event-mark:after 的装饰圆环 */
+.event-mark::after {
+  content: "";
+  position: absolute;
+  width: 66rpx;
+  height: 66rpx;
+  border: 2rpx solid rgba(255, 255, 255, 0.61);
+  border-radius: 50%;
+  right: -22rpx;
+  bottom: -24rpx;
+}
+
+.event-mark.olive {
+  background: linear-gradient(135deg, #ecede4, #d6decf);
+}
+
+.event-mark-img {
+  width: 56rpx;
+  height: 56rpx;
 }
 
 .event-copy {

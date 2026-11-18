@@ -1,5 +1,6 @@
 import { getNotification, markNotificationRead } from '../../../services/index';
 import type { NotificationDto } from '../../../types/index';
+import { formatDateTime } from '../../../utils/format';
 import { showToast } from '../../../utils/feedback';
 import { readId } from '../../../utils/navigate';
 
@@ -23,7 +24,8 @@ Page({
     title: '',
     body: '',
     read: false,
-    createdAt: '',
+    /** 通知时间（已格式化，形如 `2026-01-08 19:30`） */
+    createdText: '',
   },
 
   onLoad(options: Record<string, string | undefined>): void {
@@ -45,7 +47,7 @@ Page({
         title: item.title,
         body: item.body,
         read: item.read,
-        createdAt: item.createdAt,
+        createdText: formatDateTime(item.createdAt),
         loading: false,
       });
       // 打开详情即视为已读

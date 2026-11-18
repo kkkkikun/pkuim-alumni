@@ -2,6 +2,8 @@ import { listNotices } from '../../../services/index';
 import type { NoticeDto } from '../../../types/index';
 import { navigateTo, noticeDetailUrl } from '../../../utils/navigate';
 import { resetPageScroll, restorePageScroll, trackPageScroll } from '../../../utils/scroll';
+import { toNoticeView } from '../../../utils/view';
+import type { NoticeView } from '../../../utils/view';
 
 const PAGE_SIZE = 10;
 
@@ -9,7 +11,7 @@ Page({
   data: {
     loading: true,
     error: '',
-    notices: [] as NoticeDto[],
+    notices: [] as NoticeView[],
     page: 1,
     hasMore: false,
   },
@@ -40,7 +42,7 @@ Page({
     this.setData({ loading: true, error: '' });
     try {
       const result = await listNotices({ page, pageSize: PAGE_SIZE });
-      const items = result.items || [];
+      const items = (result.items || []).map(toNoticeView);
       const merged = page === 1 ? items : this.data.notices.concat(items);
       this.setData({
         notices: merged,

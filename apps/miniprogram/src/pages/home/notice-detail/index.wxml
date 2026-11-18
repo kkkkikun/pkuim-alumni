@@ -8,7 +8,7 @@
   <block wx:if="{{notice}}">
     <view class="notice-badge">通知公告</view>
     <view class="notice-title">{{notice.title}}</view>
-    <view class="notice-meta">发布于 {{notice.publishedAt}} · 阅读 {{notice.viewCount}}</view>
+    <view class="notice-meta">发布于 {{notice.dateText}} · 阅读 {{notice.viewCount}}</view>
     <view class="prose">{{notice.body}}</view>
   </block>
 </view>

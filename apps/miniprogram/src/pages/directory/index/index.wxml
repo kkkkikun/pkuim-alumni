@@ -3,7 +3,7 @@
     <view class="directory-title">燕园同窗，天涯比邻</view>
     <view class="directory-sub">寻找志趣相投的校友 · 连接熟悉又崭新的朋友</view>
     <view class="search-box">
-      <text class="search-icon">搜</text>
+      <image class="search-icon" src="/assets/icons/plain-search.png" mode="aspectFit"></image>
       <input
         class="search-input"
         value="{{keyword}}"
@@ -37,7 +37,7 @@
   </view>
 
   <view class="privacy-hint">
-    <text class="shield">盾</text>
+    <view class="shield"><image class="shield-img" src="/assets/icons/plain-shield.png" mode="aspectFit"></image></view>
     <text>平台仅展示校友本人授权公开的资料；联系方式不直接公开，需经过双方同意。</text>
   </view>
 </view>

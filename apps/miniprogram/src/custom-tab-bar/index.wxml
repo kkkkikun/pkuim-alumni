@@ -7,7 +7,9 @@
     data-index="{{index}}"
     bindtap="onTap"
   >
-    <view class="tab-icon icon-{{item.icon}}"></view>
+    <view class="tab-icon">
+      <image class="tab-icon-img" src="{{selected === index ? item.iconActive : item.icon}}" mode="aspectFit"></image>
+    </view>
     <text class="tab-text">{{item.text}}</text>
   </view>
 </view>

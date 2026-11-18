@@ -1,6 +1,6 @@
 import { ensureDemoSession, isDemoFallbackActive, listArticles, listEvents, listNotices, onDemoModeChange } from '../../../services/index';
-import type { ArticleDto, EventDto, NoticeDto } from '../../../types/index';
-import { formatDate } from '../../../utils/format';
+import type { ArticleView, EventView, NoticeView } from '../../../utils/view';
+import { toArticleView, toEventView, toNoticeView } from '../../../utils/view';
 import { articleDetailUrl, eventDetailUrl, navigateTo, noticeDetailUrl, switchTab } from '../../../utils/navigate';
 import { setTabBarSelected } from '../../../utils/tabbar';
 
@@ -38,9 +38,9 @@ Page({
     tab: 'news' as HomeTab,
     loading: true,
     error: '',
-    articles: [] as ArticleDto[],
-    events: [] as EventDto[],
-    notices: [] as NoticeDto[],
+    articles: [] as ReturnType<typeof toArticleView>[],
+    events: [] as EventView[],
+    notices: [] as ReturnType<typeof toNoticeView>[],
     spot: SPOT.news,
     /** 是否处于演示数据模式（未连接后端） */
     demoMode: false,
@@ -79,13 +79,13 @@ Page({
     try {
       if (tab === 'news') {
         const result = await listArticles({ page: 1, pageSize: 5 });
-        this.setData({ articles: result.items || [], spot: SPOT.news });
+        this.setData({ articles: (result.items || []).map(toArticleView), spot: SPOT.news });
       } else if (tab === 'events') {
         const result = await listEvents({ page: 1, pageSize: 5 });
-        this.setData({ events: result.items || [], spot: SPOT.events });
+        this.setData({ events: (result.items || []).map(toEventView), spot: SPOT.events });
       } else {
         const result = await listNotices({ page: 1, pageSize: 5 });
-        this.setData({ notices: result.items || [], spot: SPOT.notices });
+        this.setData({ notices: (result.items || []).map(toNoticeView), spot: SPOT.notices });
       }
       this.setData({ loading: false });
     } catch (error) {
@@ -102,15 +102,15 @@ Page({
     void this.loadTab(tab);
   },
 
-  onArticleTap(event: WechatMiniprogram.CustomEvent<{ article: ArticleDto }>): void {
+  onArticleTap(event: WechatMiniprogram.CustomEvent<{ article: ArticleView }>): void {
     navigateTo(articleDetailUrl(event.detail.article.id));
   },
 
-  onEventTap(event: WechatMiniprogram.CustomEvent<{ event: EventDto }>): void {
+  onEventTap(event: WechatMiniprogram.CustomEvent<{ event: EventView }>): void {
     navigateTo(eventDetailUrl(event.detail.event.id));
   },
 
-  onNoticeTap(event: WechatMiniprogram.CustomEvent<{ notice: NoticeDto }>): void {
+  onNoticeTap(event: WechatMiniprogram.CustomEvent<{ notice: NoticeView }>): void {
     navigateTo(noticeDetailUrl(event.detail.notice.id));
   },
 
@@ -147,11 +147,6 @@ Page({
     } else {
       navigateTo('/pages/home/about/index');
     }
-  },
-
-  /** 供 WXML 使用：公告日期格式化 */
-  formatNoticeDate(value: string): string {
-    return formatDate(value);
   },
 
   /** 同步演示模式状态（提示条显示 / 隐藏） */

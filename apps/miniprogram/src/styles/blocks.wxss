@@ -65,10 +65,15 @@
   height: 34rpx;
   border-radius: 50%;
   border: 2rpx solid #d8bdb6;
-  color: #b98a80;
-  font-size: 19rpx;
-  text-align: center;
-  line-height: 30rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 圆圈里的盾牌图标本体 */
+.shield-img {
+  width: 20rpx;
+  height: 20rpx;
 }
 
 .verified {
@@ -195,10 +200,15 @@
   flex: none;
   border-radius: 18rpx;
   background: #fbf5f1;
-  color: #c38f73;
-  font-size: 24rpx;
-  text-align: center;
-  line-height: 62rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 菜单图标本体：原型是 20px 的描边 SVG，放在 31px 的浅色圆角方块里 */
+.menu-icon-img {
+  width: 38rpx;
+  height: 38rpx;
 }
 
 .menu-label {
@@ -507,4 +517,62 @@
   text-align: center;
   font-size: 21rpx;
   color: #a19893;
+}
+
+/* ------------------------------ 公告列表（首页 + 公告页共用） ------------------------------ */
+/* ⚠️ 缺陷 #154：这些类此前只在 WXML 里用、**没有任何 WXSS 定义**，
+   真机上公告列表是裸文字。放在共享块里，两处一起生效。 */
+
+.notice-list {
+  margin-top: 8rpx;
+}
+
+.notice-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16rpx;
+  padding: 26rpx 0;
+  border-bottom: 2rpx solid #f0eded;
+}
+
+.notice-item-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.notice-item-title {
+  display: block;
+  font-size: 28rpx;
+  line-height: 1.5;
+  color: #262322;
+}
+
+.notice-item-date {
+  display: block;
+  margin-top: 8rpx;
+  font-size: 22rpx;
+  color: #a69a94;
+}
+
+.notice-arrow {
+  flex: none;
+  color: #c4bcb8;
+  font-size: 30rpx;
+  line-height: 1;
+}
+
+.empty-mini {
+  padding: 80rpx 0;
+  text-align: center;
+  color: #a19893;
+  font-size: 26rpx;
+}
+
+/* 分组标题（profile-edit 用；此前 WXML 用了但没有定义） */
+.menu-title {
+  margin: 34rpx 0 18rpx;
+  font-size: 25rpx;
+  font-weight: 700;
+  color: #4f4642;
 }

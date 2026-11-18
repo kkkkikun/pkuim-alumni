@@ -1,10 +1,10 @@
-import type { ArticleDto } from '../../types/index';
+import type { ArticleView } from '../../utils/view';
 
 Component({
   properties: {
     article: {
       type: Object,
-      value: null as unknown as ArticleDto,
+      value: null as unknown as ArticleView,
     },
   },
   methods: {

@@ -1,13 +1,15 @@
 import { getResource, submitResource, withdrawResource } from '../../../services/index';
 import type { ResourcePostDto } from '../../../types/index';
-import { resourceStatusLabel } from '../../../utils/format';
+import { formatDateTime, resourceStatusLabel } from '../../../utils/format';
 import { closeDialog, initialDialogState, openDialog } from '../../../utils/dialog';
 import { showSuccess } from '../../../utils/feedback';
 
 interface ReviewView {
+  id: number;
   actionLabel: string;
   note: string;
-  createdAt: string;
+  /** 审核时间（已格式化，形如 `2026-01-08 19:30`） */
+  createdText: string;
 }
 
 interface PostView extends ResourcePostDto {
@@ -58,9 +60,10 @@ Page({
     try {
       const post = await getResource(id);
       const reviews = (post.reviews || []).map((review) => ({
+        id: review.id,
         actionLabel: ACTION_LABELS[review.action] || review.action,
         note: review.note || '—',
-        createdAt: review.createdAt,
+        createdText: formatDateTime(review.createdAt),
       }));
       this.setData({ post: toView(post), reviews, loading: false });
     } catch (error) {

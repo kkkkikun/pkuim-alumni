@@ -1,5 +1,6 @@
 <view class="me">
   <view class="me-banner">
+    <image class="me-art" src="/assets/art/me-art.png" mode="aspectFit"></image>
     <view class="me-user">
       <view class="me-avatar">{{logged ? '校' : '燕'}}</view>
       <view class="me-copy">
@@ -43,28 +44,28 @@
     <view class="menu-title">校友服务</view>
     <view class="menu-group card">
       <view class="menu-row" bindtap="onMenuTap" data-target="profile">
-        <text class="menu-icon">名</text>
+        <view class="menu-icon"><image class="menu-icon-img" src="/assets/icons/menu-card.png" mode="aspectFit"></image></view>
         <text class="menu-label">我的校友名片</text>
         <text class="menu-arrow">›</text>
       </view>
       <view class="menu-row" bindtap="onMenuTap" data-target="events">
-        <text class="menu-icon">历</text>
+        <view class="menu-icon"><image class="menu-icon-img" src="/assets/icons/menu-calendar.png" mode="aspectFit"></image></view>
         <text class="menu-label">我的活动报名</text>
         <text class="menu-arrow">›</text>
       </view>
       <view class="menu-row" bindtap="onMenuTap" data-target="connections">
-        <text class="menu-icon">连</text>
+        <view class="menu-icon"><image class="menu-icon-img" src="/assets/icons/menu-connect.png" mode="aspectFit"></image></view>
         <text class="menu-label">我的连接记录</text>
         <text class="menu-arrow">›</text>
       </view>
       <view class="menu-row" bindtap="onMenuTap" data-target="notifications">
-        <text class="menu-icon">知</text>
+        <view class="menu-icon"><image class="menu-icon-img" src="/assets/icons/menu-bell.png" mode="aspectFit"></image></view>
         <text class="menu-label">通知中心</text>
         <text class="menu-badge" wx:if="{{unreadCount > 0}}">{{unreadCount > 99 ? '99+' : unreadCount}}</text>
         <text class="menu-arrow">›</text>
       </view>
       <view class="menu-row" bindtap="onMenuTap" data-target="posts">
-        <text class="menu-icon">发</text>
+        <view class="menu-icon"><image class="menu-icon-img" src="/assets/icons/menu-file.png" mode="aspectFit"></image></view>
         <text class="menu-label">我发布的资源与需求</text>
         <text class="menu-arrow">›</text>
       </view>
@@ -73,17 +74,17 @@
     <view class="menu-title">账号与组织</view>
     <view class="menu-group card">
       <view class="menu-row" bindtap="onMenuTap" data-target="privacy">
-        <text class="menu-icon">隐</text>
+        <view class="menu-icon"><image class="menu-icon-img" src="/assets/icons/menu-lock.png" mode="aspectFit"></image></view>
         <text class="menu-label">隐私与授权</text>
         <text class="menu-arrow">›</text>
       </view>
       <view class="menu-row" bindtap="onMenuTap" data-target="about">
-        <text class="menu-icon">燕</text>
+        <view class="menu-icon"><image class="menu-icon-img" src="/assets/icons/menu-building.png" mode="aspectFit"></image></view>
         <text class="menu-label">关于内蒙古校友会</text>
         <text class="menu-arrow">›</text>
       </view>
       <view class="menu-row" bindtap="onMenuTap" data-target="account">
-        <text class="menu-icon">设</text>
+        <view class="menu-icon"><image class="menu-icon-img" src="/assets/icons/menu-settings.png" mode="aspectFit"></image></view>
         <text class="menu-label">账号设置</text>
         <text class="menu-arrow">›</text>
       </view>

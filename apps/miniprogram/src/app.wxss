@@ -279,6 +279,12 @@ textarea {
   color: var(--red);
 }
 
+.filter-icon {
+  width: 26rpx;
+  height: 26rpx;
+  flex: none;
+}
+
 .chip-row {
   display: flex;
   flex-wrap: wrap;

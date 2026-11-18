@@ -54,8 +54,9 @@
 }
 
 .search-icon {
-  font-size: 24rpx;
-  color: #b9aeb0;
+  width: 34rpx;
+  height: 34rpx;
+  flex: none;
 }
 
 .search-input {

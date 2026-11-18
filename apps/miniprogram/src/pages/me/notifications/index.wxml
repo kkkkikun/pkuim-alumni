@@ -20,7 +20,7 @@
       data-id="{{item.id}}"
       bindtap="onItemTap"
     >
-      <view class="notify-icon">{{item.icon}}</view>
+      <view class="notify-icon"><image class="notify-icon-img" src="{{item.icon}}" mode="aspectFit"></image></view>
       <view class="notify-main">
         <view class="notify-head">
           <text class="notify-title">{{item.title}}</text>
@@ -37,7 +37,7 @@
   </view>
 
   <view class="privacy-hint">
-    <text class="shield">盾</text>
+    <view class="shield"><image class="shield-img" src="/assets/icons/plain-shield.png" mode="aspectFit"></image></view>
     <text>通知只推送给你本人；涉及联系方式的内容仍需对方授权后才能查看。</text>
   </view>
 </view>

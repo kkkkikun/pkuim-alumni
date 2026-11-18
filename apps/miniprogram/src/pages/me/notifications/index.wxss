@@ -44,11 +44,14 @@
   height: 72rpx;
   border-radius: 50%;
   background: var(--pink);
-  color: var(--red);
-  font-size: 30rpx;
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.notify-icon-img {
+  width: 38rpx;
+  height: 38rpx;
 }
 
 .notify-main {

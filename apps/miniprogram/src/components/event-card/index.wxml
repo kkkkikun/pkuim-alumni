@@ -1,6 +1,6 @@
 <view class="event" bindtap="onTap">
-  <view class="event-mark">
-    <text class="event-mark-text">{{event.kind || '燕'}}</text>
+  <view class="event-mark {{event.tone === 'olive' ? 'olive' : ''}}">
+    <image class="event-mark-img" src="{{event.iconPath}}" mode="aspectFit"></image>
   </view>
   <view class="event-copy">
     <text class="event-title">{{event.title}}</text>

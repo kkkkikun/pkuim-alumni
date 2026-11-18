@@ -12,6 +12,17 @@
   overflow: hidden;
 }
 
+/* 右下角的「校园建筑」线描（原型 .me-bld，内联 SVG → PNG） */
+.me-art {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 344rpx;
+  height: 263rpx;
+  opacity: 0.45;
+  pointer-events: none;
+}
+
 .me-user {
   display: flex;
   align-items: center;

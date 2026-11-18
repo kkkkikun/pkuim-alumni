@@ -1,6 +1,6 @@
 import { getVerificationStatus, listVerifications } from '../../../services/index';
 import type { VerificationApplicationDto, VerificationStatus } from '../../../types/index';
-import { verificationStatusLabel } from '../../../utils/format';
+import { formatDateTime, verificationStatusLabel } from '../../../utils/format';
 import { navigateTo } from '../../../utils/navigate';
 import { settle } from '../../../utils/async';
 
@@ -8,8 +8,10 @@ interface ProgressView {
   status: VerificationStatus;
   statusLabel: string;
   stepText: string;
-  submittedAt: string;
-  decidedAt: string;
+  /** 提交时间（已格式化） */
+  submittedText: string;
+  /** 审核时间（已格式化） */
+  decidedText: string;
   note: string;
 }
 
@@ -60,8 +62,8 @@ Page({
           status,
           statusLabel: verificationStatusLabel(status),
           stepText: STEP_TEXT[status],
-          submittedAt: latest ? latest.submittedAt : '',
-          decidedAt: latest && latest.decidedAt ? latest.decidedAt : '',
+          submittedText: latest ? formatDateTime(latest.submittedAt) : '—',
+          decidedText: latest && latest.decidedAt ? formatDateTime(latest.decidedAt) : '待审核',
           note: latest && latest.reviews && latest.reviews.length ? latest.reviews[latest.reviews.length - 1].note || '' : '',
         },
         latest,

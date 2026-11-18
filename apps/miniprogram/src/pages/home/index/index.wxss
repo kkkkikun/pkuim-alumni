@@ -1,23 +1,376 @@
-/* 首页局部样式：目前只有「演示模式提示条」，其余沿用全局样式表。 */
+/**
+ * 首页样式。
+ *
+ * 设计来源：`prototype/html-v1/index.html` 的「首页」段（红白「燕园」风格）。
+ * 单位换算：原型按 375px 宽设计 → 小程序用 rpx（375px 屏 = 750rpx），即 ×2。
+ *
+ * ⚠️ 缺陷 #154：这一页此前**几乎没有样式**（只有 demo-banner 三条规则），
+ *    WXML 里用的 32 个类（.home / .hero* / .home-tabs / .shortcut* / .notice-row …）
+ *    **在所有 WXSS 里都没有定义** → 真机上页面上半部分全是裸文字，
+ *    与 HTML 原型（「精致」）差得很远。
+ *    已补齐，并新增第 19 层校验（类名对账）防复发。
+ */
 
-/* 非阻塞提示条：不遮挡内容，点一下能看到说明 */
+@import "../../../styles/blocks.wxss";
+
+/* ------------------------------ 演示模式提示条 ------------------------------ */
+
 .demo-banner {
   display: flex;
   align-items: center;
+  gap: 12rpx;
   padding: 16rpx 30rpx;
-  background: var(--pink);
-  border-bottom: 1rpx solid var(--sand);
+  background: #fdf1ee;
+  color: #9c4a44;
+  font-size: 23rpx;
 }
 
 .demo-banner-dot {
   width: 12rpx;
   height: 12rpx;
-  margin-right: 12rpx;
   border-radius: 50%;
-  background: var(--red);
+  background: #c0534c;
+  flex: none;
 }
 
 .demo-banner-text {
+  color: #9c4a44;
+}
+
+/* ------------------------------ Hero ------------------------------ */
+
+.hero {
+  position: relative;
+  height: 474rpx;
+  padding: 54rpx 46rpx 0;
+  overflow: hidden;
+  color: #fff;
+  background: linear-gradient(155deg, #b52832 0%, #a51e28 42%, #911a25 100%);
+}
+
+/* 右上角的同心圆（原型 .hero:before） */
+.hero::before {
+  content: "";
+  position: absolute;
+  width: 490rpx;
+  height: 490rpx;
+  right: -330rpx;
+  top: -264rpx;
+  border: 2rpx solid rgba(255, 255, 255, 0.15);
+  border-radius: 50%;
+  box-shadow: 0 0 0 70rpx rgba(255, 255, 255, 0.04), 0 0 0 180rpx rgba(255, 255, 255, 0.02);
+}
+
+.hero-text {
+  position: relative;
+  z-index: 2;
+}
+
+.hero-kicker {
   font-size: 24rpx;
-  color: var(--reddeep);
+  font-family: var(--serif);
+  letter-spacing: 6rpx;
+  color: #fae1d1;
+  margin-bottom: 24rpx;
+}
+
+.hero-title {
+  font-size: 50rpx;
+  line-height: 1.34;
+  font-weight: 700;
+  font-family: var(--serif);
+  letter-spacing: 1.4rpx;
+  color: #fff;
+}
+
+/* 原型里是 <br> 换行，这里用 display:block 实现 */
+.hero-title-line {
+  display: block;
+}
+
+.hero-sub {
+  margin-top: 20rpx;
+  font-size: 24rpx;
+  font-family: var(--serif);
+  letter-spacing: 5rpx;
+  color: #fad8c9;
+}
+
+/**
+ * 底部的「燕园线稿」装饰。
+ * 原型用的是内联 SVG（北大楼线描），而 **WXSS 不支持 SVG data URI**
+ * （`background-image` 只认 png/jpg/gif/webp 的 base64），
+ * 所以改用 **PNG 资源**：由 infra/scripts/generate-miniprogram-assets.py
+ * 从原型里把这段 SVG 原样栅格化而来，线稿与原型逐笔一致。
+ */
+.hero-art {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: 100%;
+  height: 300rpx;
+  pointer-events: none;
+}
+
+/* ------------------------------ 内容区 ------------------------------ */
+
+.home-content {
+  position: relative;
+  margin-top: -52rpx;
+  min-height: 1000rpx;
+  padding: 12rpx 38rpx 200rpx;
+  background: #fff;
+  border-radius: 54rpx 54rpx 0 0;
+}
+
+/* 页签 */
+
+.home-tabs {
+  display: flex;
+  align-items: center;
+  height: 106rpx;
+  border-bottom: 2rpx solid #f6f1ee;
+}
+
+.home-tab {
+  position: relative;
+  padding: 30rpx 0 26rpx;
+  margin-right: 50rpx;
+  color: #655c5a;
+  font-size: 28rpx;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.home-tab.on {
+  color: var(--red);
+}
+
+.home-tab.on::after {
+  content: "";
+  position: absolute;
+  width: 40rpx;
+  height: 6rpx;
+  left: calc(50% - 20rpx);
+  bottom: 8rpx;
+  border-radius: 16rpx;
+  background: #e8a48c;
+}
+
+/* 焦点推荐条 */
+
+.article-spot {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  overflow: hidden;
+  min-height: 228rpx;
+  margin-top: 24rpx;
+  border-radius: 30rpx;
+  background: linear-gradient(123deg, #f8ece9, #fff9f6 72%);
+}
+
+.spot-text {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  padding: 38rpx 0 36rpx 36rpx;
+}
+
+.spot-tag {
+  font-size: 22rpx;
+  color: #b85f58;
+}
+
+.spot-title {
+  margin: 20rpx 0 16rpx;
+  font-size: 38rpx;
+  line-height: 1.42;
+  font-weight: 700;
+  font-family: var(--serif);
+  color: #76252b;
+}
+
+.spot-desc {
+  font-size: 22rpx;
+  line-height: 1.7;
+  color: #99837d;
+}
+
+/* 同理，SVG 装饰改成 PNG 资源 */
+.spot-deco {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 288rpx;
+  height: 240rpx;
+  pointer-events: none;
+}
+
+/* 快捷入口 */
+
+.shortcut-grid {
+  display: flex;
+  margin: 24rpx 0 10rpx;
+}
+
+.shortcut {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20rpx;
+  padding: 10rpx 0;
+  font-size: 24rpx;
+  color: #37312f;
+}
+
+.shortcut-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 102rpx;
+  height: 102rpx;
+  border-radius: 36rpx;
+  background: #fcf0eb;
+  color: #b3403c;
+}
+
+.shortcut:nth-child(2) .shortcut-icon {
+  background: #f9eee9;
+  color: #b57c4f;
+}
+
+.shortcut:nth-child(3) .shortcut-icon {
+  background: #fff2ed;
+  color: #b24348;
+}
+
+.shortcut:nth-child(4) .shortcut-icon {
+  background: #f3efeb;
+  color: #96765a;
+}
+
+.shortcut-glyph {
+  width: 46rpx;
+  height: 46rpx;
+}
+
+.shortcut-text {
+  font-size: 24rpx;
+  color: #37312f;
+}
+
+/* 公告条 */
+
+.notice-row {
+  display: flex;
+  align-items: center;
+  gap: 22rpx;
+  width: 100%;
+  margin-top: 20rpx;
+  padding: 22rpx;
+  border-radius: 22rpx;
+  background: #faf8f6;
+}
+
+.notice-label {
+  flex: none;
+  padding: 10rpx 16rpx;
+  border-radius: 12rpx;
+  background: #f6e7e2;
+  color: #a53e36;
+  font-size: 22rpx;
+  font-weight: 600;
+}
+
+.notice-text {
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 24rpx;
+  color: #58504b;
+}
+
+.notice-arrow {
+  flex: none;
+  color: #c4bcb8;
+  font-size: 30rpx;
+  line-height: 1;
+}
+
+/* 小节标题 */
+
+.section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 40rpx 0 24rpx;
+}
+
+.section-title {
+  font-size: 34rpx;
+  font-weight: 700;
+  letter-spacing: 1rpx;
+  color: var(--ink);
+}
+
+.section-more {
+  font-size: 24rpx;
+  color: #9c9692;
+}
+
+/* ------------------------------ 加载 / 错误 / 空态 ------------------------------ */
+
+.state-wrap {
+  padding: 40rpx 0;
+}
+
+.loading-line {
+  height: 24rpx;
+  margin-bottom: 20rpx;
+  border-radius: 12rpx;
+  background: linear-gradient(90deg, #f2eeeb 0%, #faf7f5 50%, #f2eeeb 100%);
+  background-size: 200% 100%;
+  animation: nmg-skeleton 1.4s ease-in-out infinite;
+}
+
+.loading-line.short {
+  width: 60%;
+}
+
+@keyframes nmg-skeleton {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+.error-tip {
+  margin-top: 16rpx;
+  padding: 20rpx 24rpx;
+  border-radius: 20rpx;
+  background: #fdf3f1;
+  color: #a53739;
+  font-size: 26rpx;
+  line-height: 1.6;
+}
+
+.empty-mini {
+  padding: 80rpx 0;
+  text-align: center;
+  color: #a19893;
+  font-size: 26rpx;
+}
+
+/* ------------------------------ 列表容器 ------------------------------ */
+
+.notice-list,
+.event-list,
+.article-list {
+  margin-top: 8rpx;
 }

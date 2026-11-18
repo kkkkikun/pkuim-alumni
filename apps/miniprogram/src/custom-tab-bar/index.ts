@@ -2,10 +2,30 @@ Component({
   data: {
     selected: 0,
     list: [
-      { pagePath: '/pages/home/index/index', text: '首页', icon: 'home' },
-      { pagePath: '/pages/directory/index/index', text: '通讯录', icon: 'users' },
-      { pagePath: '/pages/connect/index/index', text: '连接', icon: 'connect' },
-      { pagePath: '/pages/me/index/index', text: '我的', icon: 'person' },
+      {
+        pagePath: '/pages/home/index/index',
+        text: '首页',
+        icon: '/assets/icons/home.png',
+        iconActive: '/assets/icons/home-active.png',
+      },
+      {
+        pagePath: '/pages/directory/index/index',
+        text: '通讯录',
+        icon: '/assets/icons/users.png',
+        iconActive: '/assets/icons/users-active.png',
+      },
+      {
+        pagePath: '/pages/connect/index/index',
+        text: '连接',
+        icon: '/assets/icons/connect.png',
+        iconActive: '/assets/icons/connect-active.png',
+      },
+      {
+        pagePath: '/pages/me/index/index',
+        text: '我的',
+        icon: '/assets/icons/person.png',
+        iconActive: '/assets/icons/person-active.png',
+      },
     ],
   },
   methods: {

@@ -1,11 +1,12 @@
 import { getNotice } from '../../../services/index';
-import type { NoticeDto } from '../../../types/index';
+import { toNoticeView } from '../../../utils/view';
+import type { NoticeView } from '../../../utils/view';
 
 Page({
   data: {
     loading: true,
     error: '',
-    notice: null as NoticeDto | null,
+    notice: null as NoticeView | null,
   },
 
   onLoad(options: Record<string, string | undefined>): void {
@@ -21,7 +22,7 @@ Page({
     this.setData({ loading: true, error: '' });
     try {
       const notice = await getNotice(id);
-      this.setData({ notice, loading: false });
+      this.setData({ notice: toNoticeView(notice), loading: false });
       wx.setNavigationBarTitle({ title: '公告详情' });
     } catch (error) {
       this.setData({ loading: false, error: '公告加载失败，请稍后重试' });
