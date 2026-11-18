@@ -356,24 +356,37 @@ node infra/scripts/miniprogram-compile-check.mjs apps/miniprogram
 | **代码上传密钥** `private.<appid>.key` | 「开发管理 → 开发设置 → 小程序代码上传」→ 生成并下载 | 密钥**不会明文留存**，遗失只能重置；**放在仓库外** |
 | IP 白名单 | 同上页面（建议开启） | 把**执行脚本这台机器的公网出口 IP** 加进白名单 |
 
+> ✅ 本项目已拿到：`AppID = wx6761deb1125d858f`（已写入 `project.config.json`）、
+> AppSecret（已接后端，`jscode2session` 验证凭据被微信接受）、
+> 代码上传密钥（放在仓库外 `/root/nmg-keys/`）。
+> 已上传体验版 `0.1.0`（连真实后端）与 `0.2.0`（离线演示版）。
+
 ### 真机能不能连上后端？
 
 - 小程序默认 API 基址是 `http://127.0.0.1:3000/api/v1` —— **手机上的 127.0.0.1 指手机自己**，
   真机必然连不上。发布时用 `--api-base-url` 注入公网地址（构建期注入，编译完自动还原源文件）；
-- 微信会校验「request 合法域名」：体验版可在后台「开发设置 → 服务器域名」临时关闭校验，
-  用 `http://<公网IP>` 即可；**正式发布**必须换成已备案域名 + HTTPS；
-- 登录通道目前是 **Mock 登录**（`USE_MOCK_LOGIN = true`），
-  不配 AppSecret 也能在体验版里走通「注册 → 认证 → 通讯录」全流程。
+- ⚠️ **微信会强制校验「request 合法域名」**，硬性规则（官方文档）：
+  只支持 `https`、**不能用 IP**（局域网 IP 除外）、**必须 ICP 备案**。
+  → 我们现在的公网入口 `http://8.160.116.34:18080` **无法**配置成合法域名。
+- **因此有两条路**：
+  | 场景 | 做法 |
+  |---|---|
+  | 体验期（今天就能用） | ① 手机开**调试模式**：小程序右上角「…」→「开发调试」→「打开调试」→ 重进小程序（绿色 vConsole 浮标即生效）；② 或用**离线演示版**（`--data-mode demo`，完全不联网，扫码即用） |
+  | 正式发布 | 买域名 → **ICP 备案** → HTTPS 证书 → 配置 `request 合法域名` → 重新上传。清单见 **[`docs/DOMAIN-AND-ICP-FILING.md`](docs/DOMAIN-AND-ICP-FILING.md)** |
+- ⚠️ 「不校验合法域名」这个开关**只存在于微信开发者工具**
+  （「详情 → 本地设置」），**公众平台没有**；手机端只能靠**调试模式**。
+  详见 `docs/KNOWN-ISSUES.md` #151。
 
 > 小程序工程在 `apps/miniprogram/`，用微信开发者工具直接「导入项目」即可
-> （`project.config.json` 里的 `appid` 目前是占位值 `touristappid`，
-> 脚本 `--write-appid` 可替你改写）。
+> （`project.config.json` 里的 `appid` 已是真实的 `wx6761deb1125d858f`，
+> 脚本 `--write-appid` 仍可替你改写）。
 
 ## 尚未配置（需真实资质，与实现质量无关）
 
-- 微信小程序 AppID / AppSecret（当前用 Mock 登录通道，接口契约一致）
 - 微信订阅消息模板（当前仅站内通知，Outbox 通道与 Worker 派发已实测可用）
-- 正式域名与 HTTPS 证书、OSS/COS 对象存储（当前使用 MinIO，切换只需改环境变量）
+- **自有域名 + ICP 备案 + HTTPS 证书**（小程序正式发布的硬前置，
+  选型与材料清单见 [`docs/DOMAIN-AND-ICP-FILING.md`](docs/DOMAIN-AND-ICP-FILING.md)）
+- OSS/COS 对象存储（当前使用 MinIO，切换只需改环境变量）
 - 对象存储异地容灾（当前备份落在服务器本地磁盘）
 
 ## 关键约定
