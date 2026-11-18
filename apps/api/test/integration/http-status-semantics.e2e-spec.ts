@@ -31,23 +31,81 @@ describe('HTTP 状态码的语义 (e2e)', () => {
   let dataSource: DataSource;
   let adminToken: string;
 
+  /** 每次运行都用不同的用户名 / 角色编码，避免撞唯一索引 */
+  const uniq = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  /** 本套件创建的管理员账号（`admin_users` 是保留表，用完必须清理） */
+  const createdUsernames: string[] = [];
+  /** 本套件创建的角色编码 */
+  const createdRoleCodes: string[] = [];
+
   beforeAll(async () => {
     ({ app, dataSource } = await createTestApp());
   });
 
   afterAll(async () => {
     await app?.close();
+    // ⚠️ `admin_users` / `roles` / `admin_user_roles` 属**保留表**（resetDatabase 不清空），
+    // 不清理的话本套件创建的管理员会挤进其它套件的分页里
+    // （`admin-content` 用例就因此破过「第一页含 admin-test」的假设）。
+    try {
+      if (createdUsernames.length) {
+        const placeholders = createdUsernames.map(() => '?').join(',');
+        await dataSource.query(
+          `DELETE FROM admin_user_roles WHERE admin_user_id IN
+             (SELECT id FROM admin_users WHERE username IN (${placeholders}))`,
+          createdUsernames,
+        );
+        await dataSource.query(
+          `DELETE FROM admin_users WHERE username IN (${placeholders})`,
+          createdUsernames,
+        );
+      }
+      for (const code of createdRoleCodes) {
+        await dataSource.query(
+          `DELETE FROM role_permissions WHERE role_id IN (SELECT id FROM roles WHERE code = ?)`,
+          [code],
+        );
+        await dataSource.query('DELETE FROM admin_user_roles WHERE role_id IN (SELECT id FROM roles WHERE code = ?)', [
+          code,
+        ]);
+        await dataSource.query('DELETE FROM roles WHERE code = ?', [code]);
+      }
+    } catch {
+      // 清理失败不影响测试结论（测试库每轮都会重建）
+    }
   });
 
   beforeEach(async () => {
     await resetDatabase(dataSource);
+    // ⚠️ 本套件**必须自带所需权限**，不能指望别的套件给 `admin-test` 留下的授权（缺陷 #158）。
+    //   `admin_user_roles` 是**保留表**（resetDatabase 不清），而 `admin-test`
+    //   这个账号被十几个套件共用 → 它的权限会**跨套件累积**。
+    //   于是「本套件能不能拿到 `alumni:manage`」取决于 **jest 的执行顺序**，
+    //   绿不绿是随机的 —— 上一轮整链 295/295 全绿，这一轮同一个用例就红了。
+    //   这里照 `admin-account-management` 的做法：唯一账号 + 唯一角色 + 显式授权。
+    //
+    //   本套件用到的管理端权限：
+    //     POST   /admin/events           → event:manage
+    //     PATCH  /admin/users/:id/status → alumni:manage
+    //     POST   /admin/users/:id/status → alumni:manage（PATCH 的兼容别名）
+    const username = `admin_status_${uniq}`;
+    const roleEvent = `role_status_event_${uniq}`;
+    const roleAlumni = `role_status_alumni_${uniq}`;
+    createdUsernames.push(username);
+    createdRoleCodes.push(roleEvent, roleAlumni);
     await ensureAdmin(dataSource, {
-      roleCode: 'event_admin',
+      username,
+      roleCode: roleEvent,
       permissionCode: 'event:manage',
+    });
+    await ensureAdmin(dataSource, {
+      username,
+      roleCode: roleAlumni,
+      permissionCode: 'alumni:manage',
     });
     const res = await request(app.getHttpServer())
       .post(`${API}/auth/admin/login`)
-      .send({ username: 'admin-test', password: 'Admin@2026' })
+      .send({ username, password: 'Admin@2026' })
       .expect(200);
     adminToken = res.body.data.accessToken as string;
   });
