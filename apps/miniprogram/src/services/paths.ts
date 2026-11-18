@@ -3,7 +3,12 @@
  *
  * 来源：`packages/contracts/src/api.ts` 的 `ApiPaths`（工作区包 `@nmg/contracts`）。
  * 小程序无法在运行时引用工作区包，因此在此镜像一份；契约变更需同步本文件。
- * 路径均不含 `/api/v1` 前缀，前缀由 `services/request.ts` 统一拼接。
+ *
+ * ⚠️ 路径均**不含** `/api/v1` 前缀 —— 前缀由 `config.API_BASE_URL` **自带**
+ *    （`API_BASE_URL` 本身就以 `/api/v1` 结尾，请求层直接做
+ *    `${API_BASE_URL}${path}` 拼接）。
+ *    `config.API_PREFIX` 常量因此**未被请求层引用**，
+ *    改前缀要改的是 `API_BASE_URL`，不是这个文件。
  */
 
 export const ApiPaths = {

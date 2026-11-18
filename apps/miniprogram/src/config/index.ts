@@ -7,8 +7,14 @@
  *  2. `USE_MOCK_LOGIN` —— 小程序注册完成、微信 AppID/AppSecret 配置到后端后，
  *     改为 `false` 即可切换到 `wx.login` 真实登录，业务代码无需改动。
  *
- * 说明：真实 AppID 写在 `project.config.json` 的 `appid` 字段（当前为占位符
- * `touristappid`），不要写进本文件。
+ * 💡 发布时**不要手改本文件**：上传脚本会用
+ *    `--api-base-url` / `--mock-login` / `--data-mode` 在**构建期注入**这三个值，
+ *    上传完自动还原源码（`trap` 保证异常路径也还原），
+ *    并且会在**产物里**核对注入是否真的生效（见 miniprogram-compile-check.mjs）。
+ *    本文件的默认值只影响「开发者工具里直接跑」的本地开发态。
+ *
+ * 说明：真实 AppID 写在 `project.config.json` 的 `appid` 字段
+ *     （当前为 wx6761deb1125d858f），不要写进本文件。
  */
 
 /** API 根地址，必须以 `/api/v1` 结尾 */

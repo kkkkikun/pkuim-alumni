@@ -2,7 +2,7 @@
   "description": "内蒙古北京大学校友会数字化平台 V1 · 微信小程序",
   "miniprogramRoot": "src/",
   "compileType": "miniprogram",
-  "appid": "touristappid",
+  "appid": "wx6761deb1125d858f",
   "projectname": "nmg-pku-alumni-miniprogram",
   "libVersion": "3.5.5",
   "setting": {
