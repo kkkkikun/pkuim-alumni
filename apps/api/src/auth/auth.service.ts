@@ -28,6 +28,7 @@ import { User } from '../database/entities/user.entity';
 import type { AdminLoginDto, MockLoginDto, RefreshTokenDto, WechatLoginDto } from './dto/auth.dto';
 import { MOCK_AUTH_PROVIDER, WECHAT_AUTH_PROVIDER } from './providers/auth-provider';
 import type { AuthIdentity, AuthProvider } from './providers/auth-provider';
+import { WechatAuthError } from './providers/wechat-auth.provider';
 import { SessionService } from './session.service';
 
 export interface AccessTokenPayload {
@@ -116,21 +117,80 @@ export class AuthService {
   /* ------------------------------ 用户登录 ------------------------------ */
 
   async loginWithMock(dto: MockLoginDto): Promise<AuthenticatedLoginResult> {
+    if (!this.mockLoginEnabled) {
+      throw new HttpException(
+        { code: ResponseCode.FORBIDDEN, message: 'Mock 登录未启用' },
+        HttpStatus.FORBIDDEN,
+      );
+    }
     const provider = this.mockProvider;
     if (!provider.available()) {
       throw new BadRequestException('Mock 登录未启用');
     }
-    const identity = await provider.exchange(dto.mockOpenid ?? '');
+    let identity: AuthIdentity;
+    try {
+      identity = await provider.exchange(dto.mockOpenid ?? '');
+    } catch (error) {
+      // Mock 提供方的失败是**入参问题**（如 "mock:" 去掉前缀后为空），
+      // 不能落到 500 —— 与微信登录同理，缺陷 #148 的同一类问题。
+      this.logger.warn(`Mock 登录失败：${error instanceof Error ? error.message : String(error)}`);
+      throw new BadRequestException(error instanceof Error ? error.message : 'Mock 登录失败');
+    }
     return this.issueUserLogin(identity, dto.nickname ?? null);
   }
 
   async loginWithWechat(dto: WechatLoginDto): Promise<AuthenticatedLoginResult> {
+    if (!this.wechatLoginEnabled) {
+      throw new HttpException(
+        { code: ResponseCode.FORBIDDEN, message: '微信登录未启用' },
+        HttpStatus.FORBIDDEN,
+      );
+    }
     const provider = this.wechatProvider;
     if (!provider.available()) {
       throw new BadRequestException('微信登录尚未配置');
     }
-    const identity = await provider.exchange(dto.code);
+    let identity: AuthIdentity;
+    try {
+      identity = await provider.exchange(dto.code);
+    } catch (error) {
+      throw this.toWechatAuthException(error);
+    }
     return this.issueUserLogin(identity, null);
+  }
+
+  /**
+   * 把微信提供方的失败翻译成正确的 HTTP 状态码与错误码。
+   *
+   * ⚠️ 缺陷 #148：修复前这里没有任何翻译 —— provider 抛的普通 `Error`
+   *    会被统一异常过滤器当成「未处理异常」→ **500 INTERNAL_ERROR**。
+   *    用户明明是「登录凭据无效」，看到的却是「服务器内部错误」。
+   *
+   * 映射规则：
+   *   - `invalid_code`（微信拒绝了凭据）→ **401 AUTH_FAILED**：请重新登录；
+   *   - `unavailable`（微信接口不可达）→ **502 INTERNAL_ERROR**：稍后再试；
+   *   - 其它异常（未预期）→ 500，保持「不掩盖真缺陷」。
+   */
+  private toWechatAuthException(error: unknown): HttpException {
+    if (error instanceof WechatAuthError) {
+      if (error.kind === 'invalid_code') {
+        this.logger.warn(`微信登录凭据无效：${error.detail ?? error.message}`);
+        return authFailed('微信登录失败，请重新登录');
+      }
+      this.logger.error(`微信登录服务不可用：${error.detail ?? error.message}`);
+      return new HttpException(
+        { code: ResponseCode.INTERNAL_ERROR, message: '微信登录服务暂时不可用，请稍后再试' },
+        HttpStatus.BAD_GATEWAY,
+      );
+    }
+    this.logger.error(
+      `微信登录出现未预期异常：${error instanceof Error ? error.message : String(error)}`,
+      error instanceof Error ? error.stack : undefined,
+    );
+    return new HttpException(
+      { code: ResponseCode.INTERNAL_ERROR, message: '服务器内部错误' },
+      HttpStatus.INTERNAL_SERVER_ERROR,
+    );
   }
 
   /** 用户登录主流程：定位或创建用户 → 确保资料行 → 签发令牌与会话。 */
@@ -359,6 +419,35 @@ export class AuthService {
   }
 
   /* ------------------------------ 内部方法 ------------------------------ */
+
+  /**
+   * 登录方式开关（`AUTH_MODE`）。
+   *
+   * ⚠️ 这个配置此前是**死配置**：`.env.prod` 里写着 `AUTH_MODE=both`，
+   *    但没有任何代码读它 → 无论怎么配，Mock 登录与微信登录**永远同时开着**。
+   *    后果：生产环境里 `/auth/mock/login` 是**公开可用的后门**
+   *    （任何人都能凭空造一个用户），而运营想「只留微信登录」也做不到。
+   *
+   * 取值：
+   *   - `mock`  ：只开 Mock 登录（小程序尚未注册时的开发态）；
+   *   - `wechat`：只开微信登录（正式对外时用，堵掉 Mock 后门）；
+   *   - `both`  ：两个都开（联调 / 预览期）。
+   *
+   * 非法取值一律按 `both` 处理 —— 配置写错不应该让登录整个瘫掉。
+   */
+  private get authMode(): 'mock' | 'wechat' | 'both' {
+    const raw = (this.config.get<string>('app.authMode', 'both') ?? 'both').trim().toLowerCase();
+    if (raw === 'mock' || raw === 'wechat') return raw;
+    return 'both';
+  }
+
+  private get mockLoginEnabled(): boolean {
+    return this.authMode !== 'wechat';
+  }
+
+  private get wechatLoginEnabled(): boolean {
+    return this.authMode !== 'mock';
+  }
 
   private get mockProvider(): AuthProvider {
     return this.mockAuthProvider;
