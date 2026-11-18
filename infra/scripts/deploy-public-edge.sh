@@ -212,6 +212,9 @@ if [ -n "$DOMAIN" ]; then
   log "  https://${DOMAIN}/api/v1/ → API"
 else
   PUBLIC_IP="$(curl -fsS --max-time 5 http://ifconfig.me 2>/dev/null || echo '<公网IP>')"
-  log "  http://${PUBLIC_IP}:${LISTEN_PORT}/        → 管理后台（小程序体验时请在后台勾选「不校验合法域名」）"
+  log "  http://${PUBLIC_IP}:${LISTEN_PORT}/        → 管理后台"
   log "  http://${PUBLIC_IP}:${LISTEN_PORT}/api/v1/ → API"
+  log "  ⚠️ 小程序体验提醒：公众平台**没有**「不校验合法域名」开关 ——"
+  log "     手机端只能靠「小程序右上角『…』→ 开发调试 → 打开调试」跳过域名校验；"
+  log "     正式发布必须换成已备案域名 + HTTPS 并配置 request 合法域名。"
 fi
