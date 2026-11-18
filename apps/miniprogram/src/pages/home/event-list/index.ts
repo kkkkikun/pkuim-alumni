@@ -1,5 +1,5 @@
-import { listEvents } from '../../../services';
-import type { EventDto } from '../../../types';
+import { listEvents } from '../../../services/index';
+import type { EventDto } from '../../../types/index';
 import { eventDetailUrl, navigateTo } from '../../../utils/navigate';
 import { resetPageScroll, restorePageScroll, trackPageScroll } from '../../../utils/scroll';
 

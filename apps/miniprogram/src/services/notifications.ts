@@ -2,7 +2,7 @@
 
 import { ApiPaths } from './paths';
 import { get, post } from './request';
-import type { NotificationDto, NotificationUnreadCount, PageResult } from '../types';
+import type { NotificationDto, NotificationUnreadCount, PageResult } from '../types/index';
 
 /** 通知列表（分页） */
 export function listNotifications(

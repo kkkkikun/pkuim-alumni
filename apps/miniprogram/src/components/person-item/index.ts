@@ -1,4 +1,4 @@
-import type { DirectoryEntry } from '../../types';
+import type { DirectoryEntry } from '../../types/index';
 
 Component({
   properties: {

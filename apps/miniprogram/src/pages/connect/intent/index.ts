@@ -1,5 +1,5 @@
-import { createConnectionRequest, getResource } from '../../../services';
-import type { ResourcePostDto } from '../../../types';
+import { createConnectionRequest, getResource } from '../../../services/index';
+import type { ResourcePostDto } from '../../../types/index';
 import { showSuccess } from '../../../utils/feedback';
 import { navigateTo } from '../../../utils/navigate';
 

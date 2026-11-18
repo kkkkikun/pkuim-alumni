@@ -1,4 +1,4 @@
-import { createConnectionRequest, getAlumniProfile } from '../../../services';
+import { createConnectionRequest, getAlumniProfile } from '../../../services/index';
 import { showSuccess } from '../../../utils/feedback';
 
 const MIN_LENGTH = 6;

@@ -1,5 +1,5 @@
-import { getConnection, grantContact } from '../../../services';
-import type { ConnectionPairDto } from '../../../types';
+import { getConnection, grantContact } from '../../../services/index';
+import type { ConnectionPairDto } from '../../../types/index';
 import { showSuccess } from '../../../utils/feedback';
 
 interface ConnectionView extends ConnectionPairDto {

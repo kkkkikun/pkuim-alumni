@@ -1,6 +1,6 @@
-import { getResource } from '../../../services';
-import { getState } from '../../../store';
-import type { ResourcePostDto } from '../../../types';
+import { getResource } from '../../../services/index';
+import { getState } from '../../../store/index';
+import type { ResourcePostDto } from '../../../types/index';
 import { resourceStatusLabel } from '../../../utils/format';
 import { navigateTo } from '../../../utils/navigate';
 

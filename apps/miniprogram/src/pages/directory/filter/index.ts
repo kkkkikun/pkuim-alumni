@@ -1,6 +1,6 @@
-import { getState } from '../../../store';
-import { getDirectoryFilter, resetDirectoryFilter, setDirectoryFilter } from '../../../store';
-import type { IndustryDto, RegionDto } from '../../../types';
+import { getState } from '../../../store/index';
+import { getDirectoryFilter, resetDirectoryFilter, setDirectoryFilter } from '../../../store/index';
+import type { IndustryDto, RegionDto } from '../../../types/index';
 
 function buildYearOptions(): number[] {
   const current = new Date().getFullYear();

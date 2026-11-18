@@ -1,5 +1,5 @@
-import { listVerifications } from '../../../services';
-import type { VerificationApplicationDto } from '../../../types';
+import { listVerifications } from '../../../services/index';
+import type { VerificationApplicationDto } from '../../../types/index';
 import { verificationStatusLabel } from '../../../utils/format';
 
 interface HistoryView extends VerificationApplicationDto {

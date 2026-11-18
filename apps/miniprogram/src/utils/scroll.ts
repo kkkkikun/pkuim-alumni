@@ -6,7 +6,7 @@
  *   onShow:        restorePageScroll('directory')
  */
 
-import { getScrollTop, saveScrollTop } from '../store';
+import { getScrollTop, saveScrollTop } from '../store/index';
 
 export function trackPageScroll(key: string): (event: { scrollTop: number }) => void {
   return (event: { scrollTop: number }): void => {

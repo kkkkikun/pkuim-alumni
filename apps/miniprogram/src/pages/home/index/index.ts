@@ -1,5 +1,5 @@
-import { ensureDemoSession, isDemoFallbackActive, listArticles, listEvents, listNotices, onDemoModeChange } from '../../../services';
-import type { ArticleDto, EventDto, NoticeDto } from '../../../types';
+import { ensureDemoSession, isDemoFallbackActive, listArticles, listEvents, listNotices, onDemoModeChange } from '../../../services/index';
+import type { ArticleDto, EventDto, NoticeDto } from '../../../types/index';
 import { formatDate } from '../../../utils/format';
 import { articleDetailUrl, eventDetailUrl, navigateTo, noticeDetailUrl, switchTab } from '../../../utils/navigate';
 import { setTabBarSelected } from '../../../utils/tabbar';

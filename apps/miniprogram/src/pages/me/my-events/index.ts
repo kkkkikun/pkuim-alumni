@@ -1,5 +1,5 @@
-import { listMyEvents } from '../../../services';
-import type { EventDto } from '../../../types';
+import { listMyEvents } from '../../../services/index';
+import type { EventDto } from '../../../types/index';
 import { registrationStatusLabel } from '../../../utils/format';
 import { navigateTo } from '../../../utils/navigate';
 import { restorePageScroll, trackPageScroll } from '../../../utils/scroll';

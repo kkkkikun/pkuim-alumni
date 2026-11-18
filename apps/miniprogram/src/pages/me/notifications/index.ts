@@ -3,8 +3,8 @@ import {
   listNotifications,
   markAllNotificationsRead,
   markNotificationRead,
-} from '../../../services';
-import type { NotificationDto } from '../../../types';
+} from '../../../services/index';
+import type { NotificationDto } from '../../../types/index';
 import { showToast } from '../../../utils/feedback';
 import { navigateTo } from '../../../utils/navigate';
 import { restorePageScroll, trackPageScroll } from '../../../utils/scroll';

@@ -1,6 +1,6 @@
-import { fetchMe } from '../../../services';
-import { getState } from '../../../store';
-import type { MyAlumniProfile } from '../../../types';
+import { fetchMe } from '../../../services/index';
+import { getState } from '../../../store/index';
+import type { MyAlumniProfile } from '../../../types/index';
 import { navigateTo } from '../../../utils/navigate';
 
 interface ProfileView {

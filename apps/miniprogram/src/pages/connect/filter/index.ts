@@ -1,5 +1,5 @@
-import { getState, setConnectFilter } from '../../../store';
-import type { RegionDto } from '../../../types';
+import { getState, setConnectFilter } from '../../../store/index';
+import type { RegionDto } from '../../../types/index';
 
 Page({
   data: {

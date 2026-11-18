@@ -1,6 +1,6 @@
-import { listDirectory } from '../../../services';
-import { getDirectoryFilter, getState, setDirectoryFilter } from '../../../store';
-import type { DirectoryEntry } from '../../../types';
+import { listDirectory } from '../../../services/index';
+import { getDirectoryFilter, getState, setDirectoryFilter } from '../../../store/index';
+import type { DirectoryEntry } from '../../../types/index';
 import { directoryProfileUrl, navigateTo } from '../../../utils/navigate';
 import { resetPageScroll, restorePageScroll, trackPageScroll } from '../../../utils/scroll';
 import { setTabBarSelected } from '../../../utils/tabbar';

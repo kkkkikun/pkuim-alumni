@@ -1,5 +1,5 @@
-import { getNotice } from '../../../services';
-import type { NoticeDto } from '../../../types';
+import { getNotice } from '../../../services/index';
+import type { NoticeDto } from '../../../types/index';
 
 Page({
   data: {

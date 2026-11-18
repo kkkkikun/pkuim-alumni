@@ -1,5 +1,5 @@
-import { listConnections } from '../../../services';
-import type { ConnectionPairDto } from '../../../types';
+import { listConnections } from '../../../services/index';
+import type { ConnectionPairDto } from '../../../types/index';
 import { navigateTo } from '../../../utils/navigate';
 import { restorePageScroll, trackPageScroll } from '../../../utils/scroll';
 

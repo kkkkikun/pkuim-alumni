@@ -1,6 +1,6 @@
-import { listResources } from '../../../services';
-import { getConnectFilter, getState, setConnectFilter } from '../../../store';
-import type { IndustryDto, RegionDto, ResourcePostDto } from '../../../types';
+import { listResources } from '../../../services/index';
+import { getConnectFilter, getState, setConnectFilter } from '../../../store/index';
+import type { IndustryDto, RegionDto, ResourcePostDto } from '../../../types/index';
 import { navigateTo } from '../../../utils/navigate';
 import { resetPageScroll, restorePageScroll, trackPageScroll } from '../../../utils/scroll';
 import { setTabBarSelected } from '../../../utils/tabbar';

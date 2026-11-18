@@ -1,5 +1,5 @@
-import { isMockLoginMode, logout } from '../../../services';
-import { getState, isLoggedIn, stageLabel } from '../../../store';
+import { isMockLoginMode, logout } from '../../../services/index';
+import { getState, isLoggedIn, stageLabel } from '../../../store/index';
 import { closeDialog, initialDialogState, openDialog } from '../../../utils/dialog';
 import { showSuccess } from '../../../utils/feedback';
 import { navigateTo } from '../../../utils/navigate';

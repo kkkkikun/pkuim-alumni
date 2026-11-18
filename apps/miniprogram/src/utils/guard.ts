@@ -5,7 +5,7 @@
  * 绝不能依赖前端隐藏按钮来保证安全。
  */
 
-import { getState, isLoggedIn, isVerified } from '../store';
+import { getState, isLoggedIn, isVerified } from '../store/index';
 import { showToast } from './feedback';
 import { navigateTo } from './navigate';
 import { login } from '../services/auth';

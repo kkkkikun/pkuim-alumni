@@ -1,5 +1,5 @@
-import { listNotices } from '../../../services';
-import type { NoticeDto } from '../../../types';
+import { listNotices } from '../../../services/index';
+import type { NoticeDto } from '../../../types/index';
 import { navigateTo, noticeDetailUrl } from '../../../utils/navigate';
 import { resetPageScroll, restorePageScroll, trackPageScroll } from '../../../utils/scroll';
 

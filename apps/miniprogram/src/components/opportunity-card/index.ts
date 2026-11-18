@@ -1,4 +1,4 @@
-import type { ResourcePostDto } from '../../types';
+import type { ResourcePostDto } from '../../types/index';
 
 Component({
   properties: {

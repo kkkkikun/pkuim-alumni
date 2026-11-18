@@ -1,6 +1,6 @@
-import { cancelConnectionRequest, listMyConnectionRequests } from '../../../services';
-import { getState } from '../../../store';
-import type { ConnectionRequestDto } from '../../../types';
+import { cancelConnectionRequest, listMyConnectionRequests } from '../../../services/index';
+import { getState } from '../../../store/index';
+import type { ConnectionRequestDto } from '../../../types/index';
 import { closeDialog, initialDialogState, openDialog } from '../../../utils/dialog';
 import { connectionRequestStatusLabel } from '../../../utils/format';
 import { showSuccess } from '../../../utils/feedback';

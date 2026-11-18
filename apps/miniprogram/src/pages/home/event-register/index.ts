@@ -1,5 +1,5 @@
-import { getEvent, registerEvent } from '../../../services';
-import type { EventDto } from '../../../types';
+import { getEvent, registerEvent } from '../../../services/index';
+import type { EventDto } from '../../../types/index';
 import { showSuccess } from '../../../utils/feedback';
 import { navigateTo } from '../../../utils/navigate';
 

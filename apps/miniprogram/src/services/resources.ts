@@ -2,7 +2,7 @@
 
 import { ApiPaths } from './paths';
 import { get, post } from './request';
-import type { CreateResourceBody, PageResult, ResourcePostDto, ResourceType } from '../types';
+import type { CreateResourceBody, PageResult, ResourcePostDto, ResourceType } from '../types/index';
 
 export interface ResourceListQuery {
   type?: ResourceType | 'all';

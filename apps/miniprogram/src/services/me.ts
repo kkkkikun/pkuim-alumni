@@ -1,6 +1,6 @@
 /** “我的”相关服务：资料、隐私、校友认证。 */
 
-import { setState } from '../store';
+import { setState } from '../store/index';
 import { ApiPaths } from './paths';
 import { get, patch, post, put } from './request';
 import type {
@@ -13,7 +13,7 @@ import type {
   UpdateProfileBody,
   VerificationApplicationDto,
   VerificationStatus,
-} from '../types';
+} from '../types/index';
 
 /** 拉取当前登录用户与身份阶段 */
 export async function fetchMe(): Promise<MeResponse> {

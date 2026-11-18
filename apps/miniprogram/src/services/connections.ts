@@ -2,7 +2,7 @@
 
 import { ApiPaths } from './paths';
 import { get, post, put } from './request';
-import type { ConnectionPairDto, ConnectionRequestDto, PageResult } from '../types';
+import type { ConnectionPairDto, ConnectionRequestDto, PageResult } from '../types/index';
 
 /** 我发出的 / 收到的联系申请 */
 export function listMyConnectionRequests(params: {

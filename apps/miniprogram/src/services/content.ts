@@ -2,7 +2,7 @@
 
 import { ApiPaths } from './paths';
 import { get } from './request';
-import type { ArticleDto, NoticeDto, PageResult } from '../types';
+import type { ArticleDto, NoticeDto, PageResult } from '../types/index';
 
 export interface ArticleListQuery {
   categoryId?: number;

@@ -12,10 +12,10 @@
  *   演示版要能把「上传认证材料」这条流程**完整走完**。
  */
 
-import { DATA_MODE } from '../config';
+import { DATA_MODE } from '../config/index';
 import { ApiPaths } from './paths';
 import { get, post } from './request';
-import type { CreateUploadBody, MediaAssetDto, UploadUrlResponse } from '../types';
+import type { CreateUploadBody, MediaAssetDto, UploadUrlResponse } from '../types/index';
 
 /** 创建媒体资源（登记，返回直传地址） */
 export function createUpload(body: CreateUploadBody): Promise<MediaAssetDto> {

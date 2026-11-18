@@ -1,6 +1,6 @@
-import { listArticles } from '../../../services';
-import { getState } from '../../../store';
-import type { ArticleCategoryDto, ArticleDto } from '../../../types';
+import { listArticles } from '../../../services/index';
+import { getState } from '../../../store/index';
+import type { ArticleCategoryDto, ArticleDto } from '../../../types/index';
 import { articleDetailUrl, navigateTo } from '../../../utils/navigate';
 import { resetPageScroll, restorePageScroll, trackPageScroll } from '../../../utils/scroll';
 

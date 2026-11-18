@@ -1,6 +1,6 @@
-import { listMyConnectionRequests } from '../../../services';
-import { getState } from '../../../store';
-import type { ConnectionRequestDto } from '../../../types';
+import { listMyConnectionRequests } from '../../../services/index';
+import { getState } from '../../../store/index';
+import type { ConnectionRequestDto } from '../../../types/index';
 import { connectionRequestStatusLabel } from '../../../utils/format';
 
 Page({

@@ -1,5 +1,5 @@
-import { getArticle } from '../../../services';
-import type { ArticleDto } from '../../../types';
+import { getArticle } from '../../../services/index';
+import type { ArticleDto } from '../../../types/index';
 import { formatDate } from '../../../utils/format';
 
 Page({

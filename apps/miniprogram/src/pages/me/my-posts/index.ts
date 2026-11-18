@@ -1,5 +1,5 @@
-import { listMyResources } from '../../../services';
-import type { ResourcePostDto } from '../../../types';
+import { listMyResources } from '../../../services/index';
+import type { ResourcePostDto } from '../../../types/index';
 import { resourceStatusLabel } from '../../../utils/format';
 import { navigateTo } from '../../../utils/navigate';
 import { restorePageScroll, trackPageScroll } from '../../../utils/scroll';

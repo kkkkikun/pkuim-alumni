@@ -1,5 +1,5 @@
-import { getVerificationDraft, setVerificationMediaIds } from '../../../store';
-import { submitVerification } from '../../../services';
+import { getVerificationDraft, setVerificationMediaIds } from '../../../store/index';
+import { submitVerification } from '../../../services/index';
 import { showSuccess } from '../../../utils/feedback';
 import { navigateTo } from '../../../utils/navigate';
 

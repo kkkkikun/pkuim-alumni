@@ -1,5 +1,5 @@
-import { fetchPrivacy, updatePrivacy } from '../../../services';
-import type { PrivacySettings } from '../../../types';
+import { fetchPrivacy, updatePrivacy } from '../../../services/index';
+import type { PrivacySettings } from '../../../types/index';
 import { showSuccess } from '../../../utils/feedback';
 
 Page({

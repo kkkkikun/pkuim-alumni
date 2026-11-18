@@ -6,7 +6,7 @@
  * 令牌与用户信息持久化到 wx storage，其余仅存在于内存（刷新后回到默认）。
  */
 
-import { STORAGE_KEYS } from '../config';
+import { STORAGE_KEYS } from '../config/index';
 import type {
   AlumniStage,
   ArticleCategoryDto,
@@ -16,7 +16,7 @@ import type {
   RegionDto,
   TokenPair,
   UserProfile,
-} from '../types';
+} from '../types/index';
 
 /** 通讯录筛选条件 */
 export interface DirectoryFilter {

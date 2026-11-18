@@ -11,12 +11,12 @@
  *   登录 / 加载会话 / 退出登录**一律不发网络请求**，全部用本地演示数据。
  */
 
-import { DATA_MODE, MOCK_NICKNAME, MOCK_OPENID, USE_MOCK_LOGIN } from '../config';
+import { DATA_MODE, MOCK_NICKNAME, MOCK_OPENID, USE_MOCK_LOGIN } from '../config/index';
 import { buildDemoLoginResult } from '../demo/session';
-import { cacheUser, clearSession, getState, isLoggedIn, setToken, setState } from '../store';
+import { cacheUser, clearSession, getState, isLoggedIn, setToken, setState } from '../store/index';
 import { ApiPaths } from './paths';
 import { get, post } from './request';
-import type { AlumniStage, AuthSessionResponse, LoginResult, UserProfile } from '../types';
+import type { AlumniStage, AuthSessionResponse, LoginResult, UserProfile } from '../types/index';
 
 /** wx.login 包装 */
 export function wxLogin(): Promise<string> {

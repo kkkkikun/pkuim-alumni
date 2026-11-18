@@ -1,5 +1,5 @@
-import { getEvent } from '../../../services';
-import type { EventDto } from '../../../types';
+import { getEvent } from '../../../services/index';
+import type { EventDto } from '../../../types/index';
 import { formatDateTime, formatEventTime, registrationStatusLabel } from '../../../utils/format';
 import { eventRegisterUrl, navigateTo } from '../../../utils/navigate';
 import { requireVerified } from '../../../utils/guard';

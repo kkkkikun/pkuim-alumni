@@ -32,7 +32,7 @@ import type {
   RegionDto,
   ResourcePostDto,
   UserProfile,
-} from '../types';
+} from '../types/index';
 
 /**
  * 数据集里的「我」的校友档案。

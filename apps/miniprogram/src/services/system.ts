@@ -3,10 +3,10 @@
  * 字典结果缓存在全局 store，避免各页面重复请求。
  */
 
-import { getState, setState } from '../store';
+import { getState, setState } from '../store/index';
 import { ApiPaths } from './paths';
 import { get } from './request';
-import type { ArticleCategoryDto, IndustryDto, RegionDto } from '../types';
+import type { ArticleCategoryDto, IndustryDto, RegionDto } from '../types/index';
 
 /** 全部地区（含“区外校友”） */
 export async function fetchRegions(force = false): Promise<RegionDto[]> {

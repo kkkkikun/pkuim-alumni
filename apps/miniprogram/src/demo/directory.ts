@@ -14,7 +14,7 @@
  */
 
 import { dataset } from './dataset';
-import type { DirectoryEntry } from '../types';
+import type { DirectoryEntry } from '../types/index';
 
 /** 按 code 查地区名（找不到就回退成 code 本身） */
 function regionName(code: string): string {

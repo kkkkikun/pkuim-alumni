@@ -1,5 +1,5 @@
-import { getNotification, markNotificationRead } from '../../../services';
-import type { NotificationDto } from '../../../types';
+import { getNotification, markNotificationRead } from '../../../services/index';
+import type { NotificationDto } from '../../../types/index';
 import { showToast } from '../../../utils/feedback';
 import { readId } from '../../../utils/navigate';
 

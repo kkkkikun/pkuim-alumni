@@ -4,9 +4,9 @@ import {
   listMyConnectionRequests,
   listMyEvents,
   listMyResources,
-} from '../../../services';
-import { getState, isLoggedIn, stageLabel } from '../../../store';
-import type { AlumniStage } from '../../../types';
+} from '../../../services/index';
+import { getState, isLoggedIn, stageLabel } from '../../../store/index';
+import type { AlumniStage } from '../../../types/index';
 import { ensureLogin } from '../../../utils/guard';
 import { showToast } from '../../../utils/feedback';
 import { navigateTo } from '../../../utils/navigate';

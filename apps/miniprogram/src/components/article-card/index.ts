@@ -1,4 +1,4 @@
-import type { ArticleDto } from '../../types';
+import type { ArticleDto } from '../../types/index';
 
 Component({
   properties: {

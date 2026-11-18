@@ -1,5 +1,5 @@
-import { getVerificationStatus, listVerifications } from '../../../services';
-import type { VerificationApplicationDto, VerificationStatus } from '../../../types';
+import { getVerificationStatus, listVerifications } from '../../../services/index';
+import type { VerificationApplicationDto, VerificationStatus } from '../../../types/index';
 import { verificationStatusLabel } from '../../../utils/format';
 import { navigateTo } from '../../../utils/navigate';
 import { settle } from '../../../utils/async';

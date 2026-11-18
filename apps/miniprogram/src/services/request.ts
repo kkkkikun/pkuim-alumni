@@ -17,11 +17,11 @@
  *    回退会用假数据把真实缺陷盖住，因此**一律不回退**。
  */
 
-import { API_BASE_URL, DATA_MODE, REQUEST_TIMEOUT } from '../config';
-import { clearSession, getAccessToken, getRefreshToken, setToken } from '../store';
+import { API_BASE_URL, DATA_MODE, REQUEST_TIMEOUT } from '../config/index';
+import { clearSession, getAccessToken, getRefreshToken, setToken } from '../store/index';
 import { showError } from '../utils/feedback';
 import { DemoRouteError, handleDemoRequest } from '../demo/router';
-import type { ApiResponse, TokenPair } from '../types';
+import type { ApiResponse, TokenPair } from '../types/index';
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 

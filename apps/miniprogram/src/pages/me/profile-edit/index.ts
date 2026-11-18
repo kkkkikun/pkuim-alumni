@@ -1,6 +1,6 @@
-import { fetchMe, updateProfile } from '../../../services';
-import { getState } from '../../../store';
-import type { IndustryDto, RegionDto } from '../../../types';
+import { fetchMe, updateProfile } from '../../../services/index';
+import { getState } from '../../../store/index';
+import type { IndustryDto, RegionDto } from '../../../types/index';
 import { showSuccess } from '../../../utils/feedback';
 
 Page({

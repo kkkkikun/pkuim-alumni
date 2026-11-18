@@ -1,4 +1,4 @@
-import type { EventDto } from '../../types';
+import type { EventDto } from '../../types/index';
 
 Component({
   properties: {

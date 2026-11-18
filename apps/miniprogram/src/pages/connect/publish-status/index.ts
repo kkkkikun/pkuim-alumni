@@ -1,5 +1,5 @@
-import { getResource, submitResource, withdrawResource } from '../../../services';
-import type { ResourcePostDto } from '../../../types';
+import { getResource, submitResource, withdrawResource } from '../../../services/index';
+import type { ResourcePostDto } from '../../../types/index';
 import { resourceStatusLabel } from '../../../utils/format';
 import { closeDialog, initialDialogState, openDialog } from '../../../utils/dialog';
 import { showSuccess } from '../../../utils/feedback';

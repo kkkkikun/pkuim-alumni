@@ -14,7 +14,7 @@ import type {
   PrivacySettings,
   SessionUser,
   UserProfile,
-} from '../types';
+} from '../types/index';
 
 /** 演示用的「我」的用户信息 */
 export function buildDemoUser(): UserProfile {

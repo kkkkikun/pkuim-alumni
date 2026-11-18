@@ -2,7 +2,7 @@
 
 import { ApiPaths } from './paths';
 import { get, post } from './request';
-import type { EventDto, EventRegistrationDto, PageResult } from '../types';
+import type { EventDto, EventRegistrationDto, PageResult } from '../types/index';
 
 export interface EventListQuery {
   regionCode?: string;

@@ -1,6 +1,6 @@
-import { getAlumniProfile, getDirectoryEntry } from '../../../services';
-import { isVerified } from '../../../store';
-import type { DirectoryEntry } from '../../../types';
+import { getAlumniProfile, getDirectoryEntry } from '../../../services/index';
+import { isVerified } from '../../../store/index';
+import type { DirectoryEntry } from '../../../types/index';
 import { navigateTo } from '../../../utils/navigate';
 import { showToast } from '../../../utils/feedback';
 import { settle } from '../../../utils/async';

@@ -14,7 +14,7 @@
  * 字段形状以 `src/types/index.ts`（契约镜像）为准。
  */
 
-import { DEFAULT_PAGE_SIZE } from '../config';
+import { DEFAULT_PAGE_SIZE } from '../config/index';
 import { dataset } from './dataset';
 import { demoDirectory } from './directory';
 import {
@@ -38,7 +38,7 @@ import type {
   PageResult,
   ResourcePostDto,
   VerificationApplicationDto,
-} from '../types';
+} from '../types/index';
 
 /* ------------------------------ 基础工具 ------------------------------ */
 

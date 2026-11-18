@@ -2,7 +2,7 @@
 
 import { ApiPaths } from './paths';
 import { get } from './request';
-import type { DirectoryEntry, PageResult } from '../types';
+import type { DirectoryEntry, PageResult } from '../types/index';
 
 export interface DirectoryListQuery {
   keyword?: string;

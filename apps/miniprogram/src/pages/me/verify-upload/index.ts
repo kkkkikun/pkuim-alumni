@@ -1,5 +1,5 @@
-import { uploadLocalFile } from '../../../services';
-import { getVerificationDraft, setVerificationMediaIds } from '../../../store';
+import { uploadLocalFile } from '../../../services/index';
+import { getVerificationDraft, setVerificationMediaIds } from '../../../store/index';
 import { showSuccess, showToast } from '../../../utils/feedback';
 
 interface AttachmentView {
