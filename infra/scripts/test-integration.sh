@@ -13,8 +13,9 @@
 #   bash infra/scripts/test-integration.sh --data-selftest  # 额外跑数据完整性反向验证
 #   bash infra/scripts/test-integration.sh --skip-coverage-selftest # 跳过覆盖校验器反向验证
 #   bash infra/scripts/test-integration.sh --skip-worker-selftest  # 跳过 Worker 投递链路自检
+#   bash infra/scripts/test-integration.sh --skip-isolation        # 跳过集成测试隔离性自检
 #
-# 回归链共 22 步：
+# 回归链共 24 步：
 #   1) 重建测试库 → 2) 迁移 → 3) Seed → 4) Jest 集成测试 → 5) 校验业务库未被污染
 #   6) 客户端 ↔ 服务端路径一致性 → 7) 前端静态校验 → 8) **端点覆盖 100%**（含反向验证）
 #   9) 前端 / 契约校验器反向验证 → 10) 数据完整性校验（含反向验证）
@@ -29,6 +30,9 @@
 #   20) **HTTP 状态码对账**（服务端声明的成功码 ⟷ 既有测试断言的成功码，含反向验证）
 #   21) **并发撞唯一键对账**（「先查后插」必须有唯一键兜底，含反向验证 + 防误报断言）
 #   22) **迁移一致性对账**（代码里的迁移 ⟷ 清单 ⟷ 业务库已应用，含反向验证）
+#   23) **小程序端单元测试 + 展示层静态校验**（类名有样式 / 无原始时间戳 /
+#       图片资源有效且无单字占位图标，各带反向验证）
+#   24) **集成测试隔离性自检**（每个套件单独跑必须绿 —— 见缺陷 #158）
 #
 # 安全约束（极其重要）：
 #   1) 只允许对**库名包含 test** 的库执行迁移 / Seed / TRUNCATE；
@@ -53,6 +57,7 @@ RUN_DATA_CHECK=1
 RUN_DATA_SELFTEST=0
 RUN_COVERAGE_SELFTEST=1
 RUN_WORKER_SELFTEST=1
+RUN_ISOLATION_CHECK=1
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -66,7 +71,8 @@ while [ $# -gt 0 ]; do
     --data-selftest) RUN_DATA_CHECK=1; RUN_DATA_SELFTEST=1; shift ;;
     --skip-coverage-selftest) RUN_COVERAGE_SELFTEST=0; shift ;;
     --skip-worker-selftest)  RUN_WORKER_SELFTEST=0; shift ;;
-    -h|--help)   sed -n '2,32p' "$0"; exit 0 ;;
+    --skip-isolation)         RUN_ISOLATION_CHECK=0; shift ;;
+    -h|--help)   sed -n '2,40p' "$0"; exit 0 ;;
     *) die "未知参数：$1" ;;
   esac
 done
@@ -655,4 +661,75 @@ if command -v bash >/dev/null 2>&1; then
   bash "${PROJECT_ROOT}/infra/scripts/check-pending-migrations-selftest.sh"
 else
   warn "未找到 bash，跳过迁移一致性对账"
+fi
+
+# --- 23. 小程序端单元测试 + 展示层静态校验 -----------------------------------
+# 缺陷 #154：客户真机截图暴露「页面顶部全是裸文字 / 图标位置空白 /
+# 日期显示成 2026-01-08T08:00:00.000Z」。
+# 这三类缺陷有个共同点：**对接口、类型检查、单测全是静默的** ——
+# 没有任何既有校验层能发现它们，只有真机截图才看得到。
+#
+# 这一步分两块：
+#   a) **单元测试**：展示层格式化（utils/format.ts）与展示模型（utils/view.ts）
+#      的行为断言 —— 例如「昨天」必须按**日历日**判定，
+#      跨零点时不能误标成「N小时前」；
+#   b) **静态校验**：第 19/20/21 层
+#      —— 类名有样式 / 无原始时间戳渲染 / 图片资源引用有效且无单字占位图标，
+#      三者各自带反向验证（注入缺陷必须被抓出）。
+#
+# 注意：在**宿主机**上跑，而不是在 api 容器里 ——
+# 容器里的 /app/apps/miniprogram 来自镜像构建，镜像没重建就是旧代码，
+# 测了等于没测。宿主机这份是 rsync 刚同步下来的当前源码。
+if command -v node >/dev/null 2>&1; then
+  MP_JEST="${PROJECT_ROOT}/apps/api/node_modules/.bin/jest"
+  if [ -x "$MP_JEST" ]; then
+    log "运行小程序端单元测试（展示层格式化与展示模型）……"
+    set +e
+    (cd "${PROJECT_ROOT}/apps/miniprogram" && "$MP_JEST" --config jest.config.js --runInBand)
+    MP_UNIT_RC=$?
+    set -e
+    [ "$MP_UNIT_RC" -eq 0 ] || die "小程序端单元测试失败（退出码 ${MP_UNIT_RC}）"
+    log "小程序端单元测试通过 ✅"
+  else
+    warn "未找到 ${MP_JEST}，跳过小程序端单元测试（宿主机需执行过 pnpm install）"
+  fi
+
+  for LAYER in check-miniprogram-styles check-miniprogram-dates check-miniprogram-assets; do
+    CHECKER="${PROJECT_ROOT}/infra/scripts/${LAYER}.mjs"
+    if [ -f "$CHECKER" ]; then
+      log "运行展示层静态校验（${LAYER}）……"
+      set +e
+      node "$CHECKER" "${PROJECT_ROOT}/apps/miniprogram/src"
+      RC=$?
+      set -e
+      [ "$RC" -eq 0 ] || die "展示层静态校验失败（${LAYER}，退出码 ${RC}）"
+
+      log "运行 ${LAYER} 校验器反向验证……"
+      bash "${PROJECT_ROOT}/infra/scripts/${LAYER}-selftest.sh"
+    else
+      warn "未找到 ${CHECKER}，跳过该展示层校验"
+    fi
+  done
+else
+  warn "未找到 node，跳过小程序端单元测试与展示层静态校验"
+fi
+
+# --- 24. 集成测试隔离性自检（每个套件单独跑必须绿）---------------------------
+# 缺陷 #158：`admin_user_roles` 是**保留表**（resetDatabase 不清），
+# 而 `admin-test` 被十几个套件共用 → 它的角色会**跨套件累积**。
+# 于是某个套件若没显式授予自己需要的权限，能不能拿到就**取决于 jest 的执行顺序**。
+# 现场：同一份代码，上一轮整链 295/295 全绿，下一轮同一个用例就红了。
+#
+# 这一步问的是「**每个套件自己跑绿吗**」——
+# 「整链绿」只证明某种执行顺序下没问题，而顺序是**环境产物**（容器重建即失效）。
+if [ "$RUN_ISOLATION_CHECK" -eq 1 ]; then
+  log "运行集成测试隔离性自检（每个套件单独跑必须绿）……"
+  set +e
+  bash "${PROJECT_ROOT}/infra/scripts/check-test-isolation.sh"
+  ISOLATION_RC=$?
+  set -e
+  [ "$ISOLATION_RC" -eq 0 ] || die "集成测试隔离性自检失败（退出码 ${ISOLATION_RC}）：有套件单独跑会红（依赖了别的套件的残留状态）"
+  log "集成测试隔离性自检通过 ✅"
+else
+  warn "按参数跳过集成测试隔离性自检"
 fi

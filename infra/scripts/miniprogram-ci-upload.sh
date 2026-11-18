@@ -304,6 +304,37 @@ else
   warn "找不到 check-miniprogram-imports.mjs，跳过源码层校验（不推荐）"
 fi
 
+# --- 4.7 上传前「展示层」校验：类名有样式 / 无原始时间戳 / 图标资源有效 -------
+#   这一组校验针对的是**看起来完全正常**、但真机上很明显的缺陷：
+#     - 类名没有对应 WXSS → 页面顶部全是裸文字（缺陷 #154 的一部分）；
+#     - WXML 直接渲染 `xxxAt` → 页面显示 `2026-01-08T08:00:00.000Z`；
+#     - 图片路径失效 / 用汉字冒充图标 → 图标位置一片空白。
+#   它们对接口、类型、单测**全是静默的**，只有真机截图才看得到，
+#   所以必须在上传前这一道关口拦住。
+if [ -f "${SCRIPT_DIR}/check-miniprogram-styles.mjs" ]; then
+  log "=== 上传前展示校验：类名必须有对应样式 ==="
+  node "${SCRIPT_DIR}/check-miniprogram-styles.mjs" "${PROJECT_DIR}/src" \
+    || die "有类名没有对应的 WXSS 定义 —— 页面上会显示成裸文字，已中止上传"
+else
+  warn "找不到 check-miniprogram-styles.mjs，跳过类名对账（不推荐）"
+fi
+
+if [ -f "${SCRIPT_DIR}/check-miniprogram-dates.mjs" ]; then
+  log "=== 上传前展示校验：不得直接渲染原始时间戳 ==="
+  node "${SCRIPT_DIR}/check-miniprogram-dates.mjs" "${PROJECT_DIR}/src" \
+    || die "有 WXML 直接渲染了原始时间戳字段 —— 页面上会显示 ISO 串，已中止上传"
+else
+  warn "找不到 check-miniprogram-dates.mjs，跳过时间戳对账（不推荐）"
+fi
+
+if [ -f "${SCRIPT_DIR}/check-miniprogram-assets.mjs" ]; then
+  log "=== 上传前展示校验：图片资源引用必须有效 ==="
+  node "${SCRIPT_DIR}/check-miniprogram-assets.mjs" "${PROJECT_DIR}/src" \
+    || die "有失效的图片引用或单字占位图标 —— 真机上图标会空白，已中止上传"
+else
+  warn "找不到 check-miniprogram-assets.mjs，跳过资产对账（不推荐）"
+fi
+
 if [ -f "${SCRIPT_DIR}/miniprogram-compile-check.mjs" ]; then
   AUDIT_ARGS=("${PROJECT_DIR}")
   [ -n "$API_BASE_URL_OVERRIDE" ] && AUDIT_ARGS+=(--expect-api-base "$API_BASE_URL_OVERRIDE")
