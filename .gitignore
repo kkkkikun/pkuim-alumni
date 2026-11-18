@@ -49,6 +49,9 @@ miniprogram_npm/
 .miniprogram-ci/
 project.private.config.json
 apps/miniprogram/src/demo/dataset.data.ts.tmp
+# 预览二维码：每次上传都会变（可用 release-miniprogram-preview.sh 重新生成），
+# 不属于源码，进版本库只会让人误以为它长期有效。
+docs/preview/
 
 # --- 编辑器 / 操作系统 -----------------------------------------------------
 .DS_Store
