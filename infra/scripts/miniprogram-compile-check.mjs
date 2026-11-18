@@ -29,9 +29,9 @@
  *    这里用 createRequire 从 MINIPROGRAM_CI_DIR 加载。
  */
 import { createRequire } from 'node:module';
-import { existsSync, writeFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, writeFileSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { resolve } from 'node:path';
+import { resolve, dirname } from 'node:path';
 
 const CI_DIR = process.env.MINIPROGRAM_CI_DIR || '/tmp/nmg-miniprogram-ci';
 const require = createRequire(resolve(CI_DIR, 'index.js'));
@@ -60,83 +60,113 @@ function log(...args) {
   if (!asJson) console.log(...args);
 }
 
-if (!existsSync(projectPath)) {
+const bundleDirIndexEarly = process.argv.indexOf('--bundle-dir');
+const hasBundleDir = bundleDirIndexEarly >= 0;
+if (!hasBundleDir && !existsSync(projectPath)) {
   console.error(`工程目录不存在：${projectPath}`);
   process.exit(1);
 }
 
-let ci;
-try {
-  ci = require('miniprogram-ci');
-} catch (err) {
-  console.error(
-    `加载 miniprogram-ci 失败（${CI_DIR}）。先安装：\n` +
-      `  mkdir -p ${CI_DIR} && cd ${CI_DIR} && npm init -y && ` +
-      `npm install --registry https://registry.npmmirror.com miniprogram-ci`
-  );
-  process.exit(1);
-}
-
-const { getCompiledResult } = require('miniprogram-ci/dist/ci/getCompiledResult');
-
-/**
- * 离线打桩：把「取项目属性」这一步的联网调用拦下来。
- *
- * `getProjectAttr` 的逻辑是：签名 → 请求微信接口 → 解析。
- * 我们只需要编译产物，不需要真的项目属性，
- * 所以：
- *   - 签名函数直接返回假签名（否则会在这里抛错，编译根本走不到）；
- *   - 请求函数直接返回 `{errCode: 0, data: DefaultProjectAttr}`。
- *
- * ⚠️ 这只是**本地编译自检**用的桩；真正的上传仍然走真实凭据。
- */
-const signMod = require('miniprogram-ci/dist/utils/sign');
-signMod.getSignature = async () => 'nmg-offline-compile-signature';
-const requestMod = require('miniprogram-ci/dist/utils/request');
-const { DefaultProjectAttr } = require('miniprogram-ci/dist/config/config');
-requestMod.request = async () => ({
-  body: JSON.stringify({ errCode: 0, errMsg: 'ok', data: DefaultProjectAttr }),
-});
-
-// 上传密钥只在「取项目属性」时才用得上；离线编译用不到，
-// 但 Project 构造器要求该路径存在 → 缺就临时生成一把一次性 RSA 密钥。
-const fakeKeyPath = process.env.MP_FAKE_KEY || resolve(tmpdir(), 'nmg-fake-compile.key');
-if (!existsSync(fakeKeyPath)) {
-  const { generateKeyPairSync } = await import('node:crypto');
-  const { privateKey } = generateKeyPairSync('rsa', {
-    modulusLength: 2048,
-    privateKeyEncoding: { type: 'pkcs1', format: 'pem' },
-    publicKeyEncoding: { type: 'spki', format: 'pem' },
-  });
-  writeFileSync(fakeKeyPath, privateKey, { mode: 0o600 });
-}
-
-const project = new ci.Project({
-  appid: 'wx0000000000000000',
-  type: 'miniProgram',
-  projectPath,
-  privateKeyPath: fakeKeyPath,
-  ignores: ['node_modules/**/*'],
-});
-
 const started = Date.now();
 let result;
-try {
-  result = await getCompiledResult(
-    {
-      project,
-      setting: { es6: true, enhance: true, minified: true, codeProtect: false },
-      onProgressUpdate: (info) => {
-        if (!asJson) process.stdout.write(`[compile] ${info}\n`);
+
+/**
+ * `--bundle-dir <目录>`：**跳过编译**，直接校验一份已经落盘的产物。
+ *
+ * 用途：反向验证（把已知有缺陷的产物喂给校验器，看它抓不抓得住）
+ * 与「产物长什么样」的取证，避免每次都重编译。
+ */
+const bundleDirIndex = process.argv.indexOf('--bundle-dir');
+const bundleDir = bundleDirIndex >= 0 ? process.argv[bundleDirIndex + 1] : null;
+
+if (bundleDir) {
+  if (!existsSync(bundleDir)) {
+    console.error(`产物目录不存在：${bundleDir}`);
+    process.exit(1);
+  }
+  result = {};
+  const walk = (dir, prefix) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = resolve(dir, entry.name);
+      const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) walk(full, rel);
+      else result[rel] = readFileSync(full);
+    }
+  };
+  walk(bundleDir, '');
+  if (!asJson) console.log(`[bundle] 直接校验产物目录：${bundleDir}（${Object.keys(result).length} 个文件）`);
+} else {
+  let ci;
+  try {
+    ci = require('miniprogram-ci');
+  } catch (err) {
+    console.error(
+      `加载 miniprogram-ci 失败（${CI_DIR}）。先安装：\n` +
+        `  mkdir -p ${CI_DIR} && cd ${CI_DIR} && npm init -y && ` +
+        `npm install --registry https://registry.npmmirror.com miniprogram-ci`
+    );
+    process.exit(1);
+  }
+
+  const { getCompiledResult } = require('miniprogram-ci/dist/ci/getCompiledResult');
+
+  /**
+   * 离线打桩：把「取项目属性」这一步的联网调用拦下来。
+   *
+   * `getProjectAttr` 的逻辑是：签名 → 请求微信接口 → 解析。
+   * 我们只需要编译产物，不需要真的项目属性，
+   * 所以：
+   *   - 签名函数直接返回假签名（否则会在这里抛错，编译根本走不到）；
+   *   - 请求函数直接返回 `{errCode: 0, data: DefaultProjectAttr}`。
+   *
+   * ⚠️ 这只是**本地编译自检**用的桩；真正的上传仍然走真实凭据。
+   */
+  const signMod = require('miniprogram-ci/dist/utils/sign');
+  signMod.getSignature = async () => 'nmg-offline-compile-signature';
+  const requestMod = require('miniprogram-ci/dist/utils/request');
+  const { DefaultProjectAttr } = require('miniprogram-ci/dist/config/config');
+  requestMod.request = async () => ({
+    body: JSON.stringify({ errCode: 0, errMsg: 'ok', data: DefaultProjectAttr }),
+  });
+
+  // 上传密钥只在「取项目属性」时才用得上；离线编译用不到，
+  // 但 Project 构造器要求该路径存在 → 缺就临时生成一把一次性 RSA 密钥。
+  const fakeKeyPath = process.env.MP_FAKE_KEY || resolve(tmpdir(), 'nmg-fake-compile.key');
+  if (!existsSync(fakeKeyPath)) {
+    const { generateKeyPairSync } = await import('node:crypto');
+    const { privateKey } = generateKeyPairSync('rsa', {
+      modulusLength: 2048,
+      privateKeyEncoding: { type: 'pkcs1', format: 'pem' },
+      publicKeyEncoding: { type: 'spki', format: 'pem' },
+    });
+    writeFileSync(fakeKeyPath, privateKey, { mode: 0o600 });
+  }
+
+  const project = new ci.Project({
+    appid: 'wx0000000000000000',
+    type: 'miniProgram',
+    projectPath,
+    privateKeyPath: fakeKeyPath,
+    ignores: ['node_modules/**/*'],
+  });
+
+  try {
+    result = await getCompiledResult(
+      {
+        project,
+        setting: { es6: true, enhance: true, minified: true, codeProtect: false },
+        onProgressUpdate: (info) => {
+          if (!asJson) process.stdout.write(`[compile] ${info}\n`);
+        },
       },
-    },
-    undefined
-  );
-} catch (err) {
-  const message = err && err.message ? err.message : String(err);
-  console.error('编译失败：' + message);
-  if (err && err.stack && !asJson) console.error(err.stack);
-  process.exit(1);
+      undefined
+    );
+  } catch (err) {
+    const message = err && err.message ? err.message : String(err);
+    console.error('编译失败：' + message);
+    if (err && err.stack && !asJson) console.error(err.stack);
+    process.exit(1);
+  }
 }
 
 const files = Object.keys(result || {});
@@ -222,6 +252,64 @@ try {
 const dropped = expectedJs.filter((f) => !files.includes(f));
 
 /**
+ * 断言五：产物里**每一条 require 都必须能在包内解析到**。
+ *
+ * ⚠️ 缺陷 #152（真实踩到，线上白屏）：
+ *   微信编译器的「ES6 转 ES5」会把 `async/await` 转成 generator，
+ *   于是入口链上出现了
+ *     require('@babel/runtime/helpers/regeneratorRuntime')
+ *     require('@babel/runtime/helpers/asyncToGenerator')
+ *   —— 这是 **npm 包**，而我们**从没做过「构建 npm」**，
+ *   包里根本没有 `@babel/runtime`。
+ *   → 真机上 app 入口 require 失败 → **整个应用起不来 → 白屏**
+ *   （自定义 tabBar 是框架级渲染的，所以还看得到底栏文字，
+ *     页面内容全空 —— 症状极具迷惑性）。
+ *
+ *   前面几条断言全都拦不住它：
+ *   R1 编译成功 ✅（编译器只是**生成**了这条 require）
+ *   R2 无残留 TS 语法 ✅
+ *   R3 源模块 1:1 入包 ✅（模块都在，是**包内依赖**缺失）
+ *
+ * 微信小程序的模块解析规则：
+ *   - 相对路径 → 原样 / `+.js` / `+/index.js` / `+.json`
+ *   - npm 包名 → 在 `miniprogram_npm/<包名>/` 下找（构建 npm 的产物）
+ */
+const bundleFileSet = new Set(files);
+function resolveInBundle(fromFile, spec) {
+  if (spec.startsWith('.')) {
+    const base = resolve('/' + dirname(fromFile), spec).slice(1);
+    for (const cand of [base, base + '.js', base + '/index.js', base + '.json']) {
+      if (bundleFileSet.has(cand)) return cand;
+    }
+    return null;
+  }
+  // npm 包：编译产物里对应 miniprogram_npm/<包名>/...
+  const pkg = spec.startsWith('@') ? spec.split('/').slice(0, 2).join('/') : spec.split('/')[0];
+  for (const cand of [
+    `${pkg}/${spec.slice(pkg.length + 1)}.js`,
+    `${pkg}/${spec.slice(pkg.length + 1)}/index.js`,
+    `${pkg}.js`,
+  ]) {
+    if (bundleFileSet.has(cand)) return cand;
+  }
+  return null;
+}
+const requireRe = /require\(\s*["']([^"']+)["']\s*\)/g;
+const unresolvedRequires = [];
+let requireCount = 0;
+for (const f of files) {
+  if (!f.endsWith('.js')) continue;
+  const text = result[f].toString('utf8');
+  let m;
+  while ((m = requireRe.exec(text))) {
+    requireCount++;
+    if (!resolveInBundle(f, m[1])) {
+      unresolvedRequires.push({ file: f, spec: m[1] });
+    }
+  }
+}
+
+/**
  * 断言四（可选，由 `--expect-*` 开启）：**产物里的运行配置**必须与本次发布期望一致。
  *
  * 为什么必须看产物、而不是看源码：
@@ -293,6 +381,8 @@ const summary = {
   tsLeaks: tsLeaks.length,
   demoMissing,
   droppedModules: dropped.length,
+  requireCount,
+  unresolvedRequires: unresolvedRequires.length,
   configChecks,
   configFailed: configFailed.length,
   elapsedMs: Date.now() - started,
@@ -306,6 +396,7 @@ if (asJson) {
   log(`产物文件数：${summary.files}（页面 ${summary.pages} 个，演示模块 ${summary.demoModules} 个）`);
   log(`产物体积：${(totalBytes / 1024).toFixed(1)} KB`);
   log(`源模块全部入包：${summary.droppedModules === 0 ? '是 ✅' : '否 ❌'}`);
+  log(`产物内 require 可解析：${summary.unresolvedRequires === 0 ? '全部可解析 ✅' : `有 ${summary.unresolvedRequires} 条解析不到 ❌`}（共 ${summary.requireCount} 条）`);
   for (const check of configChecks) {
     log(`产物配置 · ${check.name}：${check.ok ? '符合预期 ✅' : '不符合 ❌'}（期望 ${check.expected}）`);
   }
@@ -339,6 +430,23 @@ if (dropped.length) {
       `小程序包会因 module not found 直接崩）：\n  - ` +
       dropped.join('\n  - ')
   );
+  process.exit(1);
+}
+
+if (unresolvedRequires.length > 0) {
+  console.error(
+    `产物里有 ${unresolvedRequires.length} 条 require 解析不到目标` +
+      `（真机上会直接 module not found → 白屏）：`,
+  );
+  for (const item of unresolvedRequires.slice(0, 20)) {
+    console.error(`  - ${item.file} → require('${item.spec}')`);
+  }
+  console.error('');
+  console.error('常见原因：');
+  console.error('  ① 编译器把 async/await 转成了 generator，引用了 @babel/runtime ——');
+  console.error('     本项目**没有做「构建 npm」**，包里没有这个依赖；');
+  console.error('     解决办法见 docs/KNOWN-ISSUES.md #152。');
+  console.error('  ② 源码里有 require 了但没进包的模块（检查 ignoreUploadUnusedFiles）。');
   process.exit(1);
 }
 

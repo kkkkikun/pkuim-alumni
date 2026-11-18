@@ -289,6 +289,21 @@ log "miniprogram-ci：${CI_MODULE}"
 #     3) DATA_MODE 落在 demo → 全是假数据。
 #   所以这里在**注入之后、上传之前**离编译一次，
 #   直接在**产物**里找这些值 —— 找不到就不上传。
+#
+# --- 4.6 上传前「源码层」校验：禁止指向目录的 import（缺陷 #153）--------------
+#   微信运行时**不做「目录 → index.js」的回退**，
+#   `from '../../../services'` 在真机上就是
+#   `module 'services.js' is not defined` → 页面 JS 加载失败 → **白屏**。
+#   产物层的检查**查不出它**（文件在包里、Node 规则也能解析），
+#   必须在**源码层**查。
+if [ -f "${SCRIPT_DIR}/check-miniprogram-imports.mjs" ]; then
+  log "=== 上传前源码校验：禁止指向目录的 import ==="
+  node "${SCRIPT_DIR}/check-miniprogram-imports.mjs" "${PROJECT_DIR}/src" \
+    || die "源码里有指向目录的 import —— 微信运行时会直接白屏，已中止上传"
+else
+  warn "找不到 check-miniprogram-imports.mjs，跳过源码层校验（不推荐）"
+fi
+
 if [ -f "${SCRIPT_DIR}/miniprogram-compile-check.mjs" ]; then
   AUDIT_ARGS=("${PROJECT_DIR}")
   [ -n "$API_BASE_URL_OVERRIDE" ] && AUDIT_ARGS+=(--expect-api-base "$API_BASE_URL_OVERRIDE")
