@@ -2671,6 +2671,62 @@
   `docs/DEPLOY-PUBLIC-EDGE.md` / `apps/miniprogram/README.md`），
   并把「小程序 request 合法域名」列入「待验证 / 未完成」清单。
 
+### 152. 真机「打开一片空白、图标全无、只剩底栏文字」→ **微信运行时不支持「目录导入」**
+
+- **现象**：客户扫码打开体验版，**页面全白**，只有底部 tabBar 的文字出来，
+  **图标一个都没有**（tabBar 的图标是纯 CSS 画的，不是图片）。
+  极具迷惑性：底栏文字在（tabBar 组件**没有 import**，能正常加载），
+  页面内容全空（页面**有 import**，加载失败）。
+- **真凶**（客户提供的 vConsole 报错，直接指向答案）：
+  ```
+  MiniProgramError
+  module 'services.js' is not defined, require args is '../../../services'
+  Error: module 'services.js' is not defined, require args is '../../../services'
+      at require (pages/home/index/index.ts:1:1)
+      at <require(pages/home/index/index.js)>
+
+  MiniProgramError
+  module 'store.js' is not defined, require args is '../store'
+  ```
+  → **微信小程序的运行时不做「目录 → index.js」的回退**：
+  源码里 `import { ... } from '../../../services'`，
+  编译产物里就是 `require("../../../services")`，
+  运行时把它解析成模块 `services.js` —— **找不到**（包里明明有 `services/index.js`）。
+  → 页面 JS 加载失败 → **页面全白**。
+- **规模**：全工程 **130 处**目录导入（`services` 39 / `types` 58 / `store` 28 / `config` 5），
+  涉及 65 个文件。全部改成显式指向 index（`'../../../services/index'`）。
+- **为什么层层校验全都没拦住**（这才是重点）：
+  | 校验 | 结果 | 为什么漏 |
+  |---|---|---|
+  | 编译成功 | ✅ | 编译器照抄 import，**它自己也不做 index 回退** |
+  | 无残留 TS 语法 | ✅ | 产物是合法 JS |
+  | 源模块 1:1 入包 | ✅ | `services/index.js` **确实在包里** |
+  | 产物里每条 require 可解析（R5） | ✅ | R5 按 **Node 规则**判定 → 能解析 |
+  | `tsc --noEmit` | ✅ | TS 的模块解析**有** index 回退，所以类型检查也通过 |
+  → **每一层都用了各自的规则判定「合法」，唯独没人用「微信运行时的规则」判定过。**
+  产物层的检查**在原理上就查不出它**（文件在包里、Node 规则能解析），
+  必须**在源码层**按「微信运行时规则」查。
+- **修复与新增校验**：
+  1. 130 处目录导入全部改为 `'xxx/index'`；
+  2. **新增第 18 层校验** `infra/scripts/check-miniprogram-imports.mjs`：
+     源码里凡有指向目录的相对 import，一律判失败并给出正确写法；
+     已接入上传流程（`miniprogram-ci-upload.sh` 第 4.6 步），
+     **白屏这类问题从此不会漏到真机**；
+  3. 配套反向验证 `infra/scripts/check-miniprogram-imports-selftest.sh`
+     （注入一处目录导入 → 必须被判失败 + 点名 + 给出正确写法 + 元自检），
+     **实测 5/5 通过**。
+- ⚠️ **一次被推翻的判断（留档，避免后人重走）**：
+  我曾判定「编译产物引用了包外的 `@babel/runtime` → 真机 module not found → 白屏」。
+  逐字节核对后**不成立**：编译器会把这 26 个 helper **自动打进包里**，
+  `require('@babel/runtime/helpers/regeneratorRuntime')` 能正常解析。
+  —— 这个误判是被**反向验证**当场抓出来的
+  （注入缺陷后校验器本该失败却通过了 → 说明前提就是错的，回头一查前提确实错了）。
+  **教训**：拿到「符合现象的解释」不等于「找到根因」，
+  必须有一份**来自现场的证据**（这里是客户的 vConsole 报错）才能定案。
+- **顺带**：第 17 层校验（R5：产物里每条 require 都必须能在包内解析）
+  虽然**没能抓住这次的缺陷**（它按 Node 规则判定），
+  但它能抓住「包外 npm 依赖真的缺失」这类问题，保留。
+
 ## 待验证 / 未完成（不得声称已通过）> 以下均为**缺少外部资质或环境**导致的未验证项，与实现质量无关。
 > 已实测完成的项（冒烟 10/10、集成测试 39/39、k6 分级压测、备份恢复演练、管理后台构建）见 `docs/TEST-REPORT.md`。
 

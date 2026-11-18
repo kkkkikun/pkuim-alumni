@@ -3146,10 +3146,83 @@ Mock 登录与微信登录永远同时可用 → `POST /api/v1/auth/mock/login` 
 > 第二个不是「脚本 bug」而是**操作习惯**：rsync 的多文件目标必须是**目录**，
 > 目录一给，路径就塌成 basename。两次都踩到，已改为逐文件传完整路径 + 事后核对目录清单。
 
+### 2.51 真机白屏：微信运行时**不做「目录 → index.js」回退**（真根因）
+
+> 对应 `docs/KNOWN-ISSUES.md` #152。
+
+#### 2.51.1 现场证据（客户提供的 vConsole 报错）
+
+```
+MiniProgramError
+module 'services.js' is not defined, require args is '../../../services'
+    at require (pages/home/index/index.ts:1:1)
+    at <require(pages/home/index/index.js)>
+
+MiniProgramError
+module 'store.js' is not defined, require args is '../store'
+```
+
+现场表现：**页面全白、图标全无，只剩底部 tabBar 的文字**。
+
+#### 2.51.2 根因
+
+微信小程序的运行时**不做「目录 → index.js」的回退**：
+源码 `from '../../../services'` → 产物 `require("../../../services")`
+→ 运行时解析成模块 `services.js` → **找不到**（包里明明有 `services/index.js`）
+→ 页面 JS 加载失败 → 白屏。
+tabBar 组件**没有 import**，能正常加载 → 所以只剩它的文字（极具迷惑性）。
+
+**规模**：130 处目录导入（services 39 / types 58 / store 28 / config 5），涉及 65 个文件。
+
+#### 2.51.3 为什么 16 层校验全都没拦住
+
+| 校验 | 结果 | 原因 |
+|---|---|---|
+| 编译成功 | ✅ | 编译器照抄 import，**它自己也不做 index 回退** |
+| 无残留 TS 语法 | ✅ | 产物是合法 JS |
+| 源模块 1:1 入包 | ✅ | `services/index.js` **确实在包里** |
+| 产物内 require 可解析（第 17 层 R5） | ✅ | R5 按 **Node 规则**判定 → 能解析 |
+| `tsc --noEmit` | ✅ | **TS 规则有** index 回退 |
+| 43 页面 / 43 组件注册完整性 | ✅ | 都在包里 |
+
+> **每一层都按自己的规则判「合法」，唯独没人用「微信运行时的规则」判过。**
+> 产物层的检查**在原理上就查不出它**，必须在**源码层**查。
+
+#### 2.51.4 修复与新增校验
+
+1. 130 处目录导入 → 显式指向 index（`'../../../services/index'`）；
+2. **新增第 18 层校验** `infra/scripts/check-miniprogram-imports.mjs`
+   （源码层禁止指向目录的 import），接入上传流程第 4.6 步；
+   配套反向验证 `check-miniprogram-imports-selftest.sh` → **实测 5/5 通过**；
+3. **新增第 17 层校验的 R5**（产物内 require 可解析）
+   配套反向验证 `check-miniprogram-requires-selftest.sh` → **实测 4/4 通过**。
+
+#### 2.51.5 修复后的产物证据
+
+```
+产物里 pages/home/index/index.js 的第一行：
+  require("../../../services/index")     ← 不再是 "../../../services"
+```
+
+- 产物：263 文件（172 页面 / 6 演示模块） / 353.0 KB；
+- 产物内 361 条 require **全部可解析** ✅；
+- `tsc --noEmit` 退出码 0 ✅；
+- 第 18 层校验：81 个源文件、**0 处**目录导入 ✅；
+- 已上传 `0.3.0`（真实后端）/ `0.4.0`（离线演示）。
+
+#### 2.51.6 留档：一次被推翻的判断
+
+我曾判定「产物引用了包外的 `@babel/runtime` → 真机 module not found → 白屏」。
+逐字节核对后**不成立**：编译器会把这 26 个 helper **自动打进包里**，require 能正常解析。
+**是被反向验证当场抓出来的**（注入缺陷后校验器本该失败却通过了 → 前提就是错的）。
+
+> **教训**：拿到「符合现象的解释」不等于「找到根因」。
+> 必须有一份**来自现场的证据**（客户的 vConsole 报错）才能定案；
+> 静态推断出来的原因，只能算**假设**。
+
 ---
 
 ## 3. 管理后台构建
-
 ```bash
 pnpm --filter @nmg/admin-web build     # vue-tsc --noEmit + vite build
 ```
