@@ -2727,6 +2727,150 @@
   虽然**没能抓住这次的缺陷**（它按 Node 规则判定），
   但它能抓住「包外 npm 依赖真的缺失」这类问题，保留。
 
+### 154. 首页 32 个类**一个都没有样式** → 真机页面上半部分全是裸文字
+
+- **现象**：客户真机截图（`debug/qan/`）：白屏修好之后页面能显示了，
+  但**上半部分全是裸文字**（"心系燕园 · 情连北疆" / "校友资讯" / "以校友情谊为起点"…），
+  **下半部分的文章卡片却是有样式的**（白底圆角卡片、标签、日期、阅读数）。
+  客户反馈：「显示出来了，但细节没有 HTML 精致」。
+- **真凶**：首页 WXML 用了 **32 个类**（`.home` / `.hero*` / `.home-tabs` /
+  `.shortcut*` / `.notice-row` / `.section-heading` / `.state-wrap` /
+  `.loading-line` / `.error-tip` / `.notice-list` / `.empty-mini`），
+  而这些类**在所有 WXSS 里都没有定义**。
+  首页的 `index.wxss` 此前**只有 6 行**，且**没有 import 共享的 `styles/blocks.wxss`**。
+  → 真机上就是「文字按默认样式从上往下排」。
+- **为什么没被发现**：
+  - 页面能打开、数据能加载 → 数据层没问题；
+  - 底部文章卡片、tabBar **有样式**（它们是自定义组件，各带自己的 wxss）
+    → 一眼看过去「好像是有样式的」，只是上半截裸了；
+  - 没有任何校验在问「**这个类名有人管吗**」。
+- **修复**：
+  1. 重写 `apps/miniprogram/src/pages/home/index/index.wxss`（照 `prototype/html-v1/index.html` 移植，
+     px→rpx）：hero 渐变 + 装饰、页签下划线、焦点推荐条、快捷入口四色、公告条、
+     骨架屏、错误提示、空态；
+  2. `styles/blocks.wxss` 追加共享的 `.notice-list` / `.notice-item*` / `.empty-mini` / `.menu-title`；
+  3. `components/article-card` 补 `.article-views`、`components/opportunity-card` 补 `.op-author`；
+  4. `pages/me/notification-detail/index.wxss` 补整页 8 个 `.notify-detail*` 类
+     （该页此前只有一行 `@import`）。
+- **新增第 19 层校验** `infra/scripts/check-miniprogram-styles.mjs`：
+  WXML 里用到的每个类，必须在 `app.wxss` + 本页 wxss + `@import` 链里有定义；
+  动态类名（如 `icon-{{item.icon}}`）按前缀匹配。
+  配套反向验证 `check-miniprogram-styles-selftest.sh`（**实测 5/5 通过**）。
+
+### 155. 全项目**一张图片资源都没有** → 图标是 CSS 手绘和汉字占位，跟原型完全不像
+
+- **现象**：客户反馈「底部 tab栏 的『首页/通讯录/连接/我的』图标不太对，
+  顶部图片里面的塔楼简笔画也没有」。真机截图证实：
+  - tabBar 的 4 个图标是**用 CSS 伪元素手绘**的（`.icon-home::before` 是个三角形屋顶、
+    `.icon-users::after` 是个半圆）—— 原型是 Feather 风格**描边 SVG**，完全对不上；
+  - 首页快捷入口是**汉字占位**：`人` / `连` / `历` / `燕`；
+  - 「我的」页菜单是**汉字占位**：`名` / `历` / `连` / `知` / `发` / `隐` / `燕` / `设`；
+  - 通知类型图标是**汉字占位**：`认` / `连` / `审` / `活` / `通`；
+  - 隐私提示是**汉字占位**：`盾`；搜索框是 `搜`；
+  - 活动卡标记是**活动类型的首字**（`{{event.kind || '燕'}}`）；
+  - 原型的**塔楼线描插画**（首页 banner / 我的页 banner / 连接页网络图 / 焦点卡装饰）
+    在小程序里**完全缺失**，只有我自己用 CSS 渐变画的「同心圆 + 波纹」凑数。
+- **根因**：**WXSS 不支持 SVG data URI**（`background-image` 只认 png/jpg/gif/webp 的 base64），
+  而项目**从未引入任何图片资源**，也没有任何工具把原型的 SVG 变成小程序能用的 PNG。
+  → 结果就是：手绘 CSS 或直接拿汉字凑。
+- **修复**：
+  1. **新增资产生成器** `infra/scripts/generate-miniprogram-assets.py`：
+     **从 `prototype/html-v1/index.html` 现读现提取** `iconPaths`（31 个图标）
+     与 4 幅插画（`bannerArt` 塔楼群 / `meArt` 校园建筑 / `netArt` 校友网络 /
+     `miniArt` 焦点卡装饰），用 `cairosvg` 栅格化成 PNG。
+     **原型是唯一事实来源**（不在脚本里另抄一份 —— 抄一份就会漂移，而漂移是静默的）；
+     按原型 CSS 里的 `currentColor` 还原**每个位置各自的色调**
+     （快捷入口四色 / 菜单 `#c38f73` / 活动卡红与橄榄两色），共 **102 个 PNG、约 130 KB**；
+  2. tabBar 改为 `<image>`（选中/未选中两套色），删除 8 条 CSS 手绘规则；
+  3. 首页 / 我的页 / 连接页 / 通讯录 / 通知 / 账号页 / 活动卡的占位图标全部换成 SVG 栅格图；
+  4. 4 幅插画按原型的定位与透明度接回（`opacity: .45` / `.55` 等）。
+- **新增第 21 层校验** `infra/scripts/check-miniprogram-assets.mjs`：
+  1) WXML / WXSS / TS 里引用的每一个本地图片路径，**磁盘上必须真的存在**
+     （不存在 → 真机上是「图标位置一片空白」，不报任何错）；
+  2) **不允许再有「用单个汉字冒充图标」**的写法。
+  配套反向验证 `check-miniprogram-assets-selftest.sh`（**实测 7/7 通过**）。
+- **成本**：主包从 353 KB 涨到 **515 KB**（小程序主包上限 2 MB，余量充足）。
+
+### 156. 全项目 **20+ 处直接渲染原始 ISO 时间戳** → 页面显示 `2026-01-08T08:00:00.000Z`
+
+- **现象**：客户截图里文章卡片的日期是 `2026-01-08T08:00:00.000Z`，
+  底栏标签页、文章列表、公告列表、活动详情、连接申请、个人页……**到处都是**。
+- **根因**：**不是后端返回错了** —— DTO 里的时间字段本来就该是 ISO 串。
+  是**展示层没做格式化**：WXML 数据绑定只取值、**不能调用 JS 函数**，
+  于是直接把 DTO 丢给 WXML 就等于把原始串显示给用户。
+  而 `utils/format.ts` 里的 `formatDate` / `formatDateTime` **早就存在**，只是一直没人调用；
+  更糟的是有三个页面里**挂着从未被 WXML 调用的 `formatDate` / `formatDateTime` /
+  `formatNoticeDate` 方法**（死代码），让人以为「已经处理过了」。
+- **规模**：20 处渲染点，分布在 20 个页面 / 组件。
+- **修复**：
+  1. **新增展示模型层** `apps/miniprogram/src/utils/view.ts`：
+     `toArticleView` / `toNoticeView` / `toEventView` / `toOpportunityView` / `toRequestView`，
+     统一产出**已经格式化好的**展示字段（`dateText` / `timeText` / `updateText`）；
+  2. `utils/format.ts` 新增 `formatRelativeTime`（`刚刚` / `12分钟前` / `3小时前` /
+     `昨天 19:30` / `5天前` / 绝对日期）；
+  3. 全部 20 处改为绑定展示字段，并清掉三个死方法；
+  4. `me/notification-detail` 的 `createdAt` 字段改名 `createdText`（页面私有 data）。
+- **新增第 20 层校验** `infra/scripts/check-miniprogram-dates.mjs`：
+  WXML 里凡出现 `xxxAt` 这类**原始时间字段**的插值，一律判失败
+  （`dateText` / `timeText` 这类展示字段天然不误报）。
+  配套反向验证 `check-miniprogram-dates-selftest.sh`（**实测 5/5 通过**）。
+
+### 157. `formatRelativeTime` 的「昨天」按**时长**判定而非**日历日** → 跨零点会误标
+
+- **发现途径**：写 #156 的单元测试时，**测试先红了**（暴露的是我自己的预期写错，
+  但顺着查下去发现了实现里真有一个语义缺陷）。
+- **现象**：昨天 23:50 的事，在今天 03:00 打开时，
+  距今只有 **3 小时 10 分** —— 按「距今不足 48 小时就是昨天」的写法会显示
+  `昨天 23:50`（还算对），但昨天 23:50 → 今天 12:00 距今 36 小时，
+  同样会被标成「昨天」，而**按日历那已经是前天**。
+  跨零点的这段时间永远显示不对。
+- **修复**：改为**按本地日历日之差**分级：
+  今天之内 → `N小时前`；昨天 → `昨天 HH:mm`；2~6 天 → `N天前`；≥7 天 → 绝对日期。
+- **回归用例**（写在 `apps/miniprogram/test/format.spec.ts`）：
+  跨零点的昨天仍是「昨天」、前天显示「2天前」——
+  这两条在旧的时长判定下**会红**。
+
+### 158. `admin_user_roles` 是**保留表** → 集成测试的绿不绿**取决于 jest 的执行顺序**
+
+- **发现经过**：本轮跑完整回归链时，`http-status-semantics.e2e-spec.ts` 红了
+  （`PATCH /admin/users/:id/status` 期望 200，实得 **403**）。
+  而**上一轮同一套代码**（`git HEAD` 完全一致、api 镜像与仓库逐字节一致）
+  是 **42 套件 / 295 用例全绿** —— 同一份代码，一轮绿一轮红。
+- **真凶**：
+  - `resetDatabase()` 把 `admin_users` / `admin_user_roles` / `roles` /
+    `role_permissions` 列为**保留表**（只清「测试数据表」）；
+  - 而 `admin-test` 这个管理员账号被**十几个套件共用**，
+    每个套件都往它身上 `ensureAdmin()` 授不同的角色 →
+    **它的角色会跨套件、跨运行累积**；
+  - `http-status-semantics` 用的是 `admin-test` + 固定角色 `event_admin`，
+    而 `event_admin` 在 seed 里只有 `event:manage` + `audit:view` ——
+    **没有** `alumni:manage`；
+  - `PATCH /admin/users/:id/status` 的守卫是 `@RequirePermissions('alumni:manage')`
+    → 单独跑必然 403。
+  - 上一轮之所以绿，是因为**碰巧**有别的套件（`admin-account-management`）
+    先跑并把 `alumni_reviewer` 角色留给了 `admin-test`；
+    下一轮容器重建 → jest 的执行顺序缓存没了 → 顺序变了 → 就红了。
+- **为什么这么隐蔽**：
+  - 「整链绿」只证明**某种执行顺序下**没问题；
+  - jest 按**上一次运行的耗时缓存**排序，容器一重建缓存就清空 → 顺序不可复现；
+  - 失败信息只有一句 403，**没有任何提示**说「你的权限是别人留下的」。
+- **修复**：
+  `http-status-semantics.e2e-spec.ts` 改为**自带权限**：
+  照 `admin-account-management.e2e-spec.ts` 已有的正确范式 ——
+  **唯一账号 + 唯一角色 + 显式授予本套件需要的权限**（`event:manage` + `alumni:manage`），
+  并在 `afterAll` 清理自己创建的账号与角色
+  （`admin_users` / `roles` 是保留表，不清理会挤进别的套件的分页 ——
+  `admin-content` 的「第一页含 admin-test」假设就因此破过）。
+- **新增「集成测试隔离性自检」** `infra/scripts/check-test-isolation.sh`：
+  **每个套件单独跑都必须绿** —— 这才是「不依赖执行顺序」的可验证口径。
+  配套反向验证 `check-test-isolation-selftest.sh`
+  （在容器内把 `alumni:manage` 授权换成 `event:manage`，精确复现本缺陷原貌 →
+  必须被判红 → 还原后必须判绿）。
+- **教训**：
+  **「整链绿」不等于「测试是对的」。**
+  只要测试之间共享可变状态，绿不绿就取决于执行顺序 —— 而顺序是**环境产物**，不是代码属性。
+  真正该问的不是「整链绿了吗」，而是「**每个套件自己跑绿吗**」。
+
 ## 待验证 / 未完成（不得声称已通过）> 以下均为**缺少外部资质或环境**导致的未验证项，与实现质量无关。
 > 已实测完成的项（冒烟 10/10、集成测试 39/39、k6 分级压测、备份恢复演练、管理后台构建）见 `docs/TEST-REPORT.md`。
 
@@ -2734,7 +2878,7 @@
 |---|---|---|
 | 微信真实登录 | 小程序已注册（AppID `wx6761deb1125d858f`），凭据已接后端并经 `jscode2session` 验证被微信接受（返回 40029 = 凭据有效）；**但尚未在真机上跑过一次完整登录** | 客户扫码真机实测；建议体验期结束后切 `AUTH_MODE=wechat` |
 | 微信订阅消息 | 仅站内通知；Outbox 通道与 Worker 派发已就绪，模板适配未接 | 配置消息模板后接通 Worker 的 `wechat` 渠道 |
-| 小程序真机 / 开发者工具验证 | **已上传体验版**（版本 `0.1.0`，阿里云执行，出口 IP 已进代码上传白名单），预览二维码已出；**但没有微信客户端/开发者工具，未在真机上打开过** | 客户扫码实测（手机端需开「调试模式」跳过域名校验，见 #151） |
+| 小程序真机 / 开发者工具验证 | **已上传体验版**（版本 `0.5.0` 真后端 / `0.6.0` 离线演示，阿里云执行，出口 IP 已进代码上传白名单），预览二维码已出；客户**已在真机上打开过** —— 白屏已确认修复（#152），但**新版样式与图标（#154/#155/#156）尚未在真机复验** | 客户扫码复验新版界面；设体验版后客户直接打开 |
 | 小程序 request 合法域名 | 当前后端入口是 `http://8.160.116.34:18080`（**IP + HTTP**），微信**强制**要求合法域名为 **HTTPS + 已备案域名**，且**不能用 IP** → 正常模式打开体验版会请求失败 | ① 体验期：手机开「调试模式」；② 正式发布：买域名 → ICP 备案 → Caddy 自动签证书 → 配置 request 合法域名 |
 | 正式域名与 HTTPS 证书 | 私网环境用 nginx 明文回环；服务器上的 `*.dpdns.org` 是免费动态域名（他人域名的子域），**无法 ICP 备案**，不能用作小程序合法域名 | 买自有域名并备案后接入 Caddy |
 | 对象存储托管服务（OSS/COS） | 当前用自建 MinIO | 切换 `MINIO_*` 环境变量即可，接口不变 |
