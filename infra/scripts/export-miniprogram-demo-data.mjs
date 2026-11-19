@@ -8,14 +8,31 @@
  *    因此**不导出**，由 src/demo 侧按契约生成虚构条目。
  *  - 「我」的资料：取种子账号（mock_smoke-tester）的资料。
  *
+ * ⚠️ **内容净化层（缺陷 #159）**：
+ *   演示包是**发给客户看的**，而线上种子库里留着开发期的调试产物：
+ *     - 活动「调试校友沙龙」「FK修复验证活动」；
+ *     - 正文里的「仅用于联调与自动化测试」；
+ *     - 事件类型混着英文枚举 `charity/industry/reunion`（客户端图标匹配不上，
+ *       4 条活动会退化成同一个兜底日历图标）；
+ *     - 资源标题去掉编号后重复（客户看到 4 条一模一样的「绿色算力机房资源」）。
+ *   这些不违反任何契约，所以**任何既有校验层都发现不了**，只有人眼点一遍才看得见。
+ *   净化规则与补充内容集中放在 `infra/demo-content/demo-content.json`，
+ *   规则改动可 review、内容可复现，不散落在代码里。
+ *
  * 只读，不写业务数据；登录复用已有种子账号，不新建用户。
  */
-import { writeFileSync, mkdirSync, unlinkSync, existsSync } from 'node:fs';
+import { writeFileSync, mkdirSync, unlinkSync, existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const BASE = process.env.NMG_API_BASE || 'http://127.0.0.1:18090/api/v1';
 const OUT = resolve(
   process.argv[2] || 'apps/miniprogram/src/demo/dataset.data.ts'
+);
+/** 演示内容库（净化规则 + 补充内容） */
+const CONTENT_LIB = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  '../demo-content/demo-content.json'
 );
 
 async function call(method, path, { token, body } = {}) {
@@ -51,10 +68,79 @@ const [events, articles, categories, notices, resources, regions, industries, me
     call('GET', '/me', { token }),
   ]);
 
-const dataset = {
-  __note:
-    '离线演示数据集：由线上 API 导出（真实公开内容），通讯录为虚构条目，由 src/demo 生成。',
-  __exportedAt: new Date().toISOString(),
+/**
+ * 净化 + 扩充（缺陷 #159）。
+ *
+ * 顺序很重要：
+ *   1. drop     —— 先剔除调试产物（按原始 id 判定，净化前最可靠）；
+ *   2. overrides—— 再按 id 覆盖标题/正文/类型（改写成体面的演示文案）；
+ *   3. extra    —— 最后并入补充条目；
+ *   4. 前缀兜底 —— 任何漏网的标题统一补「【虚构】」前缀；
+ *   5. 计数重算 —— 分类的 articleCount 必须与实际文章数一致。
+ */
+function applyContentLibrary(dataset, lib) {
+  const report = { dropped: [], overridden: 0, added: 0, prefixed: 0 };
+
+  // 1. drop
+  for (const [collection, ids] of Object.entries(lib.drop || {})) {
+    const dropSet = new Set(ids.map(Number));
+    const before = dataset[collection]?.length ?? 0;
+    dataset[collection] = (dataset[collection] || []).filter((item) => {
+      if (dropSet.has(Number(item.id))) {
+        report.dropped.push(`${collection}#${item.id}「${item.title}」`);
+        return false;
+      }
+      return true;
+    });
+    if ((dataset[collection]?.length ?? 0) !== before) {
+      console.log(`  · ${collection}: 剔除 ${before - dataset[collection].length} 条调试产物`);
+    }
+  }
+
+  // 2. overrides
+  for (const [collection, byId] of Object.entries(lib.overrides || {})) {
+    for (const item of dataset[collection] || []) {
+      const patch = byId[String(item.id)];
+      if (!patch) continue;
+      Object.assign(item, patch);
+      report.overridden += 1;
+    }
+  }
+
+  // 3. extra
+  for (const [collection, items] of Object.entries(lib.extra || {})) {
+    dataset[collection] = [...(dataset[collection] || []), ...items];
+    report.added += items.length;
+  }
+
+  // 4. 虚构标记兜底
+  for (const collection of ['events', 'articles', 'notices', 'resources']) {
+    for (const item of dataset[collection] || []) {
+      if (typeof item.title === 'string' && !item.title.startsWith('【虚构】')) {
+        item.title = `【虚构】${item.title}`;
+        report.prefixed += 1;
+      }
+    }
+  }
+
+  // 5. 分类计数重算
+  const categories = dataset.articleCategories || [];
+  if (categories.length > 0) {
+    const counts = new Map();
+    for (const article of dataset.articles || []) {
+      const key = String(article.categoryId ?? '');
+      counts.set(key, (counts.get(key) || 0) + 1);
+    }
+    for (const category of categories) {
+      category.articleCount = counts.get(String(category.id)) || 0;
+    }
+  }
+
+  return report;
+}
+
+const contentLib = JSON.parse(readFileSync(CONTENT_LIB, 'utf8'));
+const rawDataset = {
   events: events.items,
   articles: articles.items,
   articleCategories: categories,
@@ -67,6 +153,29 @@ const dataset = {
     alumniProfile: stripContactFields(me.alumniProfile),
     stage: me.stage,
   },
+};
+
+console.log('应用演示内容库（净化 + 扩充）……');
+const report = applyContentLibrary(rawDataset, contentLib);
+if (report.dropped.length > 0) {
+  console.log('  · 已剔除调试产物：', report.dropped.join('、'));
+}
+console.log(
+  `  · 覆盖 ${report.overridden} 条 / 补充 ${report.added} 条 / 补前缀 ${report.prefixed} 条`
+);
+
+const dataset = {
+  __note:
+    '离线演示数据集：由线上 API 导出后经「演示内容库」净化与扩充（infra/demo-content/demo-content.json）；通讯录为虚构条目，由 src/demo 生成。',
+  __exportedAt: new Date().toISOString(),
+  events: rawDataset.events,
+  articles: rawDataset.articles,
+  articleCategories: rawDataset.articleCategories,
+  notices: rawDataset.notices,
+  resources: rawDataset.resources,
+  regions: rawDataset.regions,
+  industries: rawDataset.industries,
+  me: rawDataset.me,
 };
 
 /**

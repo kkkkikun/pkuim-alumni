@@ -335,6 +335,14 @@ else
   warn "找不到 check-miniprogram-assets.mjs，跳过资产对账（不推荐）"
 fi
 
+if [ -f "${SCRIPT_DIR}/check-miniprogram-demo-content.mjs" ]; then
+  log "=== 上传前展示校验：演示内容卫生 ==="
+  node "${SCRIPT_DIR}/check-miniprogram-demo-content.mjs" "${PROJECT_DIR}/src" \
+    || die "演示数据里有内部调试残留 / 占位代号 / 内容单薄 —— 客户会直接看到，已中止上传"
+else
+  warn "找不到 check-miniprogram-demo-content.mjs，跳过演示内容卫生对账（不推荐）"
+fi
+
 if [ -f "${SCRIPT_DIR}/miniprogram-compile-check.mjs" ]; then
   AUDIT_ARGS=("${PROJECT_DIR}")
   [ -n "$API_BASE_URL_OVERRIDE" ] && AUDIT_ARGS+=(--expect-api-base "$API_BASE_URL_OVERRIDE")

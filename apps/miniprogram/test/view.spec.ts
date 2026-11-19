@@ -143,6 +143,35 @@ describe('eventArt（活动卡图标与色调）', () => {
   it('空 kind 也不会抛异常', () => {
     expect(eventArt('').iconPath).toBe('/assets/icons/event-calendar.png');
   });
+
+  // --- 缺陷 #159：线上库里的 kind 是自由文本，实际出现过英文枚举 -----------
+  // 旧实现只匹配中文关键词，英文值全部退化成兜底日历图标，
+  // 客户看到 4 张一模一样的活动图标。下面三条是**对照用例**：
+  // 它们证明英文枚举也各自归位，而不是全落到兜底。
+  it('英文枚举 industry → building + 橄榄（不是兜底日历）', () => {
+    expect(eventArt('industry')).toEqual({
+      iconPath: '/assets/icons/event-building-olive.png',
+      tone: 'olive',
+    });
+  });
+
+  it('英文枚举 reunion → users + 红（不是兜底日历）', () => {
+    expect(eventArt('reunion')).toEqual({
+      iconPath: '/assets/icons/event-users.png',
+      tone: 'red',
+    });
+  });
+
+  it('英文枚举 charity → calendar + 红（公益无专属图标，兜底正确）', () => {
+    expect(eventArt('charity')).toEqual({
+      iconPath: '/assets/icons/event-calendar.png',
+      tone: 'red',
+    });
+  });
+
+  it('英文枚举大小写不敏感（Industry 同样归位）', () => {
+    expect(eventArt('Industry').iconPath).toBe('/assets/icons/event-building-olive.png');
+  });
 });
 
 describe('toOpportunityView', () => {

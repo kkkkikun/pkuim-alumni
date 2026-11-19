@@ -73,12 +73,18 @@ export interface EventView extends EventDto {
  *   '北疆同行 · 校友交流沙龙'   → users   + red
  * 注意「企业/产业/参访」必须**先于**「交流」判断 ——
  * 原型第二条同时含「产业」与「交流」，判据顺序反了就会落到 users。
+ *
+ * ⚠️ 英文枚举兜底（缺陷 #159）：
+ *   `kind` 是自由文本，线上库里实际存在过 `charity` / `industry` / `reunion`
+ *   这类英文值。旧实现只匹配中文关键词 → 英文值一个都匹配不上，
+ *   **全部退化成同一个兜底日历图标** —— 客户看到 4 张一模一样的活动图标。
+ *   这里补上英文判据，让「图标没画好」这类问题不再依赖数据是否恰好是中文。
  */
 export function eventArt(kind: string): { iconPath: string; tone: string } {
-  if (/参访|企业|产业|开放日/.test(kind)) {
+  if (/参访|企业|产业|开放日|industry|enterprise/i.test(kind)) {
     return { iconPath: '/assets/icons/event-building-olive.png', tone: 'olive' };
   }
-  if (/交流|沙龙|分享/.test(kind)) {
+  if (/交流|沙龙|分享|reunion|salon|sharing/i.test(kind)) {
     return { iconPath: '/assets/icons/event-users.png', tone: 'red' };
   }
   return { iconPath: '/assets/icons/event-calendar.png', tone: 'red' };

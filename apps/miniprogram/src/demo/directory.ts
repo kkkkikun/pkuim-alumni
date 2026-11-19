@@ -41,20 +41,28 @@ interface DemoEntrySeed {
   connectionState: DirectoryEntry['connectionState'];
 }
 
-/** 12 条虚构校友的种子数据（全部为编造信息） */
+/**
+ * 12 条虚构校友的种子数据（全部为编造信息）
+ *
+ * ⚠️ 昵称为什么是「张同学」而不是「校友 A」（缺陷 #159）：
+ *   「校友 A」「校友 B」是**占位代号**，客户扫一眼就知道这批数据是随手填的，
+ *   观感上比真实感更糟。这里统一改成「姓 + 同学」这种一眼可辨、
+ *   但读起来体面的虚构称呼；学院用真实院系名（增强代入感），
+ *   单位仍是「某XX公司」这种明显的泛称 —— 两条线索合起来仍能看出是示例数据。
+ */
 const SEEDS: DemoEntrySeed[] = [
-  { id: 900001, name: '校友 A', org: '某科技公司', college: '示例学院', year: 2015, regionCode: 'HHS', industryCode: 'DIGI', direction: '产品研发', verified: true, connectionState: 'none' },
-  { id: 900002, name: '校友 B', org: '某能源集团', college: '示例学院', year: 2012, regionCode: 'BTS', industryCode: 'ENER', direction: '项目工程', verified: true, connectionState: 'none' },
-  { id: 900003, name: '张同学', org: '某农牧食品公司', college: '示例学院', year: 2018, regionCode: 'HLLS', industryCode: 'AGFO', direction: '品牌运营', verified: false, connectionState: 'none' },
-  { id: 900004, name: '校友 C', org: '某律师事务所', college: '示例学院', year: 2010, regionCode: 'HHS', industryCode: 'LFIN', direction: '合规咨询', verified: true, connectionState: 'pending_outgoing' },
-  { id: 900005, name: '校友 D', org: '某教育研究机构', college: '示例学院', year: 2016, regionCode: 'ORDS', industryCode: 'EDUR', direction: '教育研究', verified: true, connectionState: 'none' },
-  { id: 900006, name: '校友 E', org: '某实业集团', college: '示例学院', year: 2009, regionCode: 'HHS', industryCode: 'BIZM', direction: '经营管理', verified: true, connectionState: 'connected' },
-  { id: 900007, name: '李同学', org: '某文化传媒公司', college: '示例学院', year: 2019, regionCode: 'WLCS', industryCode: 'CULT', direction: '内容策划', verified: false, connectionState: 'none' },
-  { id: 900008, name: '校友 F', org: '某新能源公司', college: '示例学院', year: 2014, regionCode: 'CFS', industryCode: 'ENER', direction: '市场拓展', verified: true, connectionState: 'none' },
-  { id: 900009, name: '校友 G', org: '某建筑设计院', college: '示例学院', year: 2013, regionCode: 'TLS', industryCode: 'DIGI', direction: '城市规划', verified: true, connectionState: 'none' },
-  { id: 900010, name: '校友 H', org: '某食品加工厂', college: '示例学院', year: 2011, regionCode: 'BYNLS', industryCode: 'AGFO', direction: '生产管理', verified: false, connectionState: 'none' },
-  { id: 900011, name: '王同学', org: '某金融信息服务公司', college: '示例学院', year: 2017, regionCode: 'HHS', industryCode: 'LFIN', direction: '风控合规', verified: true, connectionState: 'none' },
-  { id: 900012, name: '校友 I', org: '某农业科技公司', college: '示例学院', year: 2020, regionCode: 'XAM', industryCode: 'AGFO', direction: '技术推广', verified: false, connectionState: 'none' },
+  { id: 900001, name: '张同学', org: '某科技公司', college: '计算机学院', year: 2015, regionCode: 'HHS', industryCode: 'DIGI', direction: '产品研发', verified: true, connectionState: 'none' },
+  { id: 900002, name: '李同学', org: '某能源集团', college: '工学院', year: 2012, regionCode: 'BTS', industryCode: 'ENER', direction: '项目工程', verified: true, connectionState: 'none' },
+  { id: 900003, name: '王同学', org: '某农牧食品公司', college: '经济管理学院', year: 2018, regionCode: 'HLLS', industryCode: 'AGFO', direction: '品牌运营', verified: false, connectionState: 'none' },
+  { id: 900004, name: '赵同学', org: '某律师事务所', college: '法学院', year: 2010, regionCode: 'HHS', industryCode: 'LFIN', direction: '合规咨询', verified: true, connectionState: 'pending_outgoing' },
+  { id: 900005, name: '刘同学', org: '某教育研究机构', college: '教育学院', year: 2016, regionCode: 'ORDS', industryCode: 'EDUR', direction: '教育研究', verified: true, connectionState: 'none' },
+  { id: 900006, name: '陈同学', org: '某实业集团', college: '光华管理学院', year: 2009, regionCode: 'HHS', industryCode: 'BIZM', direction: '经营管理', verified: true, connectionState: 'connected' },
+  { id: 900007, name: '孙同学', org: '某文化传媒公司', college: '艺术学院', year: 2019, regionCode: 'WLCS', industryCode: 'CULT', direction: '内容策划', verified: false, connectionState: 'none' },
+  { id: 900008, name: '周同学', org: '某新能源公司', college: '工学院', year: 2014, regionCode: 'CFS', industryCode: 'ENER', direction: '市场拓展', verified: true, connectionState: 'none' },
+  { id: 900009, name: '吴同学', org: '某建筑设计院', college: '建筑与城市规划学院', year: 2013, regionCode: 'TLS', industryCode: 'DIGI', direction: '城市规划', verified: true, connectionState: 'none' },
+  { id: 900010, name: '郑同学', org: '某食品加工厂', college: '食品与营养学院', year: 2011, regionCode: 'BYNLS', industryCode: 'AGFO', direction: '生产管理', verified: false, connectionState: 'none' },
+  { id: 900011, name: '冯同学', org: '某金融信息服务公司', college: '数学科学学院', year: 2017, regionCode: 'HHS', industryCode: 'LFIN', direction: '风控合规', verified: true, connectionState: 'none' },
+  { id: 900012, name: '褚同学', org: '某农业科技公司', college: '信息管理学院', year: 2020, regionCode: 'XAM', industryCode: 'AGFO', direction: '技术推广', verified: false, connectionState: 'none' },
 ];
 
 /** 虚构通讯录条目（12 条） */

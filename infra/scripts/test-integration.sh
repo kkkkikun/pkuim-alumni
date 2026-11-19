@@ -694,7 +694,7 @@ if command -v node >/dev/null 2>&1; then
     warn "未找到 ${MP_JEST}，跳过小程序端单元测试（宿主机需执行过 pnpm install）"
   fi
 
-  for LAYER in check-miniprogram-styles check-miniprogram-dates check-miniprogram-assets; do
+  for LAYER in check-miniprogram-styles check-miniprogram-dates check-miniprogram-assets check-miniprogram-demo-content; do
     CHECKER="${PROJECT_ROOT}/infra/scripts/${LAYER}.mjs"
     if [ -f "$CHECKER" ]; then
       log "运行展示层静态校验（${LAYER}）……"
