@@ -9,6 +9,7 @@ import { ListRequestsQueryDto } from '../connections/dto/connection.dto';
 import { EventsService } from '../events/events.service';
 import { NotificationService } from '../notifications/notification.service';
 import { ResourcesService } from '../resources/resources.service';
+import { MeSummaryService } from './me-summary.service';
 
 /**
  * 「我的」聚合路由：契约中 /me/** 下的业务子路由在此集中提供，
@@ -23,7 +24,23 @@ export class MeRoutesController {
     private readonly connectionsService: ConnectionsService,
     private readonly alumniService: AlumniVerificationService,
     private readonly notificationsService: NotificationService,
+    private readonly summaryService: MeSummaryService,
   ) {}
+
+  /**
+   * 「我的」首屏计数汇总（**一次请求**给出四个计数）。
+   *
+   * ⚠️ 第三轮：此前小程序「我的」页首屏要打 **5 个请求**
+   *    （`GET /me` + 4 个只为拿**数字**的列表请求）。
+   *    现在这四个数字由这一个接口给出，首屏从 5 个请求降到 **2 个**。
+   *
+   * ⚠️ 未读通知数**实时**取、**不缓存**（见 `MeSummaryService` 的说明）。
+   */
+  @Get('summary')
+  @ApiOperation({ summary: '我的首屏计数汇总' })
+  summary(@CurrentUser() user: RequestUser) {
+    return this.summaryService.summary(user.id);
+  }
 
   @Get('events')
   @ApiOperation({ summary: '我的活动报名记录' })

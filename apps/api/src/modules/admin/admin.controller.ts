@@ -14,7 +14,7 @@ import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository, In } from 'typeorm';
 import { RequestContextService } from '../../common/services/request-context.service';
-import { paginate } from '../../common/dto/pagination.dto';
+import { paginate, PaginationQueryDto } from '../../common/dto/pagination.dto';
 import {
   AdminActionLogQueryDto,
   AdminAlumniListQueryDto,
@@ -34,6 +34,7 @@ import {
   Permission,
   Role,
 } from '../../database/entities/admin.entity';
+import type { AdminPermission, AdminRole } from '@nmg/contracts';
 import { SystemSetting } from '../../database/entities/system.entity';
 import { ConnectionRequestHistory } from '../../database/entities/connection.entity';
 import { Event, EventRegistration } from '../../database/entities/event.entity';
@@ -343,8 +344,15 @@ export class AdminController {
 
   @Get('events/:id/registrations')
   @RequirePermissions('event:manage')
-  eventRegistrations(@Param('id', ParseIntPipe) id: number) {
-    return this.eventsService.registrationRoster(id);
+  @ApiOperation({ summary: '活动报名名单（分页）' })
+  eventRegistrations(
+    @Param('id', ParseIntPipe) id: number,
+    @Query() query: PaginationQueryDto,
+  ) {
+    // ⚠️ 第三轮：此前返回**全部**报名记录（裸数组、无上限）——
+    //    一个 1000 人活动的点名 = 1000 行全量返回。
+    //    现在与其它列表接口口径统一：`{items, meta}`。
+    return this.eventsService.registrationRoster(id, query.page, query.pageSize);
   }
 
   @Get('articles')
@@ -501,14 +509,56 @@ export class AdminController {
 
   @Get('roles')
   @RequirePermissions('admin:manage')
-  async adminRoles() {
-    return this.roles.find({ order: { id: 'ASC' } });
+  @ApiOperation({ summary: '角色目录（分页）' })
+  async adminRoles(@Query() query: PaginationQueryDto) {
+    // ⚠️ 第三轮：此前返回**全表**（裸数组、无上限）。现在统一为 `{items, meta}`。
+    const [rows, total] = await this.roles.findAndCount({
+      order: { id: 'ASC' },
+      skip: (query.page - 1) * query.pageSize,
+      take: query.pageSize,
+    });
+    return paginate(rows.map((row) => this.toRoleDto(row)), total, query.page, query.pageSize);
   }
 
   @Get('permissions')
   @RequirePermissions('admin:manage')
-  async adminPermissions() {
-    return this.permissions.find({ order: { id: 'ASC' } });
+  @ApiOperation({ summary: '权限点目录（分页）' })
+  async adminPermissions(@Query() query: PaginationQueryDto) {
+    // ⚠️ 第三轮：同上，此前是无上限的全表返回。
+    const [rows, total] = await this.permissions.findAndCount({
+      order: { id: 'ASC' },
+      skip: (query.page - 1) * query.pageSize,
+      take: query.pageSize,
+    });
+    return paginate(
+      rows.map((row) => ({
+        id: row.id,
+        code: row.code as AdminPermission,
+        name: row.name,
+        description: row.description,
+        createdAt: row.createdAt,
+      })),
+      total,
+      query.page,
+      query.pageSize,
+    );
+  }
+
+  /** 角色目录条目（契约 `AdminRoleDto`） */
+  private toRoleDto(row: Role): {
+    id: number;
+    code: AdminRole;
+    name: string;
+    description: string | null;
+    createdAt: Date;
+  } {
+    return {
+      id: row.id,
+      code: row.code as AdminRole,
+      name: row.name,
+      description: row.description,
+      createdAt: row.createdAt,
+    };
   }
 
   @Get('action-logs')
@@ -559,8 +609,25 @@ export class AdminController {
 
   @Get('settings')
   @RequirePermissions('settings:manage')
-  async listSettings() {
-    return this.settings.find({ order: { key: 'ASC' } });
+  @ApiOperation({ summary: '系统设置项（分页）' })
+  async listSettings(@Query() query: PaginationQueryDto) {
+    // ⚠️ 第三轮：此前返回**全表**（裸数组、无上限）。现在统一为 `{items, meta}`。
+    const [rows, total] = await this.settings.findAndCount({
+      order: { key: 'ASC' },
+      skip: (query.page - 1) * query.pageSize,
+      take: query.pageSize,
+    });
+    return paginate(
+      rows.map((row) => ({
+        key: row.key,
+        value: row.value,
+        description: row.description,
+        updatedAt: row.updatedAt,
+      })),
+      total,
+      query.page,
+      query.pageSize,
+    );
   }
 
   /**

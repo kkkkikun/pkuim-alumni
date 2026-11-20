@@ -1,7 +1,8 @@
 import type {
   AdminActionLogDto,
-  AdminPermission,
+  AdminPermissionDto,
   AdminRole,
+  AdminRoleDto,
   AdminStats,
   AdminUserDto,
   AlumniProfileDto,
@@ -31,6 +32,7 @@ import type {
 } from '@nmg/contracts';
 import { ApiPaths } from '@nmg/contracts';
 import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from './http';
+import { readPageResult } from './page-result';
 
 /* ------------------------------ 查询参数 ------------------------------ */
 
@@ -234,8 +236,21 @@ export function publishEvent(id: number, published: boolean): Promise<EventDto> 
   });
 }
 
-export function fetchEventRegistrations(id: number): Promise<EventRegistrationDto[]> {
-  return apiGet<EventRegistrationDto[]>(ApiPaths.adminEventRegistrations(id));
+/**
+ * 活动报名名单。
+ *
+ * ⚠️ 第三轮：该端点从「裸数组（**全部**报名记录）」改为 `{items, meta}` 分页结构 ——
+ *    一个 1000 人活动的点名此前是 1000 行全量返回。
+ */
+export async function fetchEventRegistrations(
+  id: number,
+  query: PagedQuery = {},
+): Promise<PageResult<EventRegistrationDto>> {
+  const raw = await apiGet<unknown>(ApiPaths.adminEventRegistrations(id), {
+    page: query.page,
+    pageSize: query.pageSize,
+  });
+  return readPageResult<EventRegistrationDto>(raw, ApiPaths.adminEventRegistrations(id));
 }
 
 /* ------------------------------ 内容管理 ------------------------------ */
@@ -315,12 +330,31 @@ export function updateAdminUser(id: number, body: UpdateAdminUserBody): Promise<
   return apiPatch<AdminUserDto>(ApiPaths.adminUserItem(id), body);
 }
 
-export function fetchRoles(): Promise<AdminRole[]> {
-  return apiGet<AdminRole[]>(ApiPaths.adminRoles);
+/**
+ * 角色目录。
+ *
+ * ⚠️ 第三轮：该端点从「裸数组（**全表**）」改为 `{items, meta}` 分页结构。
+ * 目录表很小，但仍必须有上限 —— 与其它列表接口口径统一。
+ */
+export async function fetchRoles(query: PagedQuery = {}): Promise<PageResult<AdminRoleDto>> {
+  const raw = await apiGet<unknown>(ApiPaths.adminRoles, {
+    page: query.page,
+    pageSize: query.pageSize,
+  });
+  return readPageResult<AdminRoleDto>(raw, ApiPaths.adminRoles);
 }
 
-export function fetchPermissions(): Promise<AdminPermission[]> {
-  return apiGet<AdminPermission[]>(ApiPaths.adminPermissions);
+/**
+ * 权限点目录（同上：第三轮起为分页结构）。
+ */
+export async function fetchPermissions(
+  query: PagedQuery = {},
+): Promise<PageResult<AdminPermissionDto>> {
+  const raw = await apiGet<unknown>(ApiPaths.adminPermissions, {
+    page: query.page,
+    pageSize: query.pageSize,
+  });
+  return readPageResult<AdminPermissionDto>(raw, ApiPaths.adminPermissions);
 }
 
 export function fetchActionLogs(
@@ -329,8 +363,17 @@ export function fetchActionLogs(
   return apiGet<PageResult<AdminActionLogDto>>(ApiPaths.adminActionLogs, query);
 }
 
-export function fetchSettings(): Promise<SystemSettingDto[]> {
-  return apiGet<SystemSettingDto[]>(ApiPaths.adminSettings);
+/**
+ * 系统设置项列表。
+ *
+ * ⚠️ 第三轮：该端点从「裸数组（**全表**）」改为 `{items, meta}` 分页结构。
+ */
+export async function fetchSettings(query: PagedQuery = {}): Promise<PageResult<SystemSettingDto>> {
+  const raw = await apiGet<unknown>(ApiPaths.adminSettings, {
+    page: query.page,
+    pageSize: query.pageSize,
+  });
+  return readPageResult<SystemSettingDto>(raw, ApiPaths.adminSettings);
 }
 
 export function upsertSetting(body: UpsertSettingBody): Promise<SystemSettingDto> {

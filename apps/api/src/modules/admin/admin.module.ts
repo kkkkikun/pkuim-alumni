@@ -16,6 +16,10 @@ import { SystemSetting } from '../../database/entities/system.entity';
 import { User } from '../../database/entities/user.entity';
 import { VerificationApplication } from '../../database/entities/verification.entity';
 import { AlumniModule } from '../alumni/alumni.module';
+// ⚠️ 第三轮：`AdminUsersController` 要在「停用 / 降权」后**主动失效**该管理员的
+//    RBAC 缓存（口径见 docs/SECURITY.md 第 2.1 节），因此需要注入 `AuthService`
+//    —— `AuthModule` 导出它，所以这里必须 import 进来。
+import { AuthModule } from '../../auth/auth.module';
 import { ContentModule } from '../content/content.module';
 import { DirectoryModule } from '../directory/directory.module';
 import { EventsModule } from '../events/events.module';
@@ -44,6 +48,7 @@ import { AdminUsersController } from './admin-users.controller';
       Notice,
     ]),
     AlumniModule,
+    AuthModule,
     DirectoryModule,
     ResourcesModule,
     EventsModule,

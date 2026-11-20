@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { MessagePlugin } from 'tdesign-vue-next';
+import { MessagePlugin } from '@/plugins/tdesign';
 import { useAuthStore } from '@/stores/auth';
 import { errorMessage } from '@/api/http';
 import { mockEnabled } from '@/api/mock';

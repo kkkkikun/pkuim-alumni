@@ -12,8 +12,9 @@ import { InjectRepository } from '@nestjs/typeorm';
 import * as bcrypt from 'bcryptjs';
 import { randomUUID } from 'node:crypto';
 import { DataSource, Repository } from 'typeorm';
-import { ResponseCode } from '../common/constants';
+import { CacheKeys, ResponseCode } from '../common/constants';
 import type { RequestUser } from '../common/decorators';
+import { TtlCacheService } from '../common/services/ttl-cache.service';
 import { hashToken } from '../common/utils/crypto';
 import { parseDurationToSeconds } from '../common/utils/duration';
 import {
@@ -79,6 +80,20 @@ export interface AuthenticatedLoginResult {
 }
 
 /**
+ * 管理员身份的缓存条目（RBAC 缓存）。
+ *
+ * ⚠️ 只存**权限事实**，不存「这个请求是否被允许」——
+ *    每次请求仍然要走 `PermissionsGuard` 逐个权限点比对。
+ */
+interface AdminIdentityCacheEntry {
+  id: number;
+  username: string;
+  displayName: string;
+  roleCodes: string[];
+  permissions: string[];
+}
+
+/**
  * 认证失败（提供了凭据但凭据无效）。
  *
  * ⚠️ 缺陷 #110：此前这些失败一律抛普通 `UnauthorizedException`，
@@ -110,6 +125,7 @@ export class AuthService {
     private readonly sessions: SessionService,
     private readonly config: ConfigService,
     private readonly dataSource: DataSource,
+    private readonly cache: TtlCacheService,
     @Inject(MOCK_AUTH_PROVIDER) private readonly mockAuthProvider: AuthProvider,
     @Inject(WECHAT_AUTH_PROVIDER) private readonly wechatAuthProvider: AuthProvider,
   ) {}
@@ -386,23 +402,7 @@ export class AuthService {
     if (payload.typ !== 'access') return null;
 
     if (payload.kind === 'admin') {
-      const admin = await this.adminUsers.findOne({ where: { id: Number(payload.sub) } });
-      if (!admin || admin.status !== 'active') return null;
-      const roleRows = await this.adminUserRoles.find({
-        where: { adminUserId: admin.id },
-        relations: { role: true },
-      });
-      const roleCodes = roleRows.map((item) => item.role?.code ?? '').filter(Boolean);
-      const permissions = await this.resolvePermissions(roleCodes);
-      return {
-        id: admin.id,
-        openid: `admin:${admin.username}`,
-        nickname: admin.displayName,
-        role: roleCodes[0] ?? 'admin',
-        stage: 'verified',
-        isAdmin: true,
-        permissions,
-      };
+      return this.resolveAdminIdentity(Number(payload.sub));
     }
 
     const user = await this.users.findOne({ where: { id: Number(payload.sub) } });
@@ -416,6 +416,77 @@ export class AuthService {
       isAdmin: false,
       permissions: [],
     };
+  }
+
+  /**
+   * 解析管理员身份（**带进程内 TTL 缓存**）。
+   *
+   * ⚠️ 第三轮：此前每个管理端请求都要重算 4 条 SQL
+   *    （`admin_users` + `admin_user_roles` + `role_permissions`），
+   *    是管理端最大的单点开销。现在缓存「这个管理员有哪些角色 / 权限点」。
+   *
+   * 口径见 `docs/SECURITY.md` 第 2.1 节（先定口径、再写代码）：
+   *  - TTL **≤ 60 秒**（撤权延迟的上界；本进程内写操作会主动失效，延迟 0）；
+   *  - 缓存**只存「有哪些权限点」**这一事实，**不缓存「这个请求是否被允许」** ——
+   *    每个请求仍然要走 `PermissionsGuard` 逐个权限点比对；
+   *  - 停用 / 降权时**主动失效**（见 `invalidateAdminCache`）。
+   */
+  private async resolveAdminIdentity(adminId: number): Promise<RequestUser | null> {
+    const cached = this.cache.get<AdminIdentityCacheEntry>(CacheKeys.adminRbac(adminId));
+    if (cached) {
+      // 缓存里只存「有效的管理员」；账号被停用会由写操作主动失效掉这条缓存。
+      return {
+        id: cached.id,
+        openid: `admin:${cached.username}`,
+        nickname: cached.displayName,
+        role: cached.roleCodes[0] ?? 'admin',
+        stage: 'verified',
+        isAdmin: true,
+        permissions: cached.permissions,
+      };
+    }
+
+    const admin = await this.adminUsers.findOne({ where: { id: adminId } });
+    if (!admin || admin.status !== 'active') return null;
+    const roleRows = await this.adminUserRoles.find({
+      where: { adminUserId: admin.id },
+      relations: { role: true },
+    });
+    const roleCodes = roleRows.map((item) => item.role?.code ?? '').filter(Boolean);
+    const permissions = await this.resolvePermissions(roleCodes);
+
+    this.cache.set(
+      CacheKeys.adminRbac(adminId),
+      {
+        id: admin.id,
+        username: admin.username,
+        displayName: admin.displayName,
+        roleCodes,
+        permissions,
+      },
+      this.cache.rbacTtlSeconds,
+    );
+
+    return {
+      id: admin.id,
+      openid: `admin:${admin.username}`,
+      nickname: admin.displayName,
+      role: roleCodes[0] ?? 'admin',
+      stage: 'verified',
+      isAdmin: true,
+      permissions,
+    };
+  }
+
+  /**
+   * **主动失效**某个管理员的 RBAC 缓存。
+   *
+   * 停用账号 / 改角色后立刻调用（写事务提交后）——
+   * 这样「降权后仍能操作」的窗口在本进程内是 **0**，
+   * TTL（≤30 秒）只是多实例部署下的兜底。
+   */
+  invalidateAdminCache(adminId: number): void {
+    this.cache.delete(CacheKeys.adminRbac(adminId));
   }
 
   /* ------------------------------ 内部方法 ------------------------------ */

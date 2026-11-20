@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue';
-import { MessagePlugin } from 'tdesign-vue-next';
+import { MessagePlugin } from '@/plugins/tdesign';
 import { uploadMedia } from '@/api/system';
 import AppIcon from './AppIcon.vue';
 

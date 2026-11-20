@@ -8,7 +8,9 @@ import {
   ApiPaths,
   type AdminActionLogDto,
   type AdminPermission,
+  type AdminPermissionDto,
   type AdminRole,
+  type AdminRoleDto,
   type AdminStats,
   type AdminUserDto,
   type AlumniProfileDto,
@@ -26,6 +28,10 @@ import {
   type UserStatus,
   type VerificationApplicationDto,
 } from '@nmg/contracts';
+// ⚠️ 从**无依赖**的纯常量模块引入 —— 从 `@/stores/auth` 引入会形成循环依赖
+//    （`stores/auth` → `api/auth` → `api/http` → `api/mock` → `stores/auth`），
+//    浏览器求值时撞 TDZ → 页面白屏。
+import { PERMISSION_LABELS, ROLE_LABELS } from '@/stores/role-labels';
 
 export const mockEnabled = import.meta.env.VITE_USE_MOCK === 'true';
 
@@ -281,6 +287,31 @@ const permissionCatalogue: AdminPermission[] = [
   'settings:manage',
 ];
 
+/**
+ * 角色目录条目（契约 `AdminRoleDto`）。
+ *
+ * ⚠️ 第三轮：`GET /admin/roles` 返回的是**目录整行**，不再是「代码字符串」；
+ *    演示数据也要跟真实接口同构，否则演示模式下页面照样是坏的。
+ */
+const roleRows: AdminRoleDto[] = roleCatalogue.map((code, index) => ({
+  id: index + 1,
+  code,
+  name: ROLE_LABELS[code] ?? code,
+  description: `${code} 角色`,
+  createdAt: '2026-01-01T00:00:00.000Z',
+}));
+
+/**
+ * 权限点目录条目（契约 `AdminPermissionDto`）。同上：整行，不是代码字符串。
+ */
+const permissionRows: AdminPermissionDto[] = permissionCatalogue.map((code, index) => ({
+  id: index + 1,
+  code,
+  name: PERMISSION_LABELS[code] ?? code,
+  description: `${code} 权限点`,
+  createdAt: '2026-01-01T00:00:00.000Z',
+}));
+
 /** 演示模式下的路径匹配：key = `${METHOD} ${path}` */
 export function mockRequest<T>(method: string, url: string, payload?: unknown): Promise<T> {
   const key = `${method.toUpperCase()} ${url}`;
@@ -328,11 +359,11 @@ function resolveMock<T>(
     case `GET ${ApiPaths.adminActionLogs}`:
       return page(actionLogs, payload as object) as unknown as T;
     case `GET ${ApiPaths.adminRoles}`:
-      return roleCatalogue as unknown as T;
+      return page(roleRows, payload as object) as unknown as T;
     case `GET ${ApiPaths.adminPermissions}`:
-      return permissionCatalogue as unknown as T;
+      return page(permissionRows, payload as object) as unknown as T;
     case `GET ${ApiPaths.adminSettings}`:
-      return settings as unknown as T;
+      return page(settings, payload as object) as unknown as T;
     case `GET ${ApiPaths.systemRegions}`:
       return regions as unknown as T;
     case `GET ${ApiPaths.systemIndustries}`:
@@ -368,7 +399,8 @@ function resolveMock<T>(
   }
   const registrationMatch = url.match(/^\/admin\/events\/(\d+)\/registrations$/);
   if (method === 'GET' && registrationMatch) {
-    return registrations as unknown as T;
+    // ⚠️ 第三轮：报名名单改为分页结构 `{items, meta}`。
+    return page(registrations, payload as object) as unknown as T;
   }
   const userStatusMatch = url.match(/^\/admin\/users\/(\d+)\/status$/);
   if (method === 'POST' && userStatusMatch) {

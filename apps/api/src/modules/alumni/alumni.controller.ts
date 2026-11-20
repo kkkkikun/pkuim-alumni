@@ -6,10 +6,12 @@ import {
   ParseIntPipe,
   Post,
   Put,
+  Query,
 } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CurrentUser, Public } from '../../common/decorators';
 import type { RequestUser } from '../../common/decorators';
+import { PaginationQueryDto } from '../../common/dto/pagination.dto';
 import { DirectoryService } from '../directory/directory.service';
 import { AlumniVerificationService } from './alumni.service';
 import { SubmitVerificationDto } from './dto/verification.dto';
@@ -68,9 +70,12 @@ export class AlumniController {
   // 注意路由顺序：`verification/mine` 必须注册在 `verification/:id` 之前，
   // 否则 "mine" 会被 :id 抢先匹配并被 ParseIntPipe 拒绝（400）。
   @Get('verification/mine')
-  @ApiOperation({ summary: '我的认证记录' })
-  mine(@CurrentUser() user: RequestUser) {
-    return this.alumniService.mine(user.id);
+  @ApiOperation({ summary: '我的认证记录（分页）' })
+  mine(@CurrentUser() user: RequestUser, @Query() query: PaginationQueryDto) {
+    // ⚠️ 第三轮：此前返回**全部**认证申请（裸数组、无上限）——
+    //    提交过多次认证的用户每次都要把整份历史拉下来。
+    //    现在与其它列表接口口径统一：`{items, meta}`。
+    return this.alumniService.minePaged(user.id, query.page, query.pageSize);
   }
 
   @Get('verification/:id')

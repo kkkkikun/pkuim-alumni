@@ -5,10 +5,12 @@ import { DataSource, EntityManager, Repository } from 'typeorm';
 
 import { CurrentUser, RequirePermissions } from '../../common/decorators';
 import type { RequestUser } from '../../common/decorators';
+import { AuthService } from '../../auth/auth.service';
 import { AdminUser, AdminUserRole, Role } from '../../database/entities/admin.entity';
 import { AdminActionLog } from '../../database/entities/admin.entity';
 import { User } from '../../database/entities/user.entity';
 import { RequestContextService } from '../../common/services/request-context.service';
+import { isDuplicateKeyError } from '../../common/utils/duplicate-key';
 import { ContentService } from '../content/content.service';
 import {
   CreateAdminUserBodyDto,
@@ -28,6 +30,7 @@ export class AdminUsersController {
     @InjectRepository(User) private readonly users: Repository<User>,
     private readonly dataSource: DataSource,
     private readonly contentService: ContentService,
+    private readonly authService: AuthService,
     private readonly requestContext: RequestContextService,
   ) {}
 
@@ -124,6 +127,15 @@ export class AdminUsersController {
       return { admin, appliedRoles };
     });
 
+    // ⚠️ **主动失效** RBAC 缓存（第三轮）：
+    //    停用 / 降权之后，本进程内的权限解析缓存立刻作废 ——
+    //    「降权后仍能操作」的窗口在本进程内是 **0**，
+    //    TTL（≤30 秒）只是**多实例部署**下的兜底。
+    //    口径见 docs/SECURITY.md 第 2.1 节。
+    if (body.status !== undefined || body.roles !== undefined) {
+      this.authService.invalidateAdminCache(id);
+    }
+
     return {
       id: admin.id,
       username: admin.username,
@@ -214,34 +226,110 @@ export class AdminUsersController {
     });
   }
 
+  /**
+   * 新建资讯分类（**管理端**）。
+   *
+   * ⚠️ 第三轮：此前这 4 个写端点（分类增删改 + 系统设置写入）**没有**写
+   *    `admin_action_logs` —— 而 `docs/SECURITY.md` 第 7 节把「审核、发布、
+   *    下架、账号状态」都列为必须留痕的关键操作。现在补齐：
+   *    业务写与审计写进**同一事务**（沿用缺陷 #134 的做法），
+   *    审计写失败时业务写一起回滚 —— 否则会出现
+   *    「内容已改但没有审计痕迹」（事后无法追溯）。
+   */
   @Post('articles/categories')
   @RequirePermissions('content:manage')
   @ApiOperation({ summary: '创建资讯分类' })
-  createCategory(
+  async createCategory(
+    @CurrentUser() actor: RequestUser,
     @Body() body: CreateCategoryBodyDto,
   ) {
-    return this.contentService.createCategory(body);
+    return this.dataSource.transaction(async (manager) => {
+      const result = await this.contentService.createCategory(body, manager);
+      await this.log(manager, actor, 'category.create', 'article_category', result.id, {
+        name: body.name,
+        slug: body.slug,
+      });
+      return result;
+    });
   }
 
+  /** 修改资讯分类（**管理端**，同事务写审计）。 */
   @Patch('articles/categories/:id')
   @RequirePermissions('content:manage')
-  updateCategory(
+  async updateCategory(
+    @CurrentUser() actor: RequestUser,
     @Param('id', ParseIntPipe) id: number,
     @Body() body: UpdateCategoryBodyDto,
   ) {
-    return this.contentService.updateCategory(id, body);
+    return this.dataSource.transaction(async (manager) => {
+      const result = await this.contentService.updateCategory(id, body, manager);
+      await this.log(manager, actor, 'category.update', 'article_category', id, {
+        name: body.name,
+        slug: body.slug,
+        sortOrder: body.sortOrder,
+      });
+      return result;
+    });
   }
 
+  /** 删除资讯分类（**管理端**，同事务写审计）。 */
   @Delete('articles/categories/:id')
   @RequirePermissions('content:manage')
-  deleteCategory(@Param('id', ParseIntPipe) id: number) {
-    return this.contentService.deleteCategory(id);
+  async deleteCategory(
+    @CurrentUser() actor: RequestUser,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
+    return this.dataSource.transaction(async (manager) => {
+      const result = await this.contentService.deleteCategory(id, manager);
+      await this.log(manager, actor, 'category.delete', 'article_category', id, {});
+      return result;
+    });
   }
 
+  /** 写入系统设置（**管理端**，同事务写审计）。 */
   @Put('settings')
   @RequirePermissions('settings:manage')
-  upsertSetting(@Body() body: UpsertSettingBodyDto) {
-    return this.contentService.upsertSetting(body);
+  async upsertSetting(
+    @CurrentUser() actor: RequestUser,
+    @Body() body: UpsertSettingBodyDto,
+  ) {
+    // ⚠️ **唯一键冲突时重试整个事务**（缺陷 #137）：
+    //    两个并发请求都读到「设置行不存在」→ 都去 INSERT → 后到的那个撞唯一键。
+    //    重来一次时是**新的快照**，能看到另一个事务刚提交的那一行 → 走「更新」分支。
+    //    ⚠️ 重试必须发生在**事务之外**：事务内的一致性读只看到事务开始时的快照，
+    //    在同一个事务里补救会看不见刚提交的行（详见 `ContentService.upsertSetting`）。
+    return this.withDuplicateKeyRetry(() =>
+      this.dataSource.transaction(async (manager) => {
+        const result = await this.contentService.upsertSetting(body, manager);
+        await this.log(manager, actor, 'setting.update', 'system_setting', 0, {
+          key: body.key,
+          // ⚠️ 不记 value：系统设置里可能放敏感配置（回调地址、密钥引用等），
+          // 审计日志是要长期留痕的表，不该成为泄密面。
+          description: body.description ?? null,
+        });
+        return result;
+      }),
+    );
+  }
+
+  /**
+   * 唯一键冲突时**重试整个事务**（最多 3 次）。
+   *
+   * 适用场景：「先查后插」的并发写（缺陷 #137）——
+   * 两个请求同时读到「行不存在」→ 都去 INSERT → 后到的撞唯一键。
+   * 重试时是新快照，能看到对方刚提交的行，于是走更新分支。
+   */
+  private async withDuplicateKeyRetry<T>(run: () => Promise<T>): Promise<T> {
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        return await run();
+      } catch (error) {
+        if (!isDuplicateKeyError(error) || attempt === maxAttempts) throw error;
+      }
+    }
+    // 理论上不可达（循环要么 return、要么 throw）
+    throw new Error('重试逻辑异常');
   }
 
   /**

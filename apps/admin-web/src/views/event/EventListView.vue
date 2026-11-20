@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import { MessagePlugin, DialogPlugin } from 'tdesign-vue-next';
+import { DialogPlugin, MessagePlugin } from '@/plugins/tdesign';
 import type {
   EventDto,
   EventRegistrationDto,
@@ -69,6 +69,11 @@ const rosterLoading = ref(false);
 const rosterError = ref<string | null>(null);
 const rosterTitle = ref('');
 const roster = ref<EventRegistrationDto[]>([]);
+/** 抽屉里当前打开的活动 id（翻页时要用它重新取数） */
+const rosterEventId = ref(0);
+const rosterPage = ref(1);
+const rosterPageSize = ref(20);
+const rosterTotal = ref(0);
 
 const debouncedSearch = debounce(() => {
   void list.search();
@@ -93,19 +98,48 @@ function capacityText(row: unknown): string {
   return `${item.registeredCount}/${item.capacity || '不限'}`;
 }
 
-async function openRoster(id: number, title: string): Promise<void> {
-  rosterVisible.value = true;
-  rosterTitle.value = title;
+/**
+ * 报名名单（分页）。
+ *
+ * ⚠️ 第三轮：该端点从「裸数组（**全部**报名记录）」改为 `{items, meta}` ——
+ *    一个 1000 人活动的点名此前是 1000 行全量返回。
+ */
+async function loadRoster(): Promise<void> {
   rosterLoading.value = true;
   rosterError.value = null;
-  roster.value = [];
   try {
-    roster.value = await fetchEventRegistrations(id);
+    const result = await fetchEventRegistrations(rosterEventId.value, {
+      page: rosterPage.value,
+      pageSize: rosterPageSize.value,
+    });
+    roster.value = result.items;
+    rosterTotal.value = result.meta.total;
   } catch (error) {
     rosterError.value = errorMessage(error);
   } finally {
     rosterLoading.value = false;
   }
+}
+
+async function openRoster(id: number, title: string): Promise<void> {
+  rosterVisible.value = true;
+  rosterTitle.value = title;
+  rosterEventId.value = id;
+  rosterPage.value = 1;
+  roster.value = [];
+  rosterTotal.value = 0;
+  await loadRoster();
+}
+
+async function changeRosterPage(page: number): Promise<void> {
+  rosterPage.value = page;
+  await loadRoster();
+}
+
+async function changeRosterPageSize(pageSize: number): Promise<void> {
+  rosterPageSize.value = pageSize;
+  rosterPage.value = 1;
+  await loadRoster();
 }
 
 async function togglePublish(row: unknown): Promise<void> {
@@ -236,7 +270,7 @@ function registrationLabel(status: string): string {
         empty-title="暂无报名记录"
       >
         <template #retry>
-          <t-button theme="default" variant="outline" @click="openRoster(0, rosterTitle)">重新加载</t-button>
+          <t-button theme="default" variant="outline" @click="loadRoster">重新加载</t-button>
         </template>
         <t-table
           :data="roster"
@@ -259,6 +293,13 @@ function registrationLabel(status: string): string {
           </template>
         </t-table>
       </StateBox>
+      <PagerBar
+        :page="rosterPage"
+        :page-size="rosterPageSize"
+        :total="rosterTotal"
+        @update:page="changeRosterPage"
+        @update:page-size="changeRosterPageSize"
+      />
     </t-drawer>
   </div>
 </template>

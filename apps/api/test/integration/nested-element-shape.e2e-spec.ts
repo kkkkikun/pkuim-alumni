@@ -329,7 +329,8 @@ describe('嵌套元素结构契约 (e2e)', () => {
       .set('Authorization', `Bearer ${token}`)
       .expect(200);
 
-    const registrations = response.body.data as Record<string, unknown>[];
+    const registrations = (response.body.data as { items: Record<string, unknown>[] }).items;
+    // ⚠️ 第三轮：报名名单从「裸数组」改为 `{items, meta}` 分页结构。
     expect(Array.isArray(registrations)).toBe(true);
     expect(registrations.length).toBe(1);
 

@@ -9,6 +9,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, DataSource, EntityManager, In, Repository } from 'typeorm';
 import { paginate } from '../../common/dto/pagination.dto';
 import { groupBy } from '../../common/utils/group-by';
+import { toBodyExcerpt } from '../../common/utils/excerpt';
 import type { PageResult } from '../../common/dto/pagination.dto';
 import {
   ResourcePost,
@@ -76,7 +77,14 @@ export class ResourcesService {
     private readonly notifications: NotificationService,
   ) {}
 
-  /** 公开列表：只有 published 状态可见。 */
+  /**
+   * 公开列表：只有 published 状态可见。
+   *
+   * ⚠️ 公开列表的 `body` 只返回**摘要**（前 200 字）——
+   *    `body` 列是 MEDIUMTEXT，`pageSize=100` 时单次响应可达数十 MB。
+   *    完整正文走 `GET /resources/:id`。
+   *    管理端列表与「我的发布」列表仍给全文（见 `toViews` 的 `excerpt` 参数）。
+   */
   async listPublic(params: {
     page: number;
     pageSize: number;
@@ -113,7 +121,7 @@ export class ResourcesService {
     qb.skip((params.page - 1) * params.pageSize).take(params.pageSize);
 
     const [entities, total] = await qb.getManyAndCount();
-    const views = await this.toViews(entities);
+    const views = await this.toViews(entities, true);
     return paginate(views, total, params.page, params.pageSize);
   }
 
@@ -429,8 +437,10 @@ export class ResourcesService {
    * ⚠️ 此前每行 3~4 条 SQL（作者 / 附件 / 审核记录 / 管理员名），
    *    列表接口逐行调用 → 每页 20 条就是 **80+ 条 SQL**，开销随页大小线性增长。
    *    现在改成 4 次批量查询（`In(...)`），查询数与页大小无关。
+   *
+   * ⚠️ `excerpt=true` 时 `body` 只返回**摘要**（公开列表用，见 `listPublic`）。
    */
-  private async toViews(posts: ResourcePost[]): Promise<ResourceView[]> {
+  private async toViews(posts: ResourcePost[], excerpt = false): Promise<ResourceView[]> {
     if (posts.length === 0) return [];
     const postIds = posts.map((item) => item.id);
     const authorIds = [...new Set(posts.map((item) => item.authorId))];
@@ -453,7 +463,7 @@ export class ResourcesService {
         authorName: author?.nickname ?? '校友',
         type: post.type,
         title: post.title,
-        body: post.body,
+        body: excerpt ? toBodyExcerpt(post.body) : post.body,
         industryCode: post.industryCode,
         industryName: post.industry?.name ?? null,
         regionCode: post.regionCode,

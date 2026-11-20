@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue';
-import { MessagePlugin } from 'tdesign-vue-next';
+import { MessagePlugin } from '@/plugins/tdesign';
 import type { SystemSettingDto } from '@nmg/contracts';
 import { fetchSettings, upsertSetting } from '@/api/admin';
 import { errorMessage } from '@/api/http';
@@ -22,7 +22,10 @@ async function load(): Promise<void> {
   loading.value = true;
   error.value = null;
   try {
-    settings.value = await fetchSettings();
+    // ⚠️ 第三轮：`GET /admin/settings` 改为分页结构（此前是无上限的全表返回）。
+    //    配置项表很小，这里一次取完（pageSize=100 是服务端上限）。
+    const page = await fetchSettings({ page: 1, pageSize: 100 });
+    settings.value = page.items;
     settings.value.forEach((item) => {
       draft[item.key] = item.value;
     });

@@ -73,6 +73,36 @@ export type AdminPermission =
   | 'audit:view'
   | 'settings:manage';
 
+/**
+ * 管理端**角色目录条目**（`GET /admin/roles` 的一行）。
+ *
+ * ⚠️ 与上面的 `AdminRole`（角色**代码**联合类型）不是一回事：
+ *    `AdminRole` 是「某个管理员拥有哪些角色」的**代码**投影（`AdminUserDto.roles`），
+ *    而这里是角色目录的**整行**（含 id / 名称 / 描述 / 创建时间）。
+ *    此前该端点直接返回数据库实体，契约却写成 `AdminRole[]` ——
+ *    契约比实现窄（见 docs/KNOWN-ISSUES.md #38 那一类漂移）。
+ *    第三轮起该端点改为 `{items, meta}`，这里把真实结构写清楚。
+ */
+export interface AdminRoleDto {
+  id: number;
+  code: AdminRole;
+  name: string;
+  description: string | null;
+  createdAt: string;
+}
+
+/**
+ * 管理端**权限点目录条目**（`GET /admin/permissions` 的一行）。
+ * 同上：与 `AdminPermission`（权限**代码**联合类型）不是一回事。
+ */
+export interface AdminPermissionDto {
+  id: number;
+  code: AdminPermission;
+  name: string;
+  description: string | null;
+  createdAt: string;
+}
+
 /* ------------------------------ 用户 ------------------------------ */
 
 export interface UserProfile {
