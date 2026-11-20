@@ -20,7 +20,8 @@ name: Agent dispatch
 
 on:
   push:
-    branches: [main]
+    # 本仓库的默认分支是 master；main 一并留着，两个名字都能触发下一轮派活。
+    branches: [main, master]
   schedule:
     - cron: '*/30 * * * *'
   workflow_dispatch:
