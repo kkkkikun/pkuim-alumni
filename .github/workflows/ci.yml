@@ -77,13 +77,23 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22.12'
-          cache: pnpm
 
+      # pnpm 必须在 setup-node 之后装：setup-node 的 cache: pnpm 要靠 PATH 上的
+      # pnpm 算缓存键，而 corepack 的 shim 是跟着当前 node 版本走的，
+      # 反过来装（先 corepack 后 setup-node）会让 shim 随 node 切换而失效。
       - name: Set up pnpm
         run: |
           corepack enable pnpm
           corepack prepare pnpm@11.7.0 --activate
           pnpm --version
+
+      - name: Cache the pnpm store
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4
+        with:
+          path: ~/.pnpm-store
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-store-${{ runner.os }}-
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
