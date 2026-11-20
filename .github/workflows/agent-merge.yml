@@ -21,6 +21,8 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  # 合并完成后要主动触发派活工作流（见文件末尾的说明），需要 actions: write。
+  actions: write
 
 concurrency:
   group: agent-merge-${{ github.event.workflow_run.head_branch }}
@@ -53,6 +55,7 @@ jobs:
               --json number -q '.[].number')
           fi
 
+          merged=0
           for number in $NUMBERS; do
             echo "候选 PR #$number"
 
@@ -92,4 +95,18 @@ jobs:
 
             echo "合并 #$number（$HEAD_REF，$CURRENT_SHA）"
             gh pr merge "$number" --repo "$REPO" --merge --match-head-commit "$CURRENT_SHA"
+            merged=1
           done
+
+          # 合并后主动派下一轮。
+          #
+          # 为什么必须显式触发：合并是用 GITHUB_TOKEN 推的，而 GitHub 明确规定
+          # 「由 GITHUB_TOKEN 触发的事件不会创建新的工作流运行」（避免工作流互相递归）。
+          # 所以「合并 → 派活」这一环靠 push 触发是断的，只能靠 30 分钟的 cron 兜底，
+          # 队列会白白停半小时。workflow_dispatch / repository_dispatch 是这条规则的例外 ——
+          # 用 GITHUB_TOKEN 显式触发它们照样会起新运行。
+          if [ "$merged" -eq 1 ]; then
+            echo "触发派活工作流，让 agent 接下一轮"
+            gh workflow run agent-dispatch.yml --repo "$REPO" || \
+              echo "派活触发失败（不影响本次合并，cron 会在 30 分钟内兜底）"
+          fi
