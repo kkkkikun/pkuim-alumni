@@ -31,6 +31,20 @@ BRIEF = """目标：把仓库已记录的安全与性能缺口一次性做完 �
 
 docs/KNOWN-ISSUES.md 中状态为未解决或待办的条目、docs/SELF-CHECK-AND-SCHEDULE.md 第二节问题清单里状态非 ✅ 的条目、docs/TEST-REPORT.md 里标红的项：能自行修复的一并做掉。
 
+三·一、本轮先做这件事：复核上一轮（opt-001）的产出
+
+上一轮已落地一批安全与性能改动（见 history 里 opt-001 的 result）。本轮**先复核**再继续：
+
+1. 上一轮的新增测试是否真的覆盖了它声称的防线？逐个核对断言是否会在防线被拆掉时失败
+   （负向验证），发现「删掉防护代码测试仍绿」的用例就补成真断言。
+2. 上一轮是否引入了新问题：新加的启动期校验会不会把合法的部署方式挡在门外、
+   限流口径调整后会不会误伤正常用户、CORS 收敛后前端跨域调用是否仍通。
+3. 上一轮遗漏的：对照 docs/SECURITY.md 第 3~8 节逐条划勾，标出**尚未落实**的条目，
+   本轮把它们做掉；确实需要人工的写进 docs/KNOWN-ISSUES.md 待办小节。
+4. 仓库原先没有 CI，本轮另有 .github/workflows/ci.yml（typecheck/lint/build/migrate/集成测试）。
+   本轮改动必须让 CI 全绿；小程序那两个 spec 仍无 runner，若本轮能给它们补上 runner
+   并接入 CI，是优先项。
+
 四、边界（不得越界）
 
 - 不得引入真实密钥、真实个人信息或真实客户数据；不得提交 .env 或任何凭据。
@@ -51,25 +65,74 @@ docs/KNOWN-ISSUES.md 中状态为未解决或待办的条目、docs/SELF-CHECK-A
 
 本轮结束时，仓库里不应再有可自行修复的安全或性能项。剩余确实需要人工动作、真实密钥、客户确认、备案或生产环境的项，逐条写进 docs/KNOWN-ISSUES.md 的待办小节，写明为什么本轮做不了、还需要谁做什么，**不得把这类项说成已完成**。
 
-七、提交与署名
+七、队列推进（每轮都要做，否则闭环断在这里）
+
+本仓库的派活队列是 `.agent/dispatch-queue.json`，结构是
+`{"current": {id, title, brief}, "history": [...]}`。**本轮 PR 里必须同时更新它**：
+
+1. 把本次任务（current）整条移进 `history`，字段写齐：`id`、`title`、`result`。
+   `result` 用中文写清这轮实际做了什么、实测数字、以及哪些项因需要人工而留待后续，
+   **不要写成「已完成一切」**。
+2. 写新的 `current`：`id` 递增（本轮是 opt-002，下一轮就是 opt-003），
+   `title` 与 `brief` 要具体指明下一轮要做什么。
+3. 下一轮 brief 的产生方式：从上一轮的 `result` 出发，说明哪些已做、哪些还没做，
+   把「已记录缺口」里仍未落实的项按优先级排成下一轮的目标；**不要**泛泛写
+   「继续优化」这种没有指向的标题。
+4. 如果本轮发现仓库里已经没有可自行修复的安全或性能项，就把新的 `current`
+   写成一个明确的「复核与收尾」任务（例如：复核上一轮改动是否引入新缺陷、
+   把实测证据补齐），**不要**留下空队列 —— 队列空了自动派活就停了。
+
+队列文件与你的代码改动在同一个 PR 里提交即可。
+
+八、提交与署名
 
 - 提交身份：LL-ki <267322696+LL-ki@users.noreply.github.com>。
 - **禁止任何 Co-Authored-By trailer**，尤其不得出现 DeepSeek Harness、dsh-superagent、任何 bot、模型或 CI 账号。
 - 一个 PR 覆盖本轮全部改动；PR 描述写清改了什么、实测数字、以及哪些项留待人工。"""
 
+# 上一轮 opt-001 的实际产出（agent 开出的 PR #2）——写进 history，供下一轮接续。
+OPT_001_RESULT = (
+    "按 docs/SECURITY.md 第 3~8 节的承诺逐条落地，PR #2（分支 "
+    "agent/fix-security-perf-gaps-ec32085704e7，共 53 个文件、+2639/-189）："
+    "① 启动期配置校验：新增 src/config/config-validation.ts，生产环境下 JWT_SECRET"
+    "（≥32 字节、非占位值）、数据库口令、MinIO 密钥缺失或仍是仓库占位值，"
+    "CORS_ORIGINS=*，或 AUTH_MODE 未设/非法/mock 一律拒绝启动；"
+    "② CORS 收敛：新增 src/config/cors.ts，白名单外的 Origin 拿不到任何 CORS 响应头、"
+    "预检返回 403，生产态不放行通配符（此前是反射任意 Origin 且带凭据）；"
+    "③ 安全响应头：新增 src/common/middleware/security-headers.ts（应用层）并在 "
+    "infra/nginx/*.conf 补边缘层，此前 API 端口可绕过 Nginx 直连；"
+    "④ 限流口径：计数桶由「身份+路由处理器」改为「身份+接口类别」，并启用 TRUST_PROXY_HOPS，"
+    "此前 req.ip 恒为 Nginx 容器地址、所有匿名请求共用一个计数桶；"
+    "⑤ AUTH_MODE 非法取值改为 fail-closed；"
+    "⑥ 学号由服务端脱敏后落库（保留首尾各 2 位），后台按完整学号搜索仍能命中；"
+    "⑦ 证明材料只接受私有桶资产。新增集成测试 9 个（config-validation / security-hardening / "
+    "privacy-hardening / rate-limit / auth-mode / admin-account-management / "
+    "admin-audit-atomicity / http-status-semantics / query-efficiency）与小程序 "
+    "first-show 单测。**遗留**：仓库原先没有 CI，本轮另补 .github/workflows/ci.yml "
+    "（typecheck/lint/build/migrate/集成测试）；小程序那两个 spec 仍无 runner，未接入 CI。"
+)
+
 queue = {
     "current": {
-        "id": "opt-001",
-        "title": "安全与性能全面自查：按仓库已记录的缺口逐项修复，一轮做完所有可自行修复项",
+        "id": "opt-002",
+        "title": "第二轮：复核 opt-001 的产出并清掉剩余的安全与性能缺口（同时把队列推到下一轮）",
         "brief": BRIEF,
     },
-    "history": [],
+    "history": [
+        {
+            "id": "opt-001",
+            "title": "安全与性能全面自查：按仓库已记录的缺口逐项修复，一轮做完所有可自行修复项",
+            "result": OPT_001_RESULT,
+        }
+    ],
 }
 
 out = pathlib.Path(__file__).resolve().parent / "dispatch-queue.json"
 out.write_text(json.dumps(queue, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 check = json.loads(out.read_text(encoding="utf-8"))
-assert check["current"]["id"] == "opt-001"
+assert check["current"]["id"] == "opt-002"
+assert check["history"] and check["history"][0]["id"] == "opt-001"
 assert "@LL-ki" not in check["current"]["brief"], "brief 里不该出现 @LL-ki（会触发 agent 自我派活判定）"
+assert "队列推进" in check["current"]["brief"], "brief 必须写明队列推进要求，否则闭环会停在这里"
 print(f"已写入 {out}（{out.stat().st_size} 字节，brief {len(BRIEF)} 字）")
