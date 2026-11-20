@@ -124,26 +124,26 @@ jobs:
       # 对象存储用 docker 直接起，而不是 services:——
       # 官方 minio/minio 镜像的默认 CMD 不是「server /data」，services: 无法改命令，
       # 只能在步骤里显式 docker run；桶由应用启动时 makeBucket 自动创建。
-      # 对象存储改用**官方二进制**起（而不是 docker 镜像）：
-      #   GitHub 托管 runner 匿名拉 Docker Hub 镜像会撞拉取限额，
-      #   `docker run` 直接以退出码 125 结束（主干自己的 push 同样红在这一步）。
-      #   拉不到二进制时退回 docker 方式，两条路都失败才报错。
-      #   官方 minio/minio 镜像的默认 CMD 不是「server /data」，services: 也改不了命令，
-      #   所以只能显式起进程；桶由应用启动时 makeBucket 自动创建。
       - name: Start MinIO
         run: |
-          set -uo pipefail
-          mkdir -p /tmp/minio-data
-          if curl -fsSL --retry 3 -o /tmp/minio \
-            https://dl.min.io/server/minio/release/linux-amd64/minio; then
-            chmod +x /tmp/minio
-            nohup env MINIO_ROOT_USER="$MINIO_ACCESS_KEY" MINIO_ROOT_PASSWORD="$MINIO_SECRET_KEY" \
-              /tmp/minio server /tmp/minio-data --address ":9000" >/tmp/minio.log 2>&1 &
-          else
-            nohup docker run --rm --name ci-minio -p 9000:9000 \
+          # 依次尝试两个官方源：quay.io 是 MinIO 现在的官方发布地，
+          # Docker Hub 上的 minio/minio 对匿名拉取并不总是可用。
+          started=0
+          for image in quay.io/minio/minio:latest minio/minio:latest; do
+            if docker run -d --name ci-minio \
+              -p 9000:9000 \
               -e MINIO_ROOT_USER="$MINIO_ACCESS_KEY" \
               -e MINIO_ROOT_PASSWORD="$MINIO_SECRET_KEY" \
-              minio/minio:latest server /data >/tmp/minio.log 2>&1 &
+              "$image" server /data; then
+              started=1
+              break
+            fi
+            echo "拉取 $image 失败，换下一个源"
+            docker rm -f ci-minio >/dev/null 2>&1 || true
+          done
+          if [ "$started" -ne 1 ]; then
+            echo "MinIO 镜像拉取失败"
+            exit 1
           fi
           for attempt in $(seq 1 30); do
             if curl -sf http://127.0.0.1:9000/minio/health/live >/dev/null; then
@@ -153,7 +153,7 @@ jobs:
             sleep 2
           done
           echo "MinIO 启动超时"
-          cat /tmp/minio.log 2>/dev/null || true
+          docker logs ci-minio
           exit 1
 
       - name: Apply migrations to the test database
