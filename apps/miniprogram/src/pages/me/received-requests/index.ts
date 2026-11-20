@@ -10,6 +10,7 @@ import { connectionRequestStatusLabel } from '../../../utils/format';
 import { showSuccess } from '../../../utils/feedback';
 import { navigateTo } from '../../../utils/navigate';
 import { toRequestView } from '../../../utils/view';
+import { shouldRefreshOnShow } from '../../../utils/first-show';
 import type { RequestView as RequestViewModel } from '../../../utils/view';
 
 interface RequestView extends RequestViewModel {
@@ -39,7 +40,10 @@ Page({
   },
 
   onShow(): void {
-    void this.load();
+    // 首次进入时 onLoad 已经加载过，这里不再重复发请求；返回本页时才刷新。
+    if (shouldRefreshOnShow(this)) {
+      void this.load();
+    }
   },
 
   onPullDownRefresh(): void {

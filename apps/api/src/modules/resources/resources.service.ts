@@ -8,6 +8,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, DataSource, EntityManager, In, Repository } from 'typeorm';
 import { paginate } from '../../common/dto/pagination.dto';
+import { groupBy } from '../../common/utils/group-by';
 import type { PageResult } from '../../common/dto/pagination.dto';
 import {
   ResourcePost,
@@ -112,7 +113,7 @@ export class ResourcesService {
     qb.skip((params.page - 1) * params.pageSize).take(params.pageSize);
 
     const [entities, total] = await qb.getManyAndCount();
-    const views = await Promise.all(entities.map((post) => this.toView(post)));
+    const views = await this.toViews(entities);
     return paginate(views, total, params.page, params.pageSize);
   }
 
@@ -289,7 +290,7 @@ export class ResourcesService {
       .skip((page - 1) * pageSize)
       .take(pageSize);
     const [entities, total] = await qb.getManyAndCount();
-    const views = await Promise.all(entities.map((post) => this.toView(post)));
+    const views = await this.toViews(entities);
     return paginate(views, total, page, pageSize);
   }
 
@@ -324,7 +325,7 @@ export class ResourcesService {
     }
     qb.skip((params.page - 1) * params.pageSize).take(params.pageSize);
     const [entities, total] = await qb.getManyAndCount();
-    const views = await Promise.all(entities.map((post) => this.toView(post)));
+    const views = await this.toViews(entities);
     return paginate(views, total, params.page, params.pageSize);
   }
 
@@ -418,48 +419,69 @@ export class ResourcesService {
   }
 
   private async toView(post: ResourcePost): Promise<ResourceView> {
-    const [author, attachments, reviews] = await Promise.all([
-      this.users.findOne({ where: { id: post.authorId } }),
-      this.attachments.find({ where: { postId: post.id }, relations: { media: true } }),
-      this.reviews.find({ where: { postId: post.id }, order: { id: 'ASC' } }),
+    const [view] = await this.toViews([post]);
+    return view;
+  }
+
+  /**
+   * 批量装配视图（消除 N+1）。
+   *
+   * ⚠️ 此前每行 3~4 条 SQL（作者 / 附件 / 审核记录 / 管理员名），
+   *    列表接口逐行调用 → 每页 20 条就是 **80+ 条 SQL**，开销随页大小线性增长。
+   *    现在改成 4 次批量查询（`In(...)`），查询数与页大小无关。
+   */
+  private async toViews(posts: ResourcePost[]): Promise<ResourceView[]> {
+    if (posts.length === 0) return [];
+    const postIds = posts.map((item) => item.id);
+    const authorIds = [...new Set(posts.map((item) => item.authorId))];
+    const [authors, attachments, reviews] = await Promise.all([
+      this.users.find({ where: { id: In(authorIds) } }),
+      this.attachments.find({ where: { postId: In(postIds) }, relations: { media: true } }),
+      this.reviews.find({ where: { postId: In(postIds) }, order: { id: 'ASC' } }),
     ]);
     // 契约 ResourceReviewDto.adminName 为必填：后台审核记录直接渲染审核人姓名，
     // 之前服务端没带出管理员名称，该列恒为空。详见 KNOWN-ISSUES #61。
     const adminNames = await this.adminNames(reviews.map((item) => item.adminId));
-    return {
-      id: post.id,
-      authorId: post.authorId,
-      authorName: author?.nickname ?? '校友',
-      type: post.type,
-      title: post.title,
-      body: post.body,
-      industryCode: post.industryCode,
-      industryName: post.industry?.name ?? null,
-      regionCode: post.regionCode,
-      regionName: post.region?.name ?? null,
-      status: post.status,
-      version: post.version,
-      attachments: attachments.map((item) => ({
-        id: item.id,
-        mediaId: item.mediaId,
-        fileName: item.media?.fileName ?? '',
-        mimeType: item.media?.mimeType ?? '',
-        size: item.media?.size ?? 0,
-        uploadedAt: item.media?.createdAt ?? item.createdAt,
-      })),
-      reviews: reviews.map((item) => ({
-        id: item.id,
-        adminId: item.adminId,
-        adminName: adminNames.get(item.adminId) ?? '未知管理员',
-        action: item.action,
-        note: item.note,
-        snapshotVersion: item.snapshotVersion,
-        createdAt: item.createdAt,
-      })),
-      publishedAt: post.publishedAt,
-      createdAt: post.createdAt,
-      updatedAt: post.updatedAt,
-    };
+    const authorMap = new Map(authors.map((user) => [user.id, user]));
+    const attachmentsBy = groupBy(attachments, (item) => item.postId);
+    const reviewsBy = groupBy(reviews, (item) => item.postId);
+    return posts.map((post) => {
+      const author = authorMap.get(post.authorId);
+      return {
+        id: post.id,
+        authorId: post.authorId,
+        authorName: author?.nickname ?? '校友',
+        type: post.type,
+        title: post.title,
+        body: post.body,
+        industryCode: post.industryCode,
+        industryName: post.industry?.name ?? null,
+        regionCode: post.regionCode,
+        regionName: post.region?.name ?? null,
+        status: post.status,
+        version: post.version,
+        attachments: (attachmentsBy.get(post.id) ?? []).map((item) => ({
+          id: item.id,
+          mediaId: item.mediaId,
+          fileName: item.media?.fileName ?? '',
+          mimeType: item.media?.mimeType ?? '',
+          size: item.media?.size ?? 0,
+          uploadedAt: item.media?.createdAt ?? item.createdAt,
+        })),
+        reviews: (reviewsBy.get(post.id) ?? []).map((item) => ({
+          id: item.id,
+          adminId: item.adminId,
+          adminName: adminNames.get(item.adminId) ?? '未知管理员',
+          action: item.action,
+          note: item.note,
+          snapshotVersion: item.snapshotVersion,
+          createdAt: item.createdAt,
+        })),
+        publishedAt: post.publishedAt,
+        createdAt: post.createdAt,
+        updatedAt: post.updatedAt,
+      };
+    });
   }
 
   /** 批量取管理员名称（一次查询，避免 N+1） */

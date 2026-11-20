@@ -20,6 +20,8 @@ import { User, boolTransformer } from './user.entity';
 @Index('idx_alumni_profiles_region', ['regionCode'])
 @Index('idx_alumni_profiles_industry', ['industryCode'])
 @Index('idx_alumni_profiles_directory', ['showInDirectory', 'regionCode', 'industryCode'])
+// 通讯录按毕业年份筛选。
+@Index('idx_alumni_profiles_graduation_year', ['graduationYear'])
 @Entity({ name: 'alumni_profiles' })
 export class AlumniProfile {
   @PrimaryGeneratedColumn({ name: 'id', type: 'bigint', unsigned: true })

@@ -50,6 +50,13 @@ describe('HTTP 状态码的语义 (e2e)', () => {
     try {
       if (createdUsernames.length) {
         const placeholders = createdUsernames.map(() => '?').join(',');
+        // ⚠️ 审计日志的外键是 ON DELETE RESTRICT（审计记录只追加，不随账号删除而消失），
+        //    所以必须先删掉这些账号自己产生的审计记录，否则删账号会被数据库拒绝。
+        await dataSource.query(
+          `DELETE FROM admin_action_logs WHERE admin_id IN
+             (SELECT id FROM admin_users WHERE username IN (${placeholders}))`,
+          createdUsernames,
+        );
         await dataSource.query(
           `DELETE FROM admin_user_roles WHERE admin_user_id IN
              (SELECT id FROM admin_users WHERE username IN (${placeholders}))`,

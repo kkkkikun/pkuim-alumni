@@ -2871,6 +2871,166 @@
   只要测试之间共享可变状态，绿不绿就取决于执行顺序 —— 而顺序是**环境产物**，不是代码属性。
   真正该问的不是「整链绿了吗」，而是「**每个套件自己跑绿吗**」。
 
+### 159. CORS 反射**任意** Origin 且允许携带凭据（`origin: true` + `credentials: true`）
+
+- **现象**：`main.ts` 里是 `origin: cors === '*' ? true : ...` 且 `credentials: true`，
+  而 `CORS_ORIGINS` 的默认值就是 `'*'`。`origin: true` 的语义是「**回显请求里的任意 Origin**」，
+  叠加 `credentials: true` 之后，**任何第三方站点**都能带着用户凭据调用本接口并读到响应。
+  全仓**没有任何一条 CORS 用例**。
+- **影响面**：正式部署只要没显式配 `CORS_ORIGINS`，就处于「任意站点可带凭据读接口」的状态。
+- **处置**：新增 `src/config/cors.ts`（白名单精确匹配 + 子域通配 `*.example.com`），
+  以中间件形式挂载（`app.use`），**白名单外的 Origin 一个 CORS 头都不给**，预检返回 403；
+  `*` 只在非生产态可用且**不带凭据**；生产态 `*` 由启动期校验直接拒绝启动。
+- **验证**：`test/integration/security-hardening.e2e-spec.ts`（正向 + **负向**：白名单外无响应头、
+  生产态 `*` 不放行）。
+
+### 160. 没有启动期配置校验：占位密钥可以直接上线
+
+- **现象**：`JWT_SECRET` 的兜底值是仓库里的公开常量 `'change-me-to-a-long-random-string'`，
+  数据库口令兜底 `''`，MinIO 密钥兜底 `''` —— 照抄 `.env.example` 就能带着**公开可猜的密钥**启动，
+  任何人据此都能伪造任意用户（含管理员）的令牌。
+- **处置**：新增 `src/config/config-validation.ts`，由 `ConfigModule.forRoot({ validate })` 调用：
+  生产环境下 JWT_SECRET（≥32 字节、非占位值）、数据库口令、MinIO 密钥缺失或仍是占位值，
+  或 `CORS_ORIGINS` 为 `*`、`AUTH_MODE` 未设 / 非法 / 为 `mock` —— **拒绝启动**；
+  非生产态只打印提醒。仓库内**不含任何真实密钥**。
+- **验证**：`test/integration/config-validation.e2e-spec.ts`（9 例负向断言）。
+
+### 161. `AUTH_MODE` 非法取值 fail-open：拼错一个字母就重新打开 Mock 后门
+
+- **现象**：`authMode` getter 把任何无法识别的取值都当成 `both` ——
+  生产环境里把 `wechat` 写成 `wechats`，Mock 登录后门就**自动重新打开**，且没有任何报错。
+- **处置**：改为 **fail-closed**：非法取值一律按 `wechat` 处理（关闭 Mock 登录）并打错误日志；
+  生产环境未显式设置 `AUTH_MODE` 也拒绝启动。
+- **验证**：`test/integration/auth-mode.e2e-spec.ts` 新增「非法取值」一组（Mock 登录 403 且不建用户）。
+
+### 162. 限流按「路由处理器」分桶 + 没有 `trust proxy`：实际阈值被放大、且分不清攻击者
+
+- **现象**：
+  1. 计数 key 是 `ratelimit:{身份}:{路由处理器}:{窗口}`，而文档承诺的是「写接口 30 次/分钟」
+     —— 逐路由分桶意味着**每个**写端点各有 30 次/分钟，攻击者把请求摊到多个端点即可放大数倍；
+  2. 没有设置 `trust proxy`，Express 取到的 `req.ip` 是**Nginx 容器地址** ——
+     所有走 Nginx 的匿名请求（浏览、登录、直传登记）共用**同一个 IP 计数桶**，
+     限流实际变成「全站共享配额」，且无法区分攻击者。
+- **处置**：计数桶改为「身份 + 接口类别（auth / write / read）」，与 `docs/SECURITY.md` 第 6 节一致；
+  `main.ts` 按 `TRUST_PROXY_HOPS`（默认 1，API 端口只绑 127.0.0.1，仅 Nginx 可达）信任 1 跳代理。
+- **验证**：`test/integration/rate-limit.e2e-spec.ts`（写端点之间共享额度）。
+
+### 163. 学号「脱敏存储」只靠客户端自觉
+
+- **现象**：`student_id_masked` 字段名写着 masked，DTO 也只校验「4~32 字符的字符串」，
+  客户端提交**完整学号**时服务端原样落库 —— 明文学号进了数据库。
+- **处置**：新增 `src/common/utils/mask.ts`，由**服务端**统一脱敏（保留首尾各 2 位）；
+  后台按学号搜索时按同一规则脱敏后匹配，搜索能力不受影响。
+- **验证**：`test/integration/privacy-hardening.e2e-spec.ts`（负向：库里检索不到完整学号）。
+
+### 164. 证明材料可以被放进 **public 桶**
+
+- **现象**：上传登记的 `visibility` 完全由客户端决定，
+  `POST /uploads/records` 传 `visibility:'public'` 就能把身份证 / 学位证放进 public 桶 ——
+  那个桶里的对象**拿到地址就能下载**。
+- **处置**：认证申请引用证明材料时，服务端强制只接受**私有桶**资产，否则 400 且不写关联表。
+- **验证**：`test/integration/privacy-hardening.e2e-spec.ts`（负向）。
+
+### 165. 审计日志的外键是 `ON DELETE CASCADE`：删账号等于删证据
+
+- **现象**：`admin_action_logs.admin_id` 的外键级联删除，
+  `docs/SECURITY.md` 第 7 节承诺的「只追加」在**数据库层面**并不成立。
+- **处置**：迁移 `1730000005000` 把外键改成 `ON DELETE RESTRICT`；
+  两个会清理测试管理员的用例同步改成「先删审计记录再删账号」。
+- **验证**：迁移在测试库上 `migration:revert` → `migration:run` 往返通过。
+
+### 166. 安全响应头只在 Nginx，API 直连时一个都没有
+
+- **现象**：应用层**没有任何**安全响应头（无 helmet、无手写中间件），
+  而 API 端口（18081）在私网里可直接访问 —— 绕过 Nginx 时响应头全部缺失。
+- **处置**：新增 `src/common/middleware/security-headers.ts`（与 Nginx 层同一份清单），
+  应用与 Nginx 都覆盖；同时用 `proxy_hide_header` 消除**重复响应头**
+  （同名头出现两次时浏览器可能整体忽略，反而更弱）。
+- **验证**：`test/integration/security-hardening.e2e-spec.ts`（逐头断言）。
+
+### 167. 列表接口的 N+1 查询：一页 20 条要打 66~103 条 SQL
+
+- **现象**：`alumni` / `resources` / `connections` 三个模块的视图装配是
+  `Promise.all(rows.map(row => toView(row)))`，而 `toView()` 每行 3~5 条 SQL。
+  实测每页 20 条：管理端资源列表 **66 条**、认证审核列表 **65 条**、连接列表 **103 条** SQL。
+- **处置**：改为「一次 `In(...)` 批量查 + 内存分桶」，查询数与页大小无关（9 / 8 / 6 条）。
+- **验证**：新增 `test/integration/query-efficiency.e2e-spec.ts` —— 它同时是**回归守卫**
+  （`queries <= 20`），逐行查询一旦回来就会被抓住。
+
+### 168. 小程序首屏把每个请求打了两遍
+
+- **现象**：9 个页面在 `onLoad` 与 `onShow` 里都调了同一个 loader，
+  而微信的生命周期是 `onLoad → onShow → onReady` —— 首屏请求数直接翻倍
+  （「我的」页 9 个请求，其中 4 个是完全重复的）。
+- **处置**：新增 `apps/miniprogram/src/utils/first-show.ts`（按页面实例记录的 WeakMap 守卫），
+  首次进入只加载一次，返回页面时仍然刷新。
+- **验证**：小程序单测（新增 `test/first-show.spec.ts`）+ 五个静态校验脚本全绿。
+
+### 169. 管理后台主 chunk 1.38 MB（UI 库被打包进应用 chunk）
+
+- **现象**：`tdesign-vue-next` 不在 `manualChunks` 里，整个组件库被打进主 chunk
+  （1,379,729 B），而 `chunkSizeWarningLimit: 2048` 恰好把这个问题静音了。
+- **处置**：把 TDesign 拆成独立 chunk，并把告警阈值降回 500 KB（诚实地暴露体积问题）。
+  主 chunk 1,379,729 B → **23,724 B**；`dist` 总量基本不变（+842 B）。
+- **⚠️ 诚实说明**：**首屏下载量没有减少**（2,011,181 B → 2,011,270 B）——
+  `main.ts` 里 `app.use(TDesign)` 是全局注册，产物仍被首屏预加载。
+  真正的减负需要改成按需引入（会改动管理后台的组件注册方式，且需要真实浏览器验证），
+  本轮**未做**，见「待验证 / 未完成」。
+
+### 170. 审计日志的 `ip` 列从未被写过：管理端「来源 IP」恒为空
+
+- **现象**：`admin_action_logs.ip` 这一列建表至今**一行都没写过** ——
+  两处写审计日志的地方都没有设置它，而审计列表接口却把 `ip` 返回给管理端，
+  于是后台「来源 IP」列**恒为空**，事后追溯拿不到任何来源信息。
+- **处置**：新增 `src/common/services/request-context.service.ts`（`AsyncLocalStorage` 承载当前请求的
+  来源 IP）与全局拦截器 `RequestContextInterceptor`，写审计日志时随取随用；
+  服务由新的全局模块 `CommonModule` 提供（各模块共用同一个实例）。
+- **验证**：`test/integration/admin-audit-atomicity.e2e-spec.ts` 新增一例：
+  管理端写操作后，审计行的 `ip` 必须有值。
+
+### 171. `pnpm-lock.yaml` 与 `package.json` 不同步（构建靠 `--no-frozen-lockfile` 绕过）
+
+- **现象**：本轮执行 `pnpm install` 时 pnpm 重新生成了锁文件，差异 294 行 ——
+  锁文件里 `apps/api` 的依赖还写着 `bcrypt@^5.1.1`，而 `package.json` 早已换成
+  `bcryptjs@^2.4.3`（缺陷 #3 的处置：bcrypt 原生模块编不出来，改用 bcryptjs）。
+  也就是说**仓库里的锁文件自那次替换之后就没再更新过**。
+- **影响面**：`pnpm install --frozen-lockfile` 会因为「锁文件与 package.json 不同步」而失败；
+  当前部署是靠 `INSTALL_FLAGS=--no-frozen-lockfile`（见 `infra/env/env.prod.example`）绕过的 ——
+  也就是说**镜像构建实际上没有用锁文件锁住依赖版本**。
+- **影响 CI**：主干新增的 CI 门禁（`.github/workflows/ci.yml`）用
+  `pnpm install --frozen-lockfile` 安装依赖 —— 在**干净检出**里它会直接失败：
+  `ERR_PNPM_OUTDATED_LOCKFILE`（先报 `apps/worker/package.json`，再报 `apps/api`）。
+  也就是说**任何 PR 的 CI 都会卡在安装步骤**，与 PR 内容无关。
+- **本轮的处置**：把锁文件**按 package.json 重新生成**并随本 PR 一起提交 ——
+  这不是「升级依赖」，而是让锁文件**记录 package.json 里早已选定的依赖**
+  （`bcryptjs@2.4.3` 是缺陷 #3 的既定处置，`apps/worker` 的 5 个依赖此前根本不在锁文件里）。
+  重新生成后**没有任何依赖版本被改动**（与当前 `node_modules` 里的版本逐一相同），
+  而 `pnpm install --frozen-lockfile` 在干净检出里恢复可用 ——
+  依赖版本重新被锁住，构建不再靠 `--no-frozen-lockfile` 绕过。
+- **验证**：干净副本里 `pnpm install --frozen-lockfile --lockfile-only` 退出码 0
+  （修复前是 `ERR_PNPM_OUTDATED_LOCKFILE`）。
+
+### 172. `pnpm lint` 从来无法执行：仓库既没有 `eslint` 依赖，也没有 ESLint 配置文件
+
+- **现象**：`apps/api/package.json` 里的 `lint` 脚本是 `eslint "src/**/*.ts"`，
+  `admin-web` 的脚本则写着「lint 由根仓库 ESLint 统一配置」——
+  但仓库**根目录既没有 eslint 依赖，也没有任何 ESLint 配置文件**
+  （`git log --all -- '.eslintrc*' 'eslint.config.*'` 为空）。
+  于是 `pnpm lint` 一律报 `eslint: not found` 并以退出码 1 结束。
+- **影响面**：主干新增的 CI 门禁里有一步就是 `pnpm lint` ——
+  即使账号的 Actions 额度恢复，这一步也会让 CI 变红。
+  （本 PR 的 CI 另有**更早**的阻塞：GitHub 侧报
+  “The job was not started because recent account payments have failed or your spending limit needs to be increased”。）
+- **处置（主干已完成，本 PR 沿用）**：主干在并行的一轮里把 ESLint 真正装上了
+  （`eslint.config.mjs` + 根依赖 `eslint` / `@typescript-eslint/*`，
+  并清掉 27 处真实的 lint 违规），本 PR 与主干同步后**直接沿用主干的配置与清理**，
+  不再自带一份重复的工具链改动（避免两边配置漂移）。
+  现在 `pnpm lint` 退出码 0，CI 的 Lint 步骤可以通过。
+- **仍未覆盖**：管理后台的 `.vue` 单文件组件还没纳入 lint
+  （需要 `vue-eslint-parser` + `eslint-plugin-vue`），小程序侧也没有 lint 脚本
+  （它在微信运行时里跑，`Page` / `wx` 等是运行时注入的全局对象）。
+  两者的把关方式目前分别是 `vue-tsc --noEmit` + `check-admin-web.mjs`、小程序静态校验脚本。
+
 ## 待验证 / 未完成（不得声称已通过）> 以下均为**缺少外部资质或环境**导致的未验证项，与实现质量无关。
 > 已实测完成的项（冒烟 10/10、集成测试 39/39、k6 分级压测、备份恢复演练、管理后台构建）见 `docs/TEST-REPORT.md`。
 
@@ -2883,6 +3043,15 @@
 | 正式域名与 HTTPS 证书 | 私网环境用 nginx 明文回环；服务器上的 `*.dpdns.org` 是免费动态域名（他人域名的子域），**无法 ICP 备案**，不能用作小程序合法域名 | 买自有域名并备案后接入 Caddy |
 | 对象存储托管服务（OSS/COS） | 当前用自建 MinIO | 切换 `MINIO_*` 环境变量即可，接口不变 |
 | 对象存储异地容灾 | 备份只落服务器本地磁盘 | 接入异地存储后由 `backup.sh` 定时推送 |
+| 生产密钥轮转与密钥管理服务接入 | 仓库侧已补齐**启动期校验**（缺配置/占位值 → 生产环境拒绝启动），但「正式更换密钥」与「接入密钥管理服务（Vault / 云 KMS）」属人工安排，仓库无法代做 | 运维：按 `docs/SECURITY.md` 第 8.2 节执行轮转；密钥经环境变量或密钥管理服务注入，**不写入仓库** |
+| 正式 AppID / AppSecret 与 `AUTH_MODE=wechat` 切换 | 服务端开关、fail-closed 与启动校验均已就绪；**正式凭据填写**与切换时机属人工安排（当前体验版仍依赖 Mock 登录演示） | 运营/技术：微信公众平台申请正式凭据 → 填入环境变量 → 切 `AUTH_MODE=wechat` → 真机验证 |
+| 正式域名与 HTTPS 证书 | CORS 白名单机制与 HSTS 响应头已就绪；**域名注册、备案、证书签发**属人工安排 | 客户 + 技术：见 `docs/DOMAIN-AND-ICP-FILING.md` |
+| 微信订阅消息模板 | Outbox 通道、重试与幂等机制在 Worker 侧已具备；**模板 ID、用户订阅授权、真实推送**属人工安排 | 运营：配置模板后接通 Worker 的 `wechat` 渠道 |
+| WAF 规则与备份定时任务 | 备份 / 恢复 / 演练脚本齐全；**WAF 规则集**与 **cron / systemd 定时任务的安装**属人工安排 | 运维：按 `docs/top.md` §11 与 `docs/BACKUP-RESTORE.md` 安装定时任务；在边缘层配置 WAF |
+| 管理后台 UI 库按需引入（首屏减负） | 本轮只把 TDesign 拆成独立 chunk，**首屏下载量未变**（`app.use(TDesign)` 全局注册）；改成按需引入会改动组件注册方式，需要真实浏览器验证，而本机缺少浏览器冒烟所需环境 | 单独一轮迭代：改按需引入 + 跑 `infra/scripts/admin-ui-smoke.mjs` 真实浏览器冒烟 |
+| 两个无上限列表端点 | `GET /admin/events/:id/registrations` 与 `GET /alumni/verification/mine` **没有分页上限**；修复需要变更响应结构（契约变更），须同步 `packages/contracts` 与 `docs/API-SPEC.md` 并改两端客户端 | 单独一轮迭代（契约变更轮），不要在安全/性能轮里顺手改契约 |
+| 管理端「分类 CRUD / 系统设置写入」没有审计记录 | `docs/SECURITY.md` 第 7 节列举的关键操作（审核、发布、下架、账号状态）**已全部留痕**；但 `POST/PATCH/DELETE /admin/articles/categories` 与 `PUT /admin/settings` 这 4 个写端点**没有**写 `admin_action_logs`。补齐需要让 `ContentService` 的这 4 个方法支持「传入事务 manager」，再与审计写入放进同一事务（沿用缺陷 #134 的做法），属于对内容服务的结构性改动 | 单独一轮迭代（内容服务事务化改造） |
+| 通知深分页索引收益 | `(user_id, id)` 索引已建，但优化器在本次数据集上未自动改选；真实收益取决于数据分布 | 生产数据量到位后用 `EXPLAIN ANALYZE` 复测，必要时再调 |
 
 ## 已知设计取舍
 

@@ -36,6 +36,8 @@ export const OUTBOX_STATUSES = ['pending', 'processing', 'done', 'failed'] as co
 export type OutboxStatus = (typeof OUTBOX_STATUSES)[number];
 
 @Index('idx_notifications_user', ['userId', 'readAt', 'createdAt'])
+// 「我的通知」是 WHERE user_id=? ORDER BY id DESC —— 需要 (user_id, id) 才能供排序。
+@Index('idx_notifications_user_id', ['userId', 'id'])
 @Entity({ name: 'notifications' })
 export class Notification {
   @PrimaryGeneratedColumn({ name: 'id', type: 'bigint', unsigned: true })

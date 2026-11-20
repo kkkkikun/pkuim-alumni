@@ -133,6 +133,19 @@ describe('管理端「业务写 + 审计日志」的原子性（缺陷 #134）',
     expect(await auditActions()).toContain('event.create');
   });
 
+  it('审计日志要记下来源 IP（此前 ip 列从未被写过，管理端该列恒为空）', async () => {
+    await server()
+      .post(`${API}/admin/events`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ title: '带来源 IP 的活动', kind: '沙龙', capacity: 10 })
+      .expect(201);
+
+    const rows = await dataSource.query('SELECT ip FROM admin_action_logs ORDER BY id DESC LIMIT 1');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].ip).toBeTruthy();
+    expect(String(rows[0].ip).length).toBeGreaterThan(0);
+  });
+
   it('对照：正常删除公告 → 公告没了，审计日志还在', async () => {
     const created = await server()
       .post(`${API}/admin/notices`)

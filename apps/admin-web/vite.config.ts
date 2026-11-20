@@ -26,11 +26,12 @@ export default defineConfig(({ mode }) => {
     build: {
       outDir: 'dist',
       sourcemap: false,
-      chunkSizeWarningLimit: 2048,
+      chunkSizeWarningLimit: 500,
       rollupOptions: {
         output: {
           manualChunks: {
             vendor: ['vue', 'vue-router', 'pinia', 'axios', 'dayjs'],
+            tdesign: ['tdesign-vue-next'],
           },
         },
       },

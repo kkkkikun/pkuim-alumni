@@ -95,6 +95,8 @@ export class Article {
   updatedAt: Date;
 }
 
+// 公告列表：已发布 + 按发布时间倒序。
+@Index('idx_notices_published', ['status', 'publishedAt'])
 @Entity({ name: 'notices' })
 export class Notice {
   @PrimaryGeneratedColumn({ name: 'id', type: 'bigint', unsigned: true })

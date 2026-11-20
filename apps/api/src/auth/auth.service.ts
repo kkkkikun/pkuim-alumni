@@ -433,12 +433,20 @@ export class AuthService {
    *   - `wechat`：只开微信登录（正式对外时用，堵掉 Mock 后门）；
    *   - `both`  ：两个都开（联调 / 预览期）。
    *
-   * 非法取值一律按 `both` 处理 —— 配置写错不应该让登录整个瘫掉。
+   * ⚠️ 非法取值此前一律按 `both` 处理 —— **fail-open**：
+   *    生产环境里把 `wechat` 拼成 `wechats`，Mock 后门就被**自动重新打开**，
+   *    而且没有任何报错。现在改为 **fail-closed**：非法取值一律按 `wechat`
+   *    处理（Mock 登录不可用），并把问题喊出来 ——
+   *    「配置写错」绝不能等价于「把后门打开」。
    */
   private get authMode(): 'mock' | 'wechat' | 'both' {
     const raw = (this.config.get<string>('app.authMode', 'both') ?? 'both').trim().toLowerCase();
-    if (raw === 'mock' || raw === 'wechat') return raw;
-    return 'both';
+    if (raw === 'mock' || raw === 'wechat' || raw === 'both') return raw;
+    this.logger.error(
+      `AUTH_MODE 取值非法："${raw}"（只能是 mock / wechat / both）。` +
+        '已按最严口径处理：关闭 Mock 登录（只保留微信登录）。',
+    );
+    return 'wechat';
   }
 
   private get mockLoginEnabled(): boolean {

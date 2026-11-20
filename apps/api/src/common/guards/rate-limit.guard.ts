@@ -5,7 +5,13 @@ import type { AuthenticatedRequest } from '../decorators';
 import { ResponseCode } from '../constants';
 
 /**
- * 固定窗口限流。按「用户 + 路由」计数，写接口与登录接口使用更严格的阈值。
+ * 固定窗口限流。按「用户（或 IP）+ 接口类别」计数。
+ *
+ * ⚠️ 计数维度此前是「用户 + **路由处理器**」，与 docs/SECURITY.md 第 6 节
+ *    「登录 / 刷新：20 次/分钟；写接口 30 次/分钟；读接口 240 次/分钟」不一致：
+ *    逐路由分桶意味着**每个**写端点各有 30 次/分钟，
+ *    攻击者只要把请求分散到多个写端点，总量可以远超文档承诺的阈值。
+ *    现在按**类别**分桶：auth / write / read，与文档口径一致（也更严格）。
  *
  * Redis 不可用时降级放行（限流是保护措施，不是业务依赖）。
  * `RATE_LIMIT_ENABLED=false` 时完全关闭（集成测试使用）。
@@ -58,18 +64,22 @@ export class RateLimitGuard implements CanActivate, OnModuleDestroy {
     }>('app.rateLimit', { windowSeconds: 60, default: 240, write: 30, auth: 20 });
 
     let limit = def;
+    let category = 'read';
     if (method === 'POST' || method === 'PUT' || method === 'PATCH' || method === 'DELETE') {
       limit = write;
+      category = 'write';
     }
-    if (handler.toLowerCase().includes('login') || handler.toLowerCase().includes('refresh')) {
+    // 登录 / 刷新单独一档（文档第 6 节：20 次/分钟）。
+    if (/login|refresh/i.test(handler)) {
       limit = auth;
+      category = 'auth';
     }
 
     const identity = request.user?.id
       ? `u${request.user.id}`
       : `ip${request.ip ?? 'unknown'}`;
     const bucket = Math.floor(Date.now() / (windowSeconds * 1000));
-    const key = `ratelimit:${identity}:${handler}:${bucket}`;
+    const key = `ratelimit:${identity}:${category}:${bucket}`;
 
     let count = 1;
     try {
