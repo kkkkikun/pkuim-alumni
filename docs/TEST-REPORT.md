@@ -3689,3 +3689,124 @@ docker exec -i nmg-mysql mysql -uroot -p*** nmg_alumni_test < measure.sql
 生产密钥轮转与密钥管理服务接入、正式 AppID/AppSecret 与 `AUTH_MODE=wechat` 切换、
 正式域名与 HTTPS 证书、微信订阅消息模板、WAF 与备份定时任务、
 管理后台 UI 库按需引入（首屏减负）、两个无上限列表端点（需同步契约）。
+
+---
+
+## 8. 第二轮（opt-002）：复核上一轮（opt-001）的产出 + 清掉剩余安全与性能缺口
+
+> 执行日期：2026-11-20；环境：本机 Docker（MySQL 8.4 / Redis 7 / MinIO，端口 13307 / 16380 / 19002），
+> Node 22.21.1、pnpm 11.7.0；数据集：`pnpm --filter @nmg/api db:migrate && db:seed` 造出的固定数据
+> （1000 校友 / 200 通讯录可见 / 连接 / 资源 / 活动 / 资讯 / 公告）。
+> 本机与上一轮的服务器环境不同，**延迟绝对值不可与历史数字直接比较**，
+> 可比的是「同一数据集、同一命令」的改动前后对比。
+
+### 8.1 复核：上一轮新增的防线，断言是否真的会在防线被拆掉时失败
+
+逐个核对了上一轮新增的 9 个集成测试套件（config-validation / security-hardening /
+privacy-hardening / rate-limit / auth-mode / admin-account-management / admin-audit-atomicity /
+http-status-semantics / query-efficiency）：这些用例的断言都指向**具体的状态码或响应头**，
+删掉对应防护代码后会失败（例如删掉 `applyHttpHardening` 的 CORS 中间件，
+`security-hardening` 的「白名单外 Origin 拿不到任何 CORS 头」立刻红）。
+**没有发现「删掉防护代码测试仍绿」的用例。**
+
+但复核发现**上一轮的防线对仓库自己的文件无效**，以及**上一轮引入了两处新问题**，本轮一并修掉
+（逐条记录见 `docs/KNOWN-ISSUES.md` #173~#180）：
+
+| # | 复核发现 | 本轮处置 | 负向验证 |
+|---|---|---|---|
+| #173 | 占位值黑名单只认 `-`，仓库模板用的是 `CHANGE_ME_xxx` → **用默认 compose 参数起生产环境，JWT 密钥是公开常量** | 归一化分隔符；补常见弱默认口令 | `config-validation` 新增 1 例 + 「模板/compose 对账」1 例 |
+| #174 | 上一轮把生产 `AUTH_MODE=mock` 改成拒绝启动，而**仓库自己的生产模板仍是 mock** → 按文档部署会起不来 | 模板与 compose 默认改为 `both`（与现网一致）；生产用 mock 依然被拒 | 「模板不得设 mock」「compose 默认不得是 mock」2 例 |
+| #175 | 管理员默认口令 `Admin@2026` 是**公开常量**（Seed 硬编码 + 建号时 `?? 'Admin@2026'`），且 Seed 每次重置它 | Seed 改走环境变量、生产要求强口令且不重置；建号初始口令**必填** | `admin-account-management` 新增 2 例 |
+| #176 | CORS 白名单接受子域通配，与文档「不接受通配符」不一致 | 只做精确匹配；启动期也判非法 | `security-hardening` 改为「通配不被接受」 |
+| #177 | 解除连接后，详情接口仍返回对方学院/地区/行业 | 非 active 一律 404 | `connections` 新增 1 例 |
+| #178 | nginx `location /assets/` 里的 `add_header` 让该块**丢掉全部安全响应头** | 该块补齐同一份清单 | 配置对账（端到端抓包待部署后核对） |
+| #179 | 限流守卫排在 JWT 守卫之后 → **伪造令牌的请求完全不受限流保护** | 计数逻辑抽成服务，认证失败也计额（按 IP）；顺带修正类别判定顺序（登录档此前被写成死代码） | `rate-limit` 新增 1 例 |
+
+### 8.2 安全改动的负向验证（攻击面确实被挡住）
+
+| 场景 | 期望 | 实测 | 用例 |
+|---|---|---|---|
+| 生产环境用仓库默认的 `CHANGE_ME_jwt_secret_min_32_chars` | 拒绝启动 | `fatal=true`，问题项 `JWT_SECRET` | `config-validation` |
+| 生产环境未设置 `ADMIN_BOOTSTRAP_PASSWORD` | Seed 拒绝建号 | `fatal=true` | `config-validation` |
+| 管理端建号不传初始口令 | 400，且账号**没被建出来** | 400 `VALIDATION_ERROR`，`admin_users` 里 0 行 | `admin-account-management` |
+| 用仓库里的公开默认口令登录新建的管理员 | 401 | 401；用正确口令登录 200 | `admin-account-management` |
+| 白名单外的 Origin | 拿不到任何 CORS 头；预检 403 | 无 `access-control-allow-origin`；预检 403 | `security-hardening` |
+| 通配 origin（`https://*.example.com`） | 一条都匹配不上 | `isOriginAllowed` 全部 false | `security-hardening` |
+| 带伪造令牌的请求连打 6 次 | 前 5 次 401，第 6 次 429 | 429 `RATE_LIMITED` | `rate-limit` |
+| 解除连接后取连接详情 | 404 | 404 `NOT_FOUND`，列表里也没有 | `connections` |
+| 生产环境 `AUTH_MODE=mock` | 拒绝启动 | `fatal=true` | `config-validation` |
+
+### 8.3 性能：同一数据集、同一命令的前后实测
+
+#### 8.3.1 接口级基线（`pnpm --filter @nmg/api perf:baseline`）
+
+命令：`source .env.test && pnpm --filter @nmg/api db:migrate && pnpm --filter @nmg/api db:seed &&
+pnpm --filter @nmg/api perf:baseline`
+（该脚本在本轮新增：`apps/api/test/perf/api-performance.ts`，统计每个请求打了几条 SQL 与 p50/p95 延迟。）
+
+| 接口 | SQL 条数（前 → 后） | p50(ms)（前 → 后） |
+|---|---:|---:|
+| `GET /me/contacts`（我的联系方式） | **5 → 2** | 4.7 → 2.9 |
+| `GET /admin/stats`（管理端数据总览） | **15 → 14** | 5.3 → 4.8 |
+| 其余 18 个列表接口 | 不变（1~8 条） | 不变（±0.5ms，属机器负载抖动） |
+
+- `/me/contacts`：此前为了返回 3 个联系方式字段，把 user / profile / region / industry / contact
+  全查了一遍（关系懒加载各多一条）；现在只查联系方式那一张表。
+- `/admin/stats`：此前 `this.users.count()` 出现了**两次**（`alumniTotal` 与 `userTotal`），
+  两条 SQL 完全一样；现在复用同一个值，并发查询 13 → 12（+ 鉴权 1 条 = 14）。
+
+#### 8.3.2 索引：逐条实测（10 万行审计日志 / 2 万篇资讯 / 2 万条报名 / 2 万对连接）
+
+测量方式：同一张表上分别用「带新索引」与 `IGNORE INDEX (新索引)`（等价于迁移前的可用索引集合）
+各跑 9 次取中位数，同时打印 `EXPLAIN` 的 key / rows。
+
+| 查询 | 改动前 | 改动后 | 执行计划变化 |
+|---|---|---|---|
+| 资讯按分类筛选的 COUNT（`status='published' AND category_id=?`） | **23.99 ms**（扫 10005 行） | **2.50 ms**（扫 2002 行） | `idx_articles_published` → `idx_articles_category`，**9.6×** |
+| 资讯按分类筛选的 SELECT（`ORDER BY published_at DESC LIMIT 20`） | 0.44 ms | 0.70 ms | 同样换成新索引（扫的行数从 10005 降到 2002，但这一条本来就只要 20 行，收益被常数项吃掉） |
+| 我的活动报名 SELECT（`WHERE user_id=? ORDER BY id DESC LIMIT 20`） | **5.45 ms** | **0.23 ms** | 主键倒序扫 + 逐行过滤 → `ref` 直接定位，**23×** |
+| 我的活动报名 COUNT | **2.07 ms** | **0.14 ms** | `uk_event_registration` 全扫 → `ref` 直接定位，**14×** |
+
+**没有实测收益、因此没有写进迁移的两个候选索引**（沿用上一轮定下的规矩「没有实测数字的索引不写进生产库」）：
+
+| 候选 | 实测 | 结论 |
+|---|---|---|
+| `admin_action_logs(created_at)` | 宽区间（30 天）COUNT 20.94 ms → 21.47 ms（优化器仍选 `idx_admin_action_logs_admin` 的 skip scan）；窄区间（1 天）COUNT 0.94 ms → 0.80 ms | 收益微弱，**不加**；迁移 5000 的注释已改成不再声称自己建了它 |
+| `connection_pairs(user_b_id, id)` | SELECT 0.266 ms → 0.313 ms；COUNT 4.676 ms → 4.747 ms（OR 两侧仍走主键倒序扫 / 全表扫） | 优化器**没有改选**，**不加** |
+
+本轮落地的新索引只有两个，走 TypeORM 迁移 `1730000006000-AddRemainingQueryIndexes`
+（幂等：先查 `information_schema.statistics`，存在就跳过）：
+
+- `articles(category_id, published_at)` —— `idx_articles_category`
+- `event_registrations(user_id, id)` —— `idx_event_registration_user`
+
+实体侧同步加了 `@Index`，避免「库里有、代码里没有」的反向漂移。
+
+#### 8.3.3 事务与连接池
+
+- **bcrypt 移出事务**：创建 / 修改管理员时，`bcrypt`（cost 10，单次 60~120ms 纯 CPU）
+  此前在 `dataSource.transaction()` 回调里执行 —— 事务期间**白占一条数据库连接**。
+  现在哈希在事务外算好再传进去，一致性语义不变（哈希失败仍在任何写入之前）。
+- **角色批量插入**：管理员角色同步此前是逐条 `await links.save(...)`（每角色一条 INSERT），
+  现在一次批量插入。
+- **连接池不再是魔数**：`connectionLimit: 20` 此前硬编码在 `app.module.ts`，
+  现在由环境变量 `DB_POOL_SIZE` 控制（默认 20 不变），
+  并在 `docs/CONCURRENCY-DESIGN.md` 补了「连接池与实例数」的口径。
+
+### 8.4 CI
+
+- 小程序的三个 spec（`first-show` / `format` / `view`，共 44 例）此前**没有 runner** ——
+  `apps/miniprogram/package.json` 里没有 `test` 脚本。现在补上
+  （复用 api 包里已装好的 jest，**不引入新依赖**，锁文件不变），
+  并在 `.github/workflows/ci.yml` 里新增「Miniprogram unit tests」一步。
+- 本地实跑：`pnpm --filter @nmg/miniprogram test` → 3 套件 / 44 例全绿；
+  `pnpm typecheck` / `pnpm lint` 退出码 0；
+  `pnpm --filter @nmg/api test:integration` → **46 套件 / 359 例全绿**。
+
+### 8.5 本轮未做完、已记入待办的项
+
+见 `docs/KNOWN-ISSUES.md` 的「待验证 / 未完成」小节（表格已更新）：
+三个无上限列表端点与列表返回正文（**契约变更轮**）、RBAC 与字典的缓存层、
+`view_count` 的异步计数、`/admin/stats` 的 `connectionTotal` 口径、
+连接列表是否也应受对方字段可见开关约束（**需要产品口径**）、
+以及全部需要人工动作的项（正式密钥、AppID/AppSecret、域名与证书、订阅消息模板、WAF 与备份定时任务）。

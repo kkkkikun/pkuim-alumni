@@ -37,7 +37,8 @@ export class MeController {
   @Get('contacts')
   @ApiOperation({ summary: '我的联系方式（仅本人可见）' })
   getContacts(@CurrentUser() user: RequestUser) {
-    return this.meService.getMe(user.id).then((me) => me.contact);
+    // 只查联系方式那一张表（此前走 getMe()，为此多打了 4 条 SQL）。
+    return this.meService.getContact(user.id);
   }
 
   @Put('contacts')

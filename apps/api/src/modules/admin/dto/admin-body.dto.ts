@@ -26,12 +26,19 @@ export class CreateAdminUserBodyDto {
   @MaxLength(64)
   displayName?: string;
 
-  @ApiPropertyOptional({ description: '初始密码（至少 8 位）' })
-  @IsOptional()
+  /**
+   * 初始口令 —— **必填**。
+   *
+   * ⚠️ 复核补漏（第二轮）：此前它是可选的，控制器在缺失时回退到
+   *    `'Admin@2026'` —— 一个**公开在仓库里的常量**。
+   *    也就是说「不传口令新建管理员」= 造一个谁都能登进后台的账号。
+   *    现在缺失或过短都在 DTO 层被拒（400），仓库里没有默认口令的退路。
+   */
+  @ApiProperty({ description: '初始密码（至少 8 位）' })
   @IsString()
   @MinLength(8)
   @MaxLength(64)
-  password?: string;
+  password!: string;
 
   @ApiPropertyOptional({ type: [String], description: '角色编码列表' })
   @IsOptional()

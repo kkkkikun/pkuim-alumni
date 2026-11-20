@@ -143,6 +143,49 @@ describe('管理端账号与角色的写入完整性 (e2e)', () => {
     expect(created.body.data.username).toBe(`acct_new_${uniq}`);
   });
 
+  /* ---------------- 初始口令必填（复核补漏：第二轮） ---------------- */
+
+  it('创建管理员不传初始口令 → 400（不得回退到仓库里的公开默认口令）', async () => {
+    // ⚠️ 复核补漏（第二轮）：此前控制器是 `body.password ?? 'Admin@2026'` ——
+    //    不传口令时，新账号的口令就是**公开在仓库里的常量**，
+    //    等于凭空造出一个「谁都能登进管理后台」的账号。
+    const username = `acct_nopwd_${uniq}`;
+    createdUsernames.push(username);
+    const response = await server()
+      .post(`${API}/admin/users`)
+      .set(auth())
+      .send({ username, displayName: '没给口令' });
+
+    expect(response.status).toBe(400);
+    expect(response.body.code).toBe('VALIDATION_ERROR');
+    // 账号根本没被建出来
+    const rows = await dataSource.query('SELECT id FROM admin_users WHERE username = ?', [username]);
+    expect(rows).toHaveLength(0);
+  });
+
+  it('对照：传了初始口令 → 账号建成，且只能用这个口令登录', async () => {
+    const username = `acct_pwd_${uniq}`;
+    createdUsernames.push(username);
+    await server()
+      .post(`${API}/admin/users`)
+      .set(auth())
+      .send({ username, displayName: '给了口令', password: 'Valid@2026' })
+      .expect(201);
+
+    // 仓库里的公开默认口令必须**登不进去**
+    const withDefault = await server()
+      .post(`${API}/auth/admin/login`)
+      .send({ username, password: 'Admin@2026' });
+    expect(withDefault.status).toBe(401);
+
+    // 正确的初始口令可以登录
+    const withReal = await server()
+      .post(`${API}/auth/admin/login`)
+      .send({ username, password: 'Valid@2026' })
+      .expect(200);
+    expect(withReal.body.data.accessToken).toBeTruthy();
+  });
+
   /* ---------------------------- #113 不存在 → 404 ---------------------------- */
 
   it('#113 管理端取不存在的对象 → 404 NOT_FOUND（此前是 200 + data.error）', async () => {

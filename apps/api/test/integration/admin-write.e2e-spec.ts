@@ -69,7 +69,8 @@ describe('管理端写操作（增删改）', () => {
     const created = await server()
       .post(`${API}/admin/users`)
       .set('Authorization', `Bearer ${ctx.adminToken}`)
-      .send({ username, displayName: '待改名', roles: ['super_admin'] })
+      // 初始口令**必填**（第二轮收紧）：此前不传口令会用仓库里的公开默认值建号。
+      .send({ username, displayName: '待改名', roles: ['super_admin'], password: 'Valid@2026' })
       .expect(201);
     const adminId = created.body.data.id as number;
     expect(created.body.data.username).toBe(username);

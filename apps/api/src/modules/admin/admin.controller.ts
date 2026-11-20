@@ -93,6 +93,15 @@ export class AdminController {
   @RequirePermissions('dashboard:view')
   @ApiOperation({ summary: '数据总览' })
   async stats() {
+    // ⚠️ 复核补漏（第二轮）：此前这里有 **13 条并发 COUNT**，其中
+    //    `this.users.count()` 出现了**两次**（`alumniTotal` 与 `userTotal`）——
+    //    两条 SQL 完全一样。现在复用同一个变量，并发查询数 13 → 12。
+    //
+    //    ⚠️ 语义说明（未改）：`connectionTotal` 统计的是**联系申请**的条数
+    //    （`connection_request_history`），而管理端把它标成「连接总数」。
+    //    这属于**口径问题**，改它会改变页面上显示的数字（对外可见语义），
+    //    本轮只做「去掉完全重复的查询」这一项无歧义的优化，
+    //    口径问题记入 docs/KNOWN-ISSUES.md 待确认。
     const [
       alumniTotal,
       alumniVerified,
@@ -103,7 +112,6 @@ export class AdminController {
       eventRegistrations,
       connectionTotal,
       connectionPending,
-      userTotal,
       articleTotal,
       noticeTotal,
     ] = await Promise.all([
@@ -125,7 +133,6 @@ export class AdminController {
         .createQueryBuilder('c')
         .where('c.status = :status', { status: 'pending' })
         .getCount(),
-      this.users.count(),
       this.articles.count(),
       this.notices.count(),
     ]);
@@ -140,7 +147,9 @@ export class AdminController {
       eventRegistrations,
       connectionTotal,
       connectionPending,
-      userTotal,
+      // userTotal 与 alumniTotal 是同一个数（都是 users 表的行数）——
+      // 此前为它单独又打了一条一模一样的 COUNT，现在复用。
+      userTotal: alumniTotal,
       articleTotal,
       noticeTotal,
     };

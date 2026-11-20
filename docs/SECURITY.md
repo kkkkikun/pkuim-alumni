@@ -1,6 +1,9 @@
 # 安全说明
 
-> 最近一次落实：2026-11-20（逐条落实本文件第 3~8 节的承诺；实测记录见 `docs/TEST-REPORT.md`）。
+> 最近一次落实：2026-11-20（**第二轮**：复核上一轮的产出并补齐遗漏；实测记录见 `docs/TEST-REPORT.md` 第 8 节）。
+>
+> 本轮复核发现并修掉的问题（上一轮的防线对自家模板无效、生产部署路径被自己的校验挡住、
+> 管理员默认口令是公开常量、认证失败的请求不受限流保护等）逐条记在 `docs/KNOWN-ISSUES.md` #173~#180。
 
 ## 1. 认证
 
@@ -12,6 +15,12 @@
   （那等于把 Mock 后门重新打开），而是关闭 Mock 登录并打错误日志。
 - **启动期校验**：生产环境缺 `JWT_SECRET` / 数据库口令 / MinIO 密钥，或 `CORS_ORIGINS=*`，
   或 `AUTH_MODE` 未显式设置 / 取值非法 / 为 `mock` —— **拒绝启动**（`src/config/config-validation.ts`）。
+- **占位值识别不分隔符**：`change-me-xxx` 与 `CHANGE_ME_xxx` **同样**被判定为占位值 ——
+  仓库自己的模板（`docker-compose.prod.yml`、`infra/env/env.prod.example`）用的就是下划线写法，
+  上一轮的防线对自家模板完全无效（见 KNOWN-ISSUES #173）。
+- **管理员口令没有默认值**：仓库里公开的 `Admin@2026` **不再是任何路径的兜底值** ——
+  管理端建号必须提供初始口令（DTO 必填），Seed 在生产环境要求显式提供强口令、
+  且不再重置已存在账号的口令（见 KNOWN-ISSUES #175）。
 
 ## 2. 授权
 
@@ -37,6 +46,8 @@
 7. **证明材料只接受私有桶资产**：`visibility='public'` 的文件被当作证明材料引用时返回 400，
    且不会写进证明材料关联表（public 桶里的对象拿到地址即可下载，不能承载私密材料）。
 8. 证明材料存私有桶，仅审核权限可取短期签名 URL。
+9. **解除连接之后，连接详情不再返回对方资料**：非 `active` 的关系一律 404
+   （此前详情接口不校验关系状态，与列表口径不一致 —— 见 KNOWN-ISSUES #177）。
 
 ## 4. 输入与注入
 
@@ -52,11 +63,16 @@
   - 生产环境 `CORS_ORIGINS` 不得为 `*`（启动期校验直接拒绝启动），也不接受任意 Origin；
   - 白名单外的 Origin **拿不到任何 CORS 响应头**，预检请求返回 403；
   - `*` 仅在非生产态可用，且此时**不带凭据**（不再「反射任意 Origin + credentials」）。
+  - **只接受配置里逐条列出的具体域名**：子域通配（`https://*.example.com`）**不认**，
+    启动期校验也把带 `*` 的 origin 判为非法（见 KNOWN-ISSUES #176）。
 - **安全响应头应用层与 Nginx 层都覆盖**（`src/common/middleware/security-headers.ts` +
   `infra/nginx/nginx.conf`）：`X-Content-Type-Options`、`X-Frame-Options: DENY`、
   `Referrer-Policy`、`Permissions-Policy`、`X-Permitted-Cross-Domain-Policies`、
   `Cross-Origin-Opener-Policy`、`Content-Security-Policy`、`Strict-Transport-Security`（HTTPS/生产态）。
   API 端口可绕过 Nginx 直连，这层由应用自己保证。
+  - 管理后台的静态资源（`infra/nginx/admin-web.conf` 的 `location /assets/`）也覆盖同一组头 ——
+    nginx 的 `add_header` **不跨层继承**，该块自己出现 `add_header` 就会丢掉父层的全部安全头
+    （见 KNOWN-ISSUES #178）。
 - **反向代理信任**：`TRUST_PROXY_HOPS`（默认 1）让限流按**真实客户端 IP** 计数 ——
   此前 `req.ip` 恒为 Nginx 容器地址，所有匿名请求共用一个计数桶。
 
@@ -65,6 +81,11 @@
 - 登录 / 刷新：20 次/分钟；写接口 30 次/分钟；读接口 240 次/分钟（按用户或 IP，固定窗口计数于 Redis）。
 - **计数桶按「身份 + 接口类别」（auth / write / read）**，不是按路由处理器 ——
   逐路由分桶会让实际阈值放大到文档承诺的数倍。
+- **认证失败的请求同样计额**：限流守卫排在 JWT 守卫之后，伪造 / 过期令牌的请求此前在到达限流前
+  就被 401 拒掉，等于完全不受保护。现在认证失败先按 IP 计一次额度，超阈值直接 429
+  （见 KNOWN-ISSUES #179）。
+- **类别判定先看 handler 名再看 HTTP 方法**：登录 / 刷新端点全是 POST，
+  若先按方法判成 write 档，「登录 20 次/分钟」这一档就形同虚设。
 - 限流中间件在 Redis 不可用时**降级放行**（可用性优先），不阻断业务。
 
 ## 7. 审计
@@ -92,6 +113,15 @@
   正向与负向用例齐备（`test/integration/security-hardening.e2e-spec.ts`）。
 - [x] **安全响应头**：应用层与 Nginx 层都覆盖（见第 5 节）。
 - [x] **审计只追加的数据库保护**（见第 7 节）。
+- [x] **占位值识别不分隔符**（第二轮）：`CHANGE_ME_xxx` 与 `change-me-xxx` 同样被拒，
+  仓库自己的模板不再能绕过启动期校验；`.env.example` 与模板都写明了生成方式
+  （`openssl rand -hex 32`）。
+- [x] **部署模板与启动期校验对齐**（第二轮）：生产模板与 compose 的默认 `AUTH_MODE`
+  不再是 `mock`（否则按仓库文档部署会起不来），但生产用 `mock` 依然被拒绝启动。
+- [x] **管理员口令无默认值**（第二轮）：`Admin@2026` 不再是任何路径的兜底值；
+  Seed 在生产环境要求显式提供强口令，且不再重置已存在账号的口令。
+- [x] **CORS 只认具体域名**（第二轮）：子域通配一律不认（启动期也判为非法）。
+- [x] **认证失败的请求也计额**（第二轮）：伪造 / 过期令牌不再绕过限流。
 
 ### 8.2 仍需人工动作（仓库侧无法完成）
 
@@ -105,3 +135,5 @@
   （Outbox 通道、重试、幂等与失败可见性已具备；模板 ID、用户订阅授权与真实推送属人工安排）。
 - [ ] **WAF 规则与定期备份/恢复演练**
   （备份与恢复演练脚本已存在；WAF 规则、cron/systemd 定时任务的安装属人工安排）。
+- [ ] **正式环境的管理员口令**（`ADMIN_BOOTSTRAP_PASSWORD`）
+  （服务端已无默认口令兜底：生产环境 Seed 缺口令就拒绝建号；正式口令由运维决定并写入环境变量）。

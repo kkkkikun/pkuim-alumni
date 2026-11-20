@@ -293,4 +293,53 @@ describe('双向连接 · 授权与并发 (e2e)', () => {
       .send({ targetUserId: b.userId, message: '希望建立联系' })
       .expect(403);
   });
+
+  // ---------------------------------------------------------------------
+  // 复核补漏（第二轮）：解除连接之后，详情接口不得再返回对方资料
+  //
+  // 此前 `getConnection()` **不校验关系状态**：
+  //   列表接口只给 status='active' 的关系，详情接口却连已解除（revoked）
+  //   的关系也照给 —— 对方的学院 / 地区 / 行业仍然拿得到。
+  //   口径不一致 = 「解除连接」之后仍能查到对方资料。
+  // ---------------------------------------------------------------------
+  it('解除连接后：列表里没有、详情也 404（不得再返回对方资料）', async () => {
+    const a = await seedAlumni('revoke-detail-a');
+    const b = await seedAlumni('revoke-detail-b');
+
+    const created = await request(app.getHttpServer())
+      .post('/api/v1/connections/requests')
+      .set('Authorization', `Bearer ${a.accessToken}`)
+      .send({ targetUserId: b.userId, message: '希望建立联系' })
+      .expect(201);
+    await request(app.getHttpServer())
+      .post(`/api/v1/connections/requests/${created.body.data.id}/accept`)
+      .set('Authorization', `Bearer ${b.accessToken}`)
+      .expect(201);
+
+    const list = await request(app.getHttpServer())
+      .get('/api/v1/connections')
+      .set('Authorization', `Bearer ${a.accessToken}`)
+      .expect(200);
+    const pairId = list.body.data.items[0].id;
+
+    // 解除关系
+    await request(app.getHttpServer())
+      .delete(`/api/v1/connections/${pairId}`)
+      .set('Authorization', `Bearer ${a.accessToken}`)
+      .expect(200);
+
+    // 列表里已经没有这条关系
+    const afterList = await request(app.getHttpServer())
+      .get('/api/v1/connections')
+      .set('Authorization', `Bearer ${a.accessToken}`)
+      .expect(200);
+    expect(afterList.body.data.items.some((item: { id: number }) => item.id === pairId)).toBe(false);
+
+    // 详情也必须 404（不得再返回对方的学院 / 地区 / 行业）
+    const detail = await request(app.getHttpServer())
+      .get(`/api/v1/connections/${pairId}`)
+      .set('Authorization', `Bearer ${a.accessToken}`);
+    expect(detail.status).toBe(404);
+    expect(detail.body.data).toBeNull();
+  });
 });

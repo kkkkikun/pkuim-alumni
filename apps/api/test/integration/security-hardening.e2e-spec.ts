@@ -129,10 +129,13 @@ describe('HTTP 硬化：安全响应头与 CORS 白名单', () => {
       expect(isOriginAllowed('http://alumni.example.com', options.allowlist)).toBe(false);
     });
 
-    it('子域通配只匹配子域，裸域必须显式列出', () => {
+    it('子域通配**不被接受**（文档口径：只认具体域名）', () => {
+      // 复核补漏（第二轮）：此前这里支持 `https://*.example.com` 通配，
+      // 而 docs/SECURITY.md 第 8 节写的是「不接受通配符」。
+      // 现在白名单只做精确匹配：通配写法一条都匹配不上（fail-closed）。
       const options = buildCorsOptions('https://*.example.com', true);
-      expect(isOriginAllowed('https://a.example.com', options.allowlist)).toBe(true);
-      expect(isOriginAllowed('https://a.b.example.com', options.allowlist)).toBe(true);
+      expect(isOriginAllowed('https://a.example.com', options.allowlist)).toBe(false);
+      expect(isOriginAllowed('https://a.b.example.com', options.allowlist)).toBe(false);
       expect(isOriginAllowed('https://example.com', options.allowlist)).toBe(false);
       expect(isOriginAllowed('https://example.com.evil.net', options.allowlist)).toBe(false);
     });

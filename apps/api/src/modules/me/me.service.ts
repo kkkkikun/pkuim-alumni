@@ -71,6 +71,19 @@ export class MeService {
     };
   }
 
+  /**
+   * 只取联系方式。
+   *
+   * ⚠️ 复核补漏（第二轮）：`GET /me/contacts` 此前走的是 `getMe()` ——
+   *    为了返回 3 个联系方式字段，把 user / profile / region / industry / contact
+   *    全查了一遍（**5 条 SQL**，其中 region、industry 是关系懒加载各多一条）。
+   *    这里只查联系方式那一张表（**1 条 SQL**），返回值与之前完全一致。
+   */
+  async getContact(userId: number) {
+    const contact = await this.contacts.findOne({ where: { userId } });
+    return this.toContact(contact);
+  }
+
   async getMe(userId: number) {
     const user = await this.users.findOne({ where: { id: userId } });
     if (!user) throw new NotFoundException('用户不存在');

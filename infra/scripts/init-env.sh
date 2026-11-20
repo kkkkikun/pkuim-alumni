@@ -8,7 +8,7 @@
 # 行为：
 #   - 以 infra/env/env.prod.example 为模板
 #   - 为 JWT_SECRET / MYSQL_ROOT_PASSWORD / MYSQL_PASSWORD / REDIS_PASSWORD /
-#     MINIO_ROOT_PASSWORD 生成随机值
+#     MINIO_ROOT_PASSWORD / ADMIN_BOOTSTRAP_PASSWORD 生成随机值
 #   - 已存在的 .env.prod 不会被覆盖（除非 --force，且会先备份）
 # =============================================================================
 
@@ -63,9 +63,13 @@ replace_in_file MYSQL_PASSWORD     "$(gen_secret 24)" "$tmp"
 replace_in_file REDIS_PASSWORD     "$(gen_secret 24)" "$tmp"
 replace_in_file MINIO_ROOT_PASSWORD "$(gen_secret 24)" "$tmp"
 replace_in_file JWT_SECRET         "$(gen_secret 32)" "$tmp"
+# 管理员口令：Seed 建号时用它。模板里的占位值（CHANGE_ME_...）在生产环境会被
+# Seed 直接拒绝建号 —— 所以这里生成一个随机强口令（≥12 位）。
+replace_in_file ADMIN_BOOTSTRAP_PASSWORD "$(gen_secret 24)" "$tmp"
 
 chmod 600 "$tmp"
 mv "$tmp" "$ENV_FILE"
 
 log "已生成 ${ENV_FILE}（权限 600，随机密钥已写入）"
+log "管理员口令已写入 ADMIN_BOOTSTRAP_PASSWORD（不回显；请从 ${ENV_FILE} 查看并妥善保存）"
 log "请复核 JWT_SECRET / MYSQL_PASSWORD 等值后再启动服务。"

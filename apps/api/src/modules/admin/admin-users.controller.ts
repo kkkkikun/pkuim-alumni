@@ -38,9 +38,18 @@ export class AdminUsersController {
     // ⚠️ 三步写（建账号 → 同步角色 → 写审计）必须同事务（缺陷 #115）：
     // 中途失败若不回滚，账号会以「有账号、没角色」的半成品状态留在库里，
     // 而且接口已经返回 500，管理员无从得知发生了什么。
+    // ⚠️ 复核补漏（第二轮）：此前这里是 `body.password ?? 'Admin@2026'` ——
+    //    不传初始口令时，新管理员的口令就是**公开在仓库里的常量**
+    //    （README / docs / seed 脚本里都有），等于给了一个「谁都能登进后台」的账号。
+    //    现在初始口令**必填**（DTO 层校验：缺失或过短直接 400），
+    //    仓库里不再有任何「默认管理员口令」的回退路径。
+    //
+    // ⚠️ 哈希在**事务外**算：bcrypt cost=10 是纯 CPU 运算，单次 60~120ms，
+    //    放在事务里会让一条数据库连接 + 行锁被白白占住这么久。
+    const passwordHash = await this.hashPassword(body.password);
+
     const result = await this.dataSource.transaction(async (manager) => {
       const adminUsers = manager.getRepository(AdminUser);
-      const passwordHash = await this.hashPassword(body.password ?? 'Admin@2026');
       let admin: AdminUser;
       try {
         admin = await adminUsers.save(
@@ -84,6 +93,9 @@ export class AdminUsersController {
     @Param('id', ParseIntPipe) id: number,
     @Body() body: UpdateAdminUserBodyDto,
   ) {
+    // ⚠️ 同上：哈希在事务外算（bcrypt 是纯 CPU 运算，不该占着数据库连接）。
+    const passwordHash = body.password ? await this.hashPassword(body.password) : null;
+
     // 同上：改资料 / 改角色 / 写审计必须同事务（缺陷 #115）
     const { admin, appliedRoles } = await this.dataSource.transaction(async (manager) => {
       const adminUsers = manager.getRepository(AdminUser);
@@ -91,8 +103,8 @@ export class AdminUsersController {
       if (!admin) throw new NotFoundException('管理员不存在');
       if (body.displayName !== undefined) admin.displayName = body.displayName;
       if (body.status !== undefined) admin.status = body.status;
-      if (body.password) {
-        admin.passwordHash = await this.hashPassword(body.password);
+      if (passwordHash) {
+        admin.passwordHash = passwordHash;
       }
       await adminUsers.save(admin);
       // 角色：请求里没带就保持原样；带了才同步
@@ -253,8 +265,11 @@ export class AdminUsersController {
       .find({ where: roleCodes.map((code) => ({ code })) });
     const links = manager.getRepository(AdminUserRole);
     await links.delete({ adminUserId: adminId });
-    for (const role of roles) {
-      await links.save(links.create({ adminUserId: adminId, roleId: role.id }));
+    // 一次批量插入（此前是逐条 await save，每个角色一条 INSERT）。
+    if (roles.length > 0) {
+      await links.save(
+        roles.map((role) => links.create({ adminUserId: adminId, roleId: role.id })),
+      );
     }
     return roles.map((role) => role.code);
   }

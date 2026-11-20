@@ -4,7 +4,8 @@
   "private": true,
   "description": "内蒙古北京大学校友会数字化平台 · 原生微信小程序客户端",
   "scripts": {
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node ../api/node_modules/jest/bin/jest.js --config jest.config.js"
   },
   "dependencies": {
     "tdesign-miniprogram": "^1.9.5"

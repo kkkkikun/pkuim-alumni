@@ -3031,6 +3031,120 @@
   （它在微信运行时里跑，`Page` / `wx` 等是运行时注入的全局对象）。
   两者的把关方式目前分别是 `vue-tsc --noEmit` + `check-admin-web.mjs`、小程序静态校验脚本。
 
+### 173. 仓库自己的 `CHANGE_ME_*` 占位值绕过了启动期校验（上一轮的防线对自家模板无效）
+
+- **现象**：上一轮（opt-001）加了「生产环境缺密钥 / 用占位值 → 拒绝启动」的启动期校验，
+  但占位值黑名单只认 `-` 分隔的写法（`change-me-xxx`）。
+  而**仓库自己的模板用的全是下划线**：
+  `docker-compose.prod.yml` 的 `JWT_SECRET: ${JWT_SECRET:-CHANGE_ME_jwt_secret_min_32_chars}`、
+  `infra/env/env.prod.example` 的 `MYSQL_PASSWORD=CHANGE_ME_app_password`。
+  这些值长度都 ≥ 32、格式又逃过黑名单 → **用默认 compose 参数起生产环境，校验全绿、照常启动**，
+  而 JWT 密钥是**公开在仓库里的常量** —— 任何人都能伪造管理员令牌。
+  也就是说：上一轮修掉的那个洞，在自家模板上原样还在。
+- **处置**：占位值识别统一把 `_` 与 `-` 当同一个分隔符（`canonicalize`），
+  并补上常见弱默认口令（`password123` / `secret123` / `admin123` / `123456`）。
+- **验证**：`apps/api/test/integration/config-validation.e2e-spec.ts`
+  「仓库自己的 CHANGE_ME_xxx 写法必须被识别成占位值」+
+  「模板与 compose 里的占位密钥必须能被占位值识别命中」（直接读仓库里的两个文件做对账）。
+
+### 174. 上一轮的启动期校验把**仓库自己的生产部署路径**挡在了门外
+
+- **现象**：上一轮把「生产环境 `AUTH_MODE=mock`」改成拒绝启动，
+  但 `infra/env/env.prod.example` 里仍然是 `AUTH_MODE=mock`，
+  而 `infra/scripts/init-env.sh` 正是**照着这个模板**生成 `.env.prod` 的。
+  于是：按仓库文档走一遍「生成 .env.prod → 起服务」，生产 API **起不来**（容器反复重启）。
+  `docker-compose.prod.yml` 的默认值同样是 `mock`，不准备 `.env.prod` 直接 `compose up` 也起不来。
+- **处置**：模板与 compose 的默认值改为 `both`（与**现网实际部署**一致：`AUTH_MODE=both`），
+  并在模板里写明「正式上线改 wechat（人工安排）」；
+  `AUTH_MODE=mock` 在生产环境依然会被启动期校验拒绝（这一条不放宽）。
+- **验证**：新增用例「生产环境模板不得把 AUTH_MODE 设成 mock」「compose 的默认 AUTH_MODE 不得是 mock」
+  —— 直接读仓库里的模板与 compose 文件做对账，防止再次漂移。
+
+### 175. 管理员的默认口令是**公开在仓库里的常量**（`Admin@2026`）
+
+- **现象**：两处：
+  1. `apps/api/src/database/seeds/seed.ts` 硬编码 `admin / Admin@2026`，
+     而且**每次跑 Seed 都会把口令重置**成它 —— 运维手工改过的强口令活不过下一次 Seed；
+  2. `apps/api/src/modules/admin/admin-users.controller.ts` 建号时是
+     `body.password ?? 'Admin@2026'` —— 管理端「创建管理员」不填初始口令，
+     新账号的口令就是这个公开常量。
+- **影响面**：`Admin@2026` 出现在 README、docs、seed 脚本里 —— 等同于「谁都能登进管理后台」。
+- **处置**：
+  - Seed 的账号名与口令改为从环境变量取（`ADMIN_BOOTSTRAP_USERNAME` / `ADMIN_BOOTSTRAP_PASSWORD`）；
+    生产环境**要求显式提供强口令**（缺失 / 仍是默认值 / 是占位值 / 短于 12 位 → 拒绝建号），
+    且**不再重置**已存在账号的口令（开发/测试环境保留原来的可重复行为）。
+  - 管理端建号的初始口令**改为必填**（DTO 层校验，缺失或短于 8 位直接 400），
+    仓库里不再有任何「默认管理员口令」的回退路径；
+    管理后台的表单校验同步从 6 位改成 8 位。
+- **验证**：`admin-account-management.e2e-spec.ts` 新增两例：
+  「创建管理员不传初始口令 → 400（且账号根本没被建出来）」、
+  「传了初始口令 → 只能用这个口令登录，仓库里的公开默认口令登不进去」。
+
+### 176. CORS 白名单接受子域通配，与文档口径不一致
+
+- **现象**：`docs/SECURITY.md` 第 8 节写的是「只接受配置里列出的**具体域名**，不接受通配符」，
+  但 `config/cors.ts` 与 `config/config-validation.ts` 都支持 `https://*.example.com` 这种子域通配。
+  文档与实现不一致 —— 按「以更严格的一侧为准」处理。
+- **处置**：白名单**只做精确匹配**，通配写法一律不认；
+  启动期校验也把带 `*` 的 origin 判为非法（生产环境直接拒绝启动）。
+- **验证**：`security-hardening.e2e-spec.ts` 的用例从「子域通配匹配子域」改成
+  「子域通配**不被接受**」；`config-validation.e2e-spec.ts` 同步。
+
+### 177. 解除连接之后，连接详情仍返回对方的资料
+
+- **现象**：`connections.service.ts` 的 `getConnection()` **不校验关系状态**：
+  列表接口只给 `status='active'` 的关系，详情接口却连已解除（`revoked`）的关系也照给 ——
+  对方的学院 / 地区 / 行业仍然拿得到（联系方式虽已随解除被撤销，资料字段还在）。
+  两边口径不一致，等于「解除连接」之后仍能查到对方资料。
+- **处置**：详情与列表口径统一 —— 非 `active` 的关系一律 404（不泄露关系是否存在）。
+- **验证**：`connections.e2e-spec.ts` 新增一例「解除连接后：列表里没有、详情也 404」。
+
+### 178. 管理后台的静态资源**一个安全响应头都没有**（nginx 的 add_header 不跨层继承）
+
+- **现象**：`infra/nginx/admin-web.conf` 的 `location /assets/` 里只有一条
+  `add_header Cache-Control ...`；而 nginx 的规则是「**当前层级只要出现任何 add_header，
+  就不再继承父层的全部 add_header**」——
+  于是直连管理后台静态资源（compose 把 18082 映射到宿主机）时，
+  `X-Frame-Options` / CSP / HSTS 等**全部缺失**。
+- **处置**：`location /assets/` 内补齐与 server 块同一份安全头清单（nginx 没有变量化的 add_header，只能重复）。
+- **验证**：`infra/scripts/check-admin-web.mjs` 之外，本条以配置对账 + 人工复核为准
+  （本机没有直连 admin-web 容器的 nginx 实例，未做端到端抓包 —— 记为待验证）。
+
+### 179. 认证失败的请求**完全不受限流保护**
+
+- **现象**：全局守卫的执行顺序是 `JwtAuthGuard → PermissionsGuard → AlumniStageGuard → RateLimitGuard`，
+  而限流守卫排在**最后**。于是「不带头 / 带头但无效」的请求在到达限流之前就被 401 拒掉，
+  **一分钱额度都不消耗** —— 攻击者只要在请求头塞一个垃圾 `Bearer` 值，
+  就能对受保护端点无限打。文档第 6 节承诺的「按用户或 IP 计数」对这些请求并不成立。
+- **处置**：把计数逻辑抽成 `RateLimiterService`（`common/services/rate-limiter.service.ts`），
+  `JwtAuthGuard` 的失败路径也调用它（按 IP 计额）；超阈值直接 429，没超才回原来的 401。
+  顺带修正了类别判定顺序：**先看 handler 名再看方法** —— 否则登录 / 刷新（全都是 POST）
+  会被判成 write 档，「登录 20 次/分钟」这一档形同虚设。
+- **验证**：`rate-limit.e2e-spec.ts` 新增一例「带伪造令牌的请求同样消耗额度，超过阈值后返回 429」。
+
+### 180. 上一轮迁移的注释**承诺了两个从未落地的索引**
+
+- **现象**：迁移 `1730000005000` 的注释里明确写着要补
+  `articles.category_id` 与 `admin_action_logs.created_at` 两个索引，
+  但文件里的 `INDEXES` 常量**只有 3 条**，这两个**从未被创建** ——
+  「注释承诺了、库里其实没有」。
+- **处置（本轮实测后决定取舍）**：
+  - `articles(category_id, published_at)` **落地**（迁移 `1730000006000`）：
+    实测「按分类筛选 + 按发布时间倒序」的 COUNT **23.78 ms → 2.53 ms（9.4×）**，
+    执行计划从 `idx_articles_published`（扫 10000 行）换成 `idx_articles_category`（扫 2000 行）。
+  - `admin_action_logs(created_at)` **不落地**：实测宽时间区间（30 天）COUNT 前后一致
+    （20.94 ms → 21.47 ms，优化器仍选 `idx_admin_action_logs_admin` 的 skip scan），
+    窄区间（1 天）只有 0.94 ms → 0.80 ms —— 收益微弱，
+    按上一轮定下的规矩「**没有实测数字的索引不写进生产库**」不加。
+    迁移 5000 的注释已改成不再声称自己建了它；本轮的新迁移也不含它。
+- **另加一个实测有收益的索引**：`event_registrations(user_id, id)`
+  （实测 SELECT 5.45 ms → 0.23 ms、COUNT 2.07 ms → 0.14 ms，
+  执行计划从「主键倒序扫 + 逐行过滤」换成「按 user_id 直接定位」）。
+- `connection_pairs(user_b_id, id)` **不落地**：实测（2 万条连接对）SELECT 0.266 ms → 0.313 ms、
+  COUNT 4.676 ms → 4.747 ms —— OR 两侧优化器仍走主键倒序扫 / 全表扫，**没有改选**新索引，
+  按同一条规矩不加。
+  实测数字与命令见 `docs/TEST-REPORT.md` 第 8 节。
+
 ## 待验证 / 未完成（不得声称已通过）> 以下均为**缺少外部资质或环境**导致的未验证项，与实现质量无关。
 > 已实测完成的项（冒烟 10/10、集成测试 39/39、k6 分级压测、备份恢复演练、管理后台构建）见 `docs/TEST-REPORT.md`。
 
@@ -3049,7 +3163,14 @@
 | 微信订阅消息模板 | Outbox 通道、重试与幂等机制在 Worker 侧已具备；**模板 ID、用户订阅授权、真实推送**属人工安排 | 运营：配置模板后接通 Worker 的 `wechat` 渠道 |
 | WAF 规则与备份定时任务 | 备份 / 恢复 / 演练脚本齐全；**WAF 规则集**与 **cron / systemd 定时任务的安装**属人工安排 | 运维：按 `docs/top.md` §11 与 `docs/BACKUP-RESTORE.md` 安装定时任务；在边缘层配置 WAF |
 | 管理后台 UI 库按需引入（首屏减负） | 本轮只把 TDesign 拆成独立 chunk，**首屏下载量未变**（`app.use(TDesign)` 全局注册）；改成按需引入会改动组件注册方式，需要真实浏览器验证，而本机缺少浏览器冒烟所需环境 | 单独一轮迭代：改按需引入 + 跑 `infra/scripts/admin-ui-smoke.mjs` 真实浏览器冒烟 |
-| 两个无上限列表端点 | `GET /admin/events/:id/registrations` 与 `GET /alumni/verification/mine` **没有分页上限**；修复需要变更响应结构（契约变更），须同步 `packages/contracts` 与 `docs/API-SPEC.md` 并改两端客户端 | 单独一轮迭代（契约变更轮），不要在安全/性能轮里顺手改契约 |
+| 三个无上限列表端点 | `GET /admin/events/:id/registrations`（一个 1000 人活动的点名 = 1000 行全量返回）、`GET /alumni/verification/mine`（该用户全部认证申请）、`GET /admin/roles|permissions|settings`（全表，但表小、风险低）；前两个修复需要变更响应结构（契约变更），须同步 `packages/contracts` 与 `docs/API-SPEC.md` 并改两端客户端 | 单独一轮迭代（契约变更轮），不要在安全/性能轮里顺手改契约 |
+| 列表接口把 MEDIUMTEXT 正文整列返回 | `GET /articles`、`GET /notices`、`GET /resources` 的列表响应里带着整篇正文（`content.service.ts` / `resources.service.ts`）；`pageSize=100` 时单次响应可达数十 MB。修法是列表不返回 `body`、正文走详情接口 —— 属于**契约变更**（`ArticleDto.body` 在列表里消失） | 契约变更轮一并处理；在此之前由 `MAX_PAGE_SIZE=100` 兜底 |
+| 管理员每请求重算 RBAC（4 条 SQL） | `auth.service.ts` 的 `resolveAccessToken` 每次都重查 `admin_users` + `admin_user_roles` + `role_permissions`（含关系懒加载）。加进程内 TTL 缓存收益最大，但会带来**最长 TTL 的撤权延迟**（管理员被降权后仍可操作 ≤TTL），属安全语义变更 | 单独一轮：先定 TTL（建议 ≤60 s）+ 降权时主动失效，再上缓存；**不要**在安全轮里顺手引入 |
+| 字典 / 聚合接口无缓存 | `GET /system/regions|industries` 每次请求都做一次 `alumni_profiles JOIN users` 的全表 GROUP BY 聚合（小程序冷启动必打 3 条）；API 目前**没有任何缓存层**（Redis 只用于限流），而 `docs/CONCURRENCY-DESIGN.md` 写的是「Redis 只做缓存、限流、队列」—— 文档与实现不一致 | 单独一轮：进程内 TTL 缓存（字典 / 分类 / 系统设置）+ 写操作失效钩子；**不要**缓存需要实时性的数据（未读通知数） |
+| `view_count` 每次浏览都写一次库 | `content.service.ts` 的 `incrementViewCount` 在**详情接口**里同步 UPDATE，热门文章会被所有浏览者串行争抢同一行锁 | 单独一轮：改 Redis 计数 + 惰性刷回（会牺牲 `viewCount` 的即时一致性，需同步契约说明） |
+| `/admin/stats` 的 `connectionTotal` 口径 | 管理端把它标成「连接总数」，服务端统计的却是**联系申请**条数（`connection_request_history`）。改查询会改变页面上显示的数字（对外可见语义），本轮只去掉了完全重复的那条 COUNT | 需要产品/客户确认口径后再改 |
+| 连接列表未按对方的字段可见开关裁剪 | `/me/connections` 无条件返回对方的学院 / 地区 / 行业；而 `showCollege` 等开关在小程序里的说明是「**在通讯录中**显示你的毕业院系」—— 开关的语义只覆盖通讯录 | 需要产品确认「解除连接 / 连接列表」是否也应受开关约束；本轮**未改**（改了就是改业务语义） |
+| nginx 静态资源安全头的端到端验证 | #178 已在 `infra/nginx/admin-web.conf` 补齐 `location /assets/` 的安全头，但本机没有直连 admin-web 容器的 nginx 实例，未做真实响应头抓包 | 部署到服务器后 `curl -I http://127.0.0.1:18082/assets/xxx.js` 核对一次 |
 | 管理端「分类 CRUD / 系统设置写入」没有审计记录 | `docs/SECURITY.md` 第 7 节列举的关键操作（审核、发布、下架、账号状态）**已全部留痕**；但 `POST/PATCH/DELETE /admin/articles/categories` 与 `PUT /admin/settings` 这 4 个写端点**没有**写 `admin_action_logs`。补齐需要让 `ContentService` 的这 4 个方法支持「传入事务 manager」，再与审计写入放进同一事务（沿用缺陷 #134 的做法），属于对内容服务的结构性改动 | 单独一轮迭代（内容服务事务化改造） |
 | 通知深分页索引收益 | `(user_id, id)` 索引已建，但优化器在本次数据集上未自动改选；真实收益取决于数据分布 | 生产数据量到位后用 `EXPLAIN ANALYZE` 复测，必要时再调 |
 

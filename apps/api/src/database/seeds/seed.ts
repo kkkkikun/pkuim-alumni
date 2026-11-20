@@ -9,6 +9,10 @@ import type { ObjectLiteral, QueryDeepPartialEntity, Repository } from 'typeorm'
 
 import { AppDataSource } from '../data-source';
 import {
+  resolveAdminCredentials,
+  validateAdminCredentials,
+} from '../../config/config-validation';
+import {
   AdminUser,
   AdminUserRole,
   AlumniProfile,
@@ -52,11 +56,26 @@ import {
 /* 常量                                                                  */
 /* ------------------------------------------------------------------ */
 
-/** 初始超级管理员账号（仅用于开发/测试环境） */
-const ADMIN_USERNAME = 'admin';
-const ADMIN_PASSWORD = 'Admin@2026';
+/**
+ * 初始超级管理员账号。
+ *
+ * ⚠️ 复核补漏（第二轮）：此前这里是**硬编码常量** `'admin' / 'Admin@2026'`，
+ *    而且每次跑 Seed 都会把管理员口令**重置**成这个公开值
+ *    （`admin.passwordHash = passwordHash`）。
+ *    后果有两条：
+ *      1. 生产环境的管理后台口令是**公开在仓库里的常量** —— 谁都能登进去；
+ *      2. 运维手工改过口令后，**再跑一次 Seed 就被打回原形**。
+ *    现在：账号名与口令从环境变量取（见 `config/config-validation.ts`）；
+ *    生产环境**要求显式提供**强口令，且**不再重置**已存在账号的口令
+ *    （口令只在建号时写入一次）。
+ *    开发/测试环境仍保留原来的可重复行为（口令固定、每次重置），
+ *    以免破坏集成测试的可复现性。
+ */
 const ADMIN_DISPLAY_NAME = '超级管理员';
 const BCRYPT_COST = 10;
+
+/** 管理员账号名（可由 ADMIN_BOOTSTRAP_USERNAME 覆盖；默认 admin）。 */
+const ADMIN_USERNAME = resolveAdminCredentials(process.env).username;
 
 /** 虚构校友数据前缀，用于幂等判断 */
 const ALUMNI_OPENID_PREFIX = 'mock_alumni_';
@@ -266,21 +285,29 @@ async function seedAdminUser(
   roleIdByCode: Map<string, number>,
 ): Promise<number> {
   const adminRepo = dataSource.getRepository(AdminUser);
-  const passwordHash = await bcrypt.hash(ADMIN_PASSWORD, BCRYPT_COST);
+  const isProduction = (process.env.NODE_ENV ?? 'development') === 'production';
+  const { username, password } = resolveAdminCredentials(process.env);
+  const passwordHash = await bcrypt.hash(password, BCRYPT_COST);
 
-  let admin = await adminRepo.findOne({ where: { username: ADMIN_USERNAME } });
+  let admin = await adminRepo.findOne({ where: { username } });
 
   if (!admin) {
     admin = await adminRepo.save(
       adminRepo.create({
-        username: ADMIN_USERNAME,
+        username,
         passwordHash,
         displayName: ADMIN_DISPLAY_NAME,
         status: 'active',
       }),
     );
+  } else if (isProduction) {
+    // 生产环境**不重置口令** —— 运维手工改过的强口令不能被一次 Seed 打回原形。
+    // 账号状态与显示名仍会被纠正（这不涉及凭据）。
+    admin.displayName = ADMIN_DISPLAY_NAME;
+    admin.status = 'active';
+    admin = await adminRepo.save(admin);
   } else {
-    // 已存在则重置为约定口令，避免出现无法登录的残留账号
+    // 开发/测试环境：重置为约定口令，保证用例可复现。
     admin.passwordHash = passwordHash;
     admin.displayName = ADMIN_DISPLAY_NAME;
     admin.status = 'active';
@@ -1117,7 +1144,13 @@ async function printSummary(dataSource: DataSource): Promise<void> {
     console.log(`  ${name.padEnd(28)} ${count}`);
   }
   console.log('===================================');
-  console.log(`管理员账号：${ADMIN_USERNAME} / ${ADMIN_PASSWORD}（角色 super_admin）`);
+  const { username, password } = resolveAdminCredentials(process.env);
+  const isProduction = (process.env.NODE_ENV ?? 'development') === 'production';
+  console.log(
+    isProduction
+      ? `管理员账号：${username}（口令由 ADMIN_BOOTSTRAP_PASSWORD 提供，未回显；角色 super_admin）`
+      : `管理员账号：${username} / ${password}（角色 super_admin）`,
+  );
   console.log('提示：以上全部为虚构测试数据，请勿用于生产环境。');
 }
 
@@ -1127,6 +1160,24 @@ async function printSummary(dataSource: DataSource): Promise<void> {
 
 async function main(): Promise<void> {
   console.log('开始写入 Seed 数据……');
+
+  // ⚠️ 生产环境的口令把关：管理员账号由 Seed 创建，
+  //    而默认口令 `Admin@2026` 是**公开在仓库里的常量** ——
+  //    生产环境必须显式提供一个强口令，否则宁可**建不出账号**，
+  //    也不能留下一个「谁都知道口令」的管理后台。
+  const adminCheck = validateAdminCredentials(process.env);
+  if (adminCheck.issues.length > 0) {
+    for (const issue of adminCheck.issues) {
+      console.warn(`[Seed][配置校验] ${issue.key}: ${issue.message}`);
+    }
+  }
+  if (adminCheck.fatal) {
+    throw new Error(
+      '[Seed] 生产环境的管理员口令配置不合格，拒绝创建管理员账号。' +
+        '请设置 ADMIN_BOOTSTRAP_PASSWORD（至少 12 位、非仓库里的默认值/占位值）后重试。',
+    );
+  }
+
   await AppDataSource.initialize();
 
   try {

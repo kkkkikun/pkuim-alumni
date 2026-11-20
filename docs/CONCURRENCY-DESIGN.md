@@ -72,7 +72,33 @@
 | 多实例 | API 无状态，会话与限流状态存 Redis/MySQL，可水平扩容 |
 | Redis 定位 | 只做缓存、限流、队列，**不承担业务最终一致性**；Redis 不可用时限流降级放行而非阻断业务 |
 
-## 3. 压测验证口径（k6）
+## 3. 连接池与实例数
+
+> 复核补漏（第二轮）：此前 `connectionLimit: 20` 是 `app.module.ts` 里的**硬编码魔数**，
+> 既不能按环境调，本文件也**从未写过**连接池的口径 —— 谁都说不清 20 是怎么定的。
+
+| 位置 | 配置项 | 默认值 |
+|---|---|---|
+| API（每个实例） | `DB_POOL_SIZE` → `extra.connectionLimit` | 20 |
+| Worker | 硬编码 | 10 |
+| Worker 自检脚本 | 硬编码 | 4 |
+
+**口径**：
+
+```
+总连接数 ≈ API 实例数 × DB_POOL_SIZE + Worker(10) + 自检(4)
+约束：    总连接数 ≤ MySQL max_connections × 0.8
+```
+
+- `docs/ARCHITECTURE.md` 的起步规模是 **API 2 实例** → 2 × 20 + 10 + 4 = **54**；
+  `docs/PRODUCTION-DEPLOY-SPEC.md` 里生产 `max_connections` 收窄到 200 → 余量充足。
+- **调大 `DB_POOL_SIZE` 必须同时看 MySQL 的 `max_connections`**：
+  每条连接都独立占用缓冲，连接数不是越大越快。
+- 观察点：`/admin/stats` 一次并发 12 条 COUNT（复核后去掉了 1 条完全重复的），
+  单个请求就可能占掉池子的 60%；池子被打满时表现是「请求排队等连接」而不是报错，
+  排查时看 MySQL 的 `Threads_connected` 与 `Max_used_connections`。
+
+## 4. 压测验证口径（k6）
 
 | 脚本 | 断言（业务正确性，不能只看 HTTP 状态码） |
 |---|---|

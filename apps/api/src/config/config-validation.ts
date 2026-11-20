@@ -30,8 +30,18 @@
 export const MIN_JWT_SECRET_LENGTH = 32;
 
 /**
- * 占位值黑名单（大小写不敏感）。
+ * 占位值黑名单（大小写与分隔符不敏感）。
  * 这些字符串**出现在仓库里**，等于公开，不能当作真密钥使用。
+ *
+ * ⚠️ 复核补漏（第二轮）：此前这张表只按「精确相等」或「`-` 前缀」匹配，
+ *    而仓库自己的模板用的是**下划线**写法
+ *    （`docker-compose.prod.yml` 的 `CHANGE_ME_jwt_secret_min_32_chars`、
+ *    `infra/env/env.prod.example` 的 `CHANGE_ME_app_password`）——
+ *    这些值长度都 ≥ 32、也不是「change-me-xxx」，
+ *    于是**整条占位值防线对仓库自己的模板完全失效**：
+ *    用默认 compose 参数起生产环境，校验全绿、照常启动，
+ *    而 JWT 密钥是**公开在仓库里的常量** —— 任何人都能伪造管理员令牌。
+ *    现在统一把 `_` 与 `-` 视作同一个分隔符再比对。
  */
 export const KNOWN_PLACEHOLDER_SECRETS = [
   'change-me',
@@ -42,7 +52,19 @@ export const KNOWN_PLACEHOLDER_SECRETS = [
   'secret',
   'your-secret',
   'nmg-secret',
+  // 常见的弱默认口令（同样公开在无数仓库里）。
+  'password123',
+  'secret123',
+  'admin123',
+  '123456',
 ] as const;
+
+/**
+ * 仓库里公开的管理员默认口令。
+ *
+ * 它出现在 `src/database/seeds/seed.ts` 与 `docs/` 里 —— 等同于没有口令。
+ */
+export const DEFAULT_ADMIN_PASSWORD = 'Admin@2026';
 
 /** 单条配置问题。 */
 export interface ConfigIssue {
@@ -65,13 +87,24 @@ function readString(env: Record<string, unknown>, key: string): string {
   return String(raw).trim();
 }
 
+/**
+ * 归一化：大小写不敏感，且把 `_` 与 `-` 视作同一个分隔符。
+ *
+ * 仓库里的占位值有两种写法（`change-me-xxx` 与 `CHANGE_ME_xxx`），
+ * 归一化之后它们指向同一类，避免「换个分隔符就绕过校验」。
+ */
+function canonicalize(value: string): string {
+  return value.trim().toLowerCase().replace(/_/g, '-');
+}
+
 /** 是否是「公开在仓库里的占位值」。 */
 export function isPlaceholderSecret(value: string): boolean {
-  const normalized = value.trim().toLowerCase();
+  const normalized = canonicalize(value);
   if (!normalized) return false;
-  return KNOWN_PLACEHOLDER_SECRETS.some(
-    (placeholder) => normalized === placeholder || normalized.startsWith(`${placeholder}-`),
-  );
+  return KNOWN_PLACEHOLDER_SECRETS.some((placeholder) => {
+    const canonical = canonicalize(placeholder);
+    return normalized === canonical || normalized.startsWith(`${canonical}-`);
+  });
 }
 
 /**
@@ -122,13 +155,10 @@ export function isValidOrigin(value: string): boolean {
   if (parsed.search !== '' || parsed.hash !== '') return false;
   const host = parsed.hostname;
   if (!host) return false;
-  if (host.includes('*')) {
-    // 只允许 `*.example.com` 这种「子域通配」写法：
-    // 通配必须紧跟在主机名最前面，且只能出现一次。
-    if (!host.startsWith('*.')) return false;
-    const rest = host.slice(2);
-    return rest.length > 0 && !rest.includes('*');
-  }
+  // ⚠️ 复核补漏（第二轮）：此前允许 `*.example.com` 这种「子域通配」，
+  //    与 docs/SECURITY.md 第 8 节「只接受配置里列出的具体域名，不接受通配符」
+  //    不一致。以更严格的一侧为准：**通配一律不合法**。
+  if (host.includes('*')) return false;
   return true;
 }
 
@@ -248,6 +278,79 @@ export function validateRuntimeConfig(
     if (!appSecret) {
       add('WECHAT_APP_SECRET', 'AUTH_MODE=wechat 但未配置 WECHAT_APP_SECRET，微信登录将不可用。', isProduction);
     }
+  }
+
+  const fatal = isProduction && issues.length > 0;
+  return { fatal, issues };
+}
+
+/* --------------------------- 管理员引导账号 --------------------------- */
+
+/** 管理员引导账号的取值。 */
+export interface AdminCredentials {
+  username: string;
+  password: string;
+}
+
+/** 管理员口令的最小长度（生产态）。 */
+export const MIN_ADMIN_PASSWORD_LENGTH = 12;
+
+/**
+ * 取管理员引导账号的取值。
+ *
+ * ⚠️ 默认口令 `Admin@2026` **公开在仓库里**（seed 脚本、`docs/`、README 里都有），
+ *    它不是一个口令，而是一个「谁都能登进管理后台」的常量。
+ *    生产环境必须由环境变量显式覆盖。
+ */
+export function resolveAdminCredentials(env: Record<string, unknown>): AdminCredentials {
+  return {
+    username: readString(env, 'ADMIN_BOOTSTRAP_USERNAME') || 'admin',
+    password: readString(env, 'ADMIN_BOOTSTRAP_PASSWORD') || DEFAULT_ADMIN_PASSWORD,
+  };
+}
+
+/**
+ * 校验管理员引导账号的口令。
+ *
+ * 与 API 启动期校验分开：**API 运行时根本不读这个口令**
+ * （管理员账号由 seed 创建），所以它不进 `validateRuntimeConfig`，
+ * 而是**建号的那一步**（`src/database/seeds/seed.ts`）必须自己把关。
+ */
+export function validateAdminCredentials(
+  env: Record<string, unknown>,
+): { fatal: boolean; issues: ConfigIssue[] } {
+  const nodeEnv = readString(env, 'NODE_ENV') || 'development';
+  const isProduction = nodeEnv === 'production';
+  const issues: ConfigIssue[] = [];
+  const rawPassword = readString(env, 'ADMIN_BOOTSTRAP_PASSWORD');
+
+  if (!rawPassword) {
+    issues.push({
+      key: 'ADMIN_BOOTSTRAP_PASSWORD',
+      message: isProduction
+        ? '[致命] 生产环境未设置 ADMIN_BOOTSTRAP_PASSWORD：管理员账号将使用仓库里公开的默认口令 ' +
+          `"${DEFAULT_ADMIN_PASSWORD}"，任何人都能登进管理后台。请生成一个强口令后写入环境变量。`
+        : `[提醒] 未设置 ADMIN_BOOTSTRAP_PASSWORD，将使用仓库里的默认口令（仅限开发/测试）。`,
+    });
+  } else if (rawPassword === DEFAULT_ADMIN_PASSWORD) {
+    issues.push({
+      key: 'ADMIN_BOOTSTRAP_PASSWORD',
+      message:
+        '[致命] ADMIN_BOOTSTRAP_PASSWORD 仍是仓库里的默认口令，等同于没有口令。' +
+        '请生成一个强口令（至少 12 位）后写入环境变量。',
+    });
+  } else if (isPlaceholderSecret(rawPassword)) {
+    issues.push({
+      key: 'ADMIN_BOOTSTRAP_PASSWORD',
+      message: '[致命] ADMIN_BOOTSTRAP_PASSWORD 仍是仓库里的占位值，请重新生成后注入。',
+    });
+  } else if (rawPassword.length < MIN_ADMIN_PASSWORD_LENGTH) {
+    issues.push({
+      key: 'ADMIN_BOOTSTRAP_PASSWORD',
+      message:
+        `[致命] ADMIN_BOOTSTRAP_PASSWORD 长度不足 ${MIN_ADMIN_PASSWORD_LENGTH} 位` +
+        `（当前 ${rawPassword.length}）。`,
+    });
   }
 
   const fatal = isProduction && issues.length > 0;

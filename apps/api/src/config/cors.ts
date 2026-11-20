@@ -98,17 +98,13 @@ export function isOriginAllowed(origin: string, allowlist: string[]): boolean {
   for (const entry of allowlist) {
     const candidateUrl = parseOrigin(entry);
     if (!candidateUrl) continue;
-    // 精确匹配（URL.origin 已做小写化与默认端口归一）。
+    // ⚠️ 只做**精确匹配**（URL.origin 已做小写化与默认端口归一）。
+    //    复核补漏（第二轮）：此前这里还支持 `https://*.example.com` 这种
+    //    「子域通配」——而 docs/SECURITY.md 第 8 节写的是
+    //    「只接受配置里列出的**具体域名**，不接受通配符」。
+    //    文档与实现不一致时以更严格的一侧为准：通配一律不认。
+    //    （白名单里写了通配的，配置校验会在启动期直接拒绝 —— 见 config-validation.ts。）
     if (candidateUrl.origin === originUrl.origin) return true;
-    // 子域通配：`https://*.example.com` 匹配任意层级的子域。
-    const candidateHost = candidateUrl.hostname;
-    if (!candidateHost.startsWith('*.')) continue;
-    if (candidateUrl.protocol !== originUrl.protocol) continue;
-    const suffix = candidateHost.slice(1); // ".example.com"
-    // 裸域（example.com）不命中 `*.example.com`，必须显式列出。
-    if (originUrl.hostname.endsWith(suffix) && originUrl.hostname.length > suffix.length) {
-      return true;
-    }
   }
   return false;
 }
