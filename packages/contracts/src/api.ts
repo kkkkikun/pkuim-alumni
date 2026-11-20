@@ -8,7 +8,6 @@ import type {
   AdminPermission,
   AdminRole,
   AdminStats,
-  AlumniProfileDto,
   AlumniStage,
   ArticleDto,
   ArticleCategoryDto,
@@ -23,7 +22,6 @@ import type {
   MyAlumniProfile,
   NoticeDto,
   NotificationDto,
-  NotificationUnreadCount,
   PeerContact,
   PrivacySettings,
   RegionDto,
@@ -261,7 +259,7 @@ export interface CreateEventBody {
   status?: 'draft' | 'published';
 }
 
-export interface UpdateEventBody extends Partial<CreateEventBody> {}
+export type UpdateEventBody = Partial<CreateEventBody>;
 
 export interface RegisterEventBody {
   note?: string;

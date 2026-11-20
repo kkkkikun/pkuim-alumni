@@ -60,6 +60,15 @@ jobs:
       REDIS_URL: redis://127.0.0.1:6379
       REDIS_HOST: 127.0.0.1
       REDIS_PORT: "6379"
+      # 对象存储：上传链路的集成用例要真的写对象存储
+      # （上传令牌 → 落字节 → 回写大小、直传 → 登记 → 取下载地址、公开资产可下载）。
+      MINIO_ENDPOINT: 127.0.0.1
+      MINIO_PORT: "9000"
+      MINIO_USE_SSL: "false"
+      MINIO_ACCESS_KEY: ci_minio
+      MINIO_SECRET_KEY: ci_minio_password_0123456789
+      MINIO_BUCKET_PUBLIC: nmg-public
+      MINIO_BUCKET_PRIVATE: nmg-private
       # 集成测试里限流关掉（test/setup.ts 里也会兜底关一次），
       # 否则单个窗口内的大量登录会触发 429 把断言打乱。
       RATE_LIMIT_ENABLED: "false"
@@ -112,8 +121,37 @@ jobs:
 
       # 集成测试不会自动建表（生产约定 synchronize: false / migrationsRun: false），
       # 所以先跑一遍迁移，把表结构铺到测试库上。
+      # 对象存储用 docker 直接起，而不是 services:——
+      # 官方 minio/minio 镜像的默认 CMD 不是「server /data」，services: 无法改命令，
+      # 只能在步骤里显式 docker run；桶由应用启动时 makeBucket 自动创建。
+      - name: Start MinIO
+        run: |
+          docker run -d --name ci-minio \
+            -p 9000:9000 \
+            -e MINIO_ROOT_USER="$MINIO_ACCESS_KEY" \
+            -e MINIO_ROOT_PASSWORD="$MINIO_SECRET_KEY" \
+            minio/minio:latest server /data
+          for attempt in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:9000/minio/health/live >/dev/null; then
+              echo "MinIO 已就绪"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "MinIO 启动超时"
+          docker logs ci-minio
+          exit 1
+
       - name: Apply migrations to the test database
         run: pnpm --filter @nmg/api db:migrate
+
+      # 再灌一次 seed：集成测试的「固定基座」——字典表（regions / industries）、
+      # RBAC（roles / permissions / role_permissions）与管理员账号——由 seed 灌入，
+      # helpers.ts 把它们列为 PRESERVED_TABLES（用例之间不清空，只清业务表）。
+      # 只跑迁移不跑 seed 的话字典表是空的，用例插入带 region_code 的档案就会撞外键
+      # （fk_alumni_profiles_region），整条集成链会红成一片。
+      - name: Seed the test database
+        run: pnpm --filter @nmg/api db:seed
 
       - name: Integration tests
         run: pnpm --filter @nmg/api test:integration

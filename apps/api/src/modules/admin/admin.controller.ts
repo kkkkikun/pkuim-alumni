@@ -13,8 +13,8 @@ import {
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository, In } from 'typeorm';
-import { paginate } from '../../common/dto/pagination.dto';
 import { RequestContextService } from '../../common/services/request-context.service';
+import { paginate } from '../../common/dto/pagination.dto';
 import {
   AdminActionLogQueryDto,
   AdminAlumniListQueryDto,
@@ -94,68 +94,41 @@ export class AdminController {
   @ApiOperation({ summary: '数据总览' })
   async stats() {
     const [
-      userStats,
+      alumniTotal,
+      alumniVerified,
       verificationPending,
-      resourceStats,
+      resourceTotal,
+      resourcePending,
       eventTotal,
       eventRegistrations,
-      connectionStats,
+      connectionTotal,
+      connectionPending,
+      userTotal,
       articleTotal,
       noticeTotal,
     ] = await Promise.all([
-      // ⚠️ 此前是 12 条独立 COUNT（其中 `this.users.count()` 还重复算了两次），
-      //    后台首屏每次都打满 12 次数据库往返。
-      //    现在把「同表的多口径」合并成**一条条件聚合**（SUM(CASE WHEN ...)），
-      //    查询数 12 → 8，统计口径与返回结构一字未改。
-      this.users
-        .createQueryBuilder('u')
-        .select('COUNT(*)', 'total')
-        .addSelect('SUM(CASE WHEN u.stage = :verified THEN 1 ELSE 0 END)', 'verified')
-        .setParameter('verified', 'verified')
-        .getRawOne<{ total: string; verified: string | null }>()
-        .then((row) => ({
-          total: Number(row?.total ?? 0),
-          verified: Number(row?.verified ?? 0),
-        })),
+      this.users.count(),
+      this.users.createQueryBuilder('u').where('u.stage = :stage', { stage: 'verified' }).getCount(),
       this.verifications
         .createQueryBuilder('v')
         .where('v.status IN (:...statuses)', { statuses: ['pending', 'resubmitted'] })
         .getCount(),
+      this.resources.count(),
       this.resources
         .createQueryBuilder('r')
-        .select('COUNT(*)', 'total')
-        .addSelect('SUM(CASE WHEN r.status = :pending THEN 1 ELSE 0 END)', 'pending')
-        .setParameter('pending', 'pending')
-        .getRawOne<{ total: string; pending: string | null }>()
-        .then((row) => ({
-          total: Number(row?.total ?? 0),
-          pending: Number(row?.pending ?? 0),
-        })),
+        .where('r.status = :status', { status: 'pending' })
+        .getCount(),
       this.events.count(),
       this.registrations.count(),
+      this.connectionRequests.count(),
       this.connectionRequests
         .createQueryBuilder('c')
-        .select('COUNT(*)', 'total')
-        .addSelect('SUM(CASE WHEN c.status = :pending THEN 1 ELSE 0 END)', 'pending')
-        .setParameter('pending', 'pending')
-        .getRawOne<{ total: string; pending: string | null }>()
-        .then((row) => ({
-          total: Number(row?.total ?? 0),
-          pending: Number(row?.pending ?? 0),
-        })),
+        .where('c.status = :status', { status: 'pending' })
+        .getCount(),
+      this.users.count(),
       this.articles.count(),
       this.notices.count(),
     ]);
-
-    // 统计口径与返回结构保持不变（字段名、含义、类型全部照旧）。
-    const alumniTotal = userStats.total;
-    const alumniVerified = userStats.verified;
-    const resourceTotal = resourceStats.total;
-    const resourcePending = resourceStats.pending;
-    const connectionTotal = connectionStats.total;
-    const connectionPending = connectionStats.pending;
-    // userTotal 与 alumniTotal 同源（都是 users 表总数），保持原有语义。
-    const userTotal = userStats.total;
 
     return {
       alumniTotal,

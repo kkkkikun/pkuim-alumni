@@ -1,7 +1,6 @@
 import dayjs from 'dayjs';
 import type {
   ArticleDto,
-  EventDto,
   EventStatus,
   NoticeDto,
   RegistrationStatus,

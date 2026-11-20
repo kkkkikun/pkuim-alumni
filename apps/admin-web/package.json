@@ -9,7 +9,7 @@
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "vue-tsc --noEmit",
-    "lint": "echo \"[admin-web] lint 由根仓库 ESLint 统一配置，未在子包内单独配置\""
+    "lint": "eslint \"src/**/*.ts\""
   },
   "dependencies": {
     "@nmg/contracts": "workspace:*",
