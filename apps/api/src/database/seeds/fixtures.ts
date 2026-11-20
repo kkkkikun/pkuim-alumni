@@ -396,7 +396,6 @@ export function buildEventFixtures(options: EventFixtureOptions = {}): EventFixt
   const baseTime = options.baseTime ?? DEFAULT_BASE_TIME;
   const random = createSeededRandom(options.seed ?? 20260303);
 
-  const kinds = ['reunion', 'lecture', 'industry', 'charity'];
   const events: EventFixture[] = [
     {
       title: '【虚构】呼和浩特校友返校日',

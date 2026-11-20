@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, ParseIntPipe, Query } from '@nestjs/common';
+import { Controller, Get, Param, ParseIntPipe, Query } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { PaginationQueryDto } from '../../common/dto/pagination.dto';
 import { ArticleListQueryDto } from '../../common/dto/list-query.dto';

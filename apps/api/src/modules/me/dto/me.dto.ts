@@ -9,7 +9,6 @@ import {
   Max,
   MaxLength,
   Min,
-  MinLength,
 } from 'class-validator';
 import { ToBoolean } from '../../../common/dto/transforms';
 

@@ -11,7 +11,6 @@ import { DataSource, In, QueryFailedError, Repository } from 'typeorm';
 import { paginate } from '../../common/dto/pagination.dto';
 import type { PageResult } from '../../common/dto/pagination.dto';
 import { decryptValue } from '../../common/utils/crypto';
-import { groupBy } from '../../common/utils/group-by';
 import { normalizePair, pairKey } from '../../common/utils/pair';
 import { AlumniProfile, PrivateContact } from '../../database/entities/alumni.entity';
 import {
@@ -172,7 +171,7 @@ export class ConnectionsService {
 
     const [userAId, userBId] = normalizePair(request.fromUserId, request.toUserId);
 
-    const pairId = await this.dataSource.transaction(async (manager) => {
+    await this.dataSource.transaction(async (manager) => {
       const result = await manager
         .createQueryBuilder()
         .update(ConnectionRequestHistory)

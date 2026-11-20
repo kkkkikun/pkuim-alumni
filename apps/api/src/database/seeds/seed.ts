@@ -516,7 +516,7 @@ async function seedLoadTestAccounts(dataSource: DataSource, adminId: number): Pr
   console.log(`· 生成压测专用账号 ${LOADTEST_COUNT} 个（openid 前缀 ${LOADTEST_OPENID_PREFIX}）`);
 }
 
-async function seedConnections(dataSource: DataSource, alumniIds: number[]): Promise<void> {
+async function seedConnections(dataSource: DataSource, _alumniIds: number[]): Promise<void> {
   const pairRepo = dataSource.getRepository(ConnectionPair);
   const grantRepo = dataSource.getRepository(ContactShareGrant);
   const requestRepo = dataSource.getRepository(ConnectionRequestHistory);
@@ -811,7 +811,7 @@ async function seedEvents(dataSource: DataSource, alumniIds: number[]): Promise<
   console.log(`· 生成活动 ${events.length} 个（含容量 5 的活动），报名记录 ${registrationRows.length} 条`);
 }
 
-async function seedVerifications(dataSource: DataSource, alumniIds: number[]): Promise<void> {
+async function seedVerifications(dataSource: DataSource, _alumniIds: number[]): Promise<void> {
   const applicationRepo = dataSource.getRepository(VerificationApplication);
   const reviewRepo = dataSource.getRepository(VerificationReview);
   const attachmentRepo = dataSource.getRepository(VerificationAttachment);

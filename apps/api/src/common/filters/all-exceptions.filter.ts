@@ -6,7 +6,7 @@ import {
   HttpStatus,
   Logger,
 } from '@nestjs/common';
-import type { Request, Response } from 'express';
+import type { Response } from 'express';
 import { ResponseCode } from '../constants';
 import type { AuthenticatedRequest } from '../decorators';
 
