@@ -129,7 +129,10 @@ jobs:
           # 依次尝试两个官方源：quay.io 是 MinIO 现在的官方发布地，
           # Docker Hub 上的 minio/minio 对匿名拉取并不总是可用。
           started=0
-          for image in quay.io/minio/minio:latest minio/minio:latest; do
+          # 三个源依次尝试：quay.io（官方发布地）→ Docker Hub → 本项目一直在用的镜像站
+          # （docker-compose.prod.yml 里的 MINIO_IMAGE 就是它，本地拉取实测可用）。
+          for image in quay.io/minio/minio:latest minio/minio:latest \
+            swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/minio/minio:latest; do
             if docker run -d --name ci-minio \
               -p 9000:9000 \
               -e MINIO_ROOT_USER="$MINIO_ACCESS_KEY" \
