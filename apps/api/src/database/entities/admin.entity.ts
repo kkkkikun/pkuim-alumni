@@ -144,7 +144,9 @@ export class AdminActionLog {
   @Column({ name: 'admin_id', type: 'bigint', unsigned: true, nullable: false })
   adminId: number;
 
-  @ManyToOne(() => AdminUser, { onDelete: 'CASCADE' })
+  // ⚠️ RESTRICT（不是 CASCADE）：审计日志是「只追加」的记录，
+  //    删掉一个管理员账号**不得**连带删掉他的审计痕迹（docs/SECURITY.md 第 7 节）。
+  @ManyToOne(() => AdminUser, { onDelete: 'RESTRICT' })
   @JoinColumn({ name: 'admin_id' })
   admin?: AdminUser;
 

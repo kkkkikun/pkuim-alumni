@@ -3544,3 +3544,147 @@ bash infra/scripts/backup-restore-drill.sh --compare-only  # 只比对已存在�
 | 正式域名 / HTTPS 证书 | 私网环境用 nginx 明文回环 | 上线前配置证书与域名 |
 | 对象存储托管服务（OSS/COS） | 当前用自建 MinIO | 切换 `MINIO_*` 环境变量即可，接口不变 |
 | 对象存储异地容灾 | 备份只落在服务器本地磁盘 | 接入异地存储后由 `backup.sh` 定时推送 |
+
+---
+
+## 7. 安全与性能专项落实（2026-11-20）
+
+> 本节记录「按 `docs/SECURITY.md` 第 3~8 节逐条落实安全缺口 + 性能缺口」这一轮的结果。
+> **安全结论一律以用例为准**（负向验证单列）；**性能结论一律附改动前后的实测数字**，
+> 没有实测数字的一律进 `docs/KNOWN-ISSUES.md` 的待办，不在这里出现「已优化」的说法。
+
+### 7.0 环境
+
+| 项 | 值 |
+|---|---|
+| 日期 | 2026-11-20 |
+| 运行时 | Node 22.21.1 / pnpm 11.7.0 |
+| 数据库 | MySQL 8.4.10（容器 `nmg-mysql`，映射 `127.0.0.1:13306`） |
+| 缓存 | Redis 7.4.7（`127.0.0.1:16379`） |
+| 对象存储 | MinIO（`127.0.0.1:19000`） |
+| 测试库 | `nmg_alumni_test`（`DATABASE_URL=mysql://nmg:***@127.0.0.1:13306/nmg_alumni_test`） |
+| 业务库 | `nmg_alumni` **只读**，本轮未对其做任何写操作 |
+
+复现命令（后端）：
+
+```bash
+cd apps/api
+DATABASE_URL='mysql://nmg:<密码>@127.0.0.1:13306/nmg_alumni_test' \
+REDIS_HOST=127.0.0.1 REDIS_PORT=16379 REDIS_PASSWORD=<密码> \
+MINIO_ENDPOINT=127.0.0.1 MINIO_PORT=19000 \
+MINIO_ACCESS_KEY=<key> MINIO_SECRET_KEY=<secret> \
+npx jest --config jest.config.js --runInBand --testPathPattern=integration/<文件名>
+```
+
+### 7.1 安全：承诺 → 落地 → 验证
+
+| 承诺（`docs/SECURITY.md`） | 落地 | 验证用例（**负向验证**已标注） |
+|---|---|---|
+| 缺 `JWT_SECRET` / 数据库口令 / MinIO 密钥 → 生产环境拒绝启动 | `src/config/config-validation.ts` + `ConfigModule.forRoot({ validate })` | `config-validation.e2e-spec.ts`（9 例负向：缺配置 / 占位值 / 密钥过短 / 通配 CORS / `AUTH_MODE` 未设或非法或为 `mock` → 全部拒绝启动） |
+| `AUTH_MODE` 非法取值不得退回 `both`（fail-closed） | `src/auth/auth.service.ts` | `auth-mode.e2e-spec.ts`（负向：`AUTH_MODE=wechats` → Mock 登录 403，且**不创建用户**） |
+| CORS 只接受白名单内的 Origin | `src/config/cors.ts` + `main.ts` | `security-hardening.e2e-spec.ts`（负向：白名单外 Origin **拿不到任何 CORS 头**；预检返回 403；生产态 `*` 不放行） |
+| 安全响应头（应用层 + Nginx） | `src/common/middleware/security-headers.ts`、`infra/nginx/*.conf` | `security-hardening.e2e-spec.ts`（逐头断言；非生产态不下发 HSTS） |
+| 限流按「身份 + 接口类别」计数 | `src/common/guards/rate-limit.guard.ts` | `rate-limit.e2e-spec.ts`（写端点之间共享额度） |
+| 限流按真实客户端 IP 计数 | `src/main.ts`（`TRUST_PROXY_HOPS`，默认 1） | 随 nginx 链路生效（私有网部署） |
+| 学号脱敏存储 | `src/common/utils/mask.ts` + `alumni.service.ts` | `privacy-hardening.e2e-spec.ts`（负向：库里检索不到完整学号；后台按完整学号仍能搜到） |
+| 证明材料只接受私有桶资产 | `alumni.service.ts::assertOwnedMedia` | `privacy-hardening.e2e-spec.ts`（负向：public 桶文件被引用 → 400，且**不写入关联表**） |
+| 审计记录只追加（删账号不删证据） | 迁移 `1730000005000`（外键 `CASCADE` → `RESTRICT`） | 迁移在测试库上 `migration:revert` → `migration:run` 往返验证通过 |
+
+### 7.2 性能：实测数字
+
+#### 7.2.1 列表接口的 N+1 查询（后端）
+
+命令：
+
+```bash
+cd apps/api && npx jest --config jest.config.js --runInBand --testPathPattern=integration/query-efficiency
+```
+
+数据：测试库内每端点 20 行（`query-efficiency.e2e-spec.ts` 内置播种），
+口径：**一次请求里服务端实际执行的 SQL 条数**（TypeORM logger 计数）。
+
+| 端点 | 改动前 | 改动后 | 说明 |
+|---|---:|---:|---|
+| `GET /api/v1/admin/resources?pageSize=20` | **66 条** | **9 条** | 逐行查作者/附件/审核记录/管理员名 → 批量 `In(...)` |
+| `GET /api/v1/admin/verifications?pageSize=20` | **65 条** | **8 条** | 同上 |
+| `GET /api/v1/connections?pageSize=20` | **103 条** | **6 条** | 资料/授权/联系方式批量查；「我方资料」原本每行重复查一次 |
+| `GET /api/v1/admin/resources?pageSize=5` | 21 条 | **9 条** | 页大小翻倍时条数**不变**（这就是「与页大小无关」的证据） |
+
+> 改动前的数字由 `git stash` 掉三个 service 的改动后，用**同一个用例、同一份数据**跑出来
+> （用例此时会红，正是它该红的原因：SQL 条数越界）。
+> 新增用例同时是**回归守卫**：`queries <= 20` 的断言会让逐行查询一旦回来就被抓住。
+
+#### 7.2.2 缺失索引
+
+迁移：`1730000005000-AddQueryIndexesAndProtectAuditLogs`（TypeORM migration，含回滚路径）。
+
+| 查询 | 数据量 | 改动前 | 改动后 | 口径 |
+|---|---:|---|---|---|
+| `SELECT id,title FROM notices WHERE status='published' ORDER BY published_at DESC LIMIT 20` | 5000 行 | **2.27 ms**（全表扫 + filesort，`type=ALL`） | **0.048 ms**（索引反向扫描，`type=ref`） | `EXPLAIN ANALYZE` |
+| `SELECT id,user_id,display_name FROM alumni_profiles WHERE show_in_directory=1 AND graduation_year=2015` | 5021 行 | **1.61 ms**（全表扫） | **0.63 ms**（索引查找） | `EXPLAIN ANALYZE` |
+| `SELECT id,user_id FROM notifications WHERE user_id=? ORDER BY id DESC LIMIT 20 OFFSET 1000` | 10 万行（同一用户） | **119 ms**（旧索引 + 排序） | **1.5 ms**（`FORCE INDEX (user_id,id)`） | `EXPLAIN ANALYZE` |
+
+```bash
+docker exec -i nmg-mysql mysql -uroot -p*** nmg_alumni_test < measure.sql
+# measure.sql 内容：EXPLAIN ANALYZE <查询>  /  EXPLAIN ANALYZE <查询> IGNORE INDEX (<新索引>)
+```
+
+> ⚠️ 诚实说明：第三条里，优化器在**本次数据集**（所有通知都属于同一用户）上**没有自动改选**
+> 新建的 `(user_id, id)` 索引，仍走旧索引 + 排序；`FORCE INDEX` 下才是 1.5 ms。
+> 该索引是「`WHERE user_id=? ORDER BY id DESC`」的标准索引，收益取决于真实数据分布，
+> 因此**深分页的收益标为「待验证」**，不计入「已优化」。
+>
+> ⚠️ 另有两个候选索引（`articles(category_id,status,published_at)`、
+> `admin_action_logs(created_at)`）**实测无收益**（现有索引已能供排序），
+> 因此**没有加进迁移** —— 没有实测数字的索引不写进生产库。
+
+#### 7.2.3 管理后台产物体积
+
+命令：`cd apps/admin-web && pnpm build`，产物用 `du -sb dist` 与 `gzip -c <file> | wc -c` 计量。
+
+| 指标 | 改动前 | 改动后 |
+|---|---:|---:|
+| 主 chunk `index-*.js` | 1,379,729 B（gzip 345,916） | **23,724 B**（gzip 8,245） |
+| 主 CSS `index-*.css` | 453,410 B（gzip 52,667） | **4,167 B**（gzip 1,405） |
+| 新增 `tdesign-*.js` / `tdesign-*.css` | —（原先在主 chunk 里） | 1,356,203 B / 449,244 B |
+| `dist` 总量 | 2,119,876 B | 2,120,718 B（+842 B） |
+| **首屏实际下载量** | **2,011,181 B**（gzip 466,643） | **2,011,270 B**（gzip 466,698） |
+
+> ⚠️ 诚实说明：把 TDesign 拆成独立 chunk **没有减少首屏下载量**
+> （`main.ts` 里 `app.use(TDesign)` 是全局注册，产物仍被首屏预加载）。
+> 本轮拿到的是「主 chunk 从 1.38 MB 降到 23 KB」的**结构收益**（应用代码与 UI 库可分别缓存、
+> 主 chunk 不再被 UI 库拖住），**不是**流量收益。
+> 真正的减负需要把全局注册改成按需引入（会改动管理后台的组件注册方式），
+> 本轮**未做**，已记入 `docs/KNOWN-ISSUES.md` 待办。
+
+#### 7.2.4 小程序首屏请求数
+
+| 页面 | 改动前 | 改动后 |
+|---|---:|---:|
+| 「我的」首页 | 9 | **5** |
+| 通知中心 | 4 | **2** |
+| 隐私设置 | 2 | **1** |
+| 个人资料 | 2 | **1** |
+| 我的连接 | 2 | **1** |
+| 认证进度 | 4 | **2** |
+| 认证历史 | 2 | **1** |
+| 收到的申请 | 2 | **1** |
+| 发出的申请 | 2 | **1** |
+| **合计** | **29** | **15**（-48%） |
+
+原因：这些页面在 `onLoad` 与 `onShow` 里**都**调了同一个 loader，
+而微信的生命周期是 `onLoad → onShow → onReady`，首屏因此把每个请求打了两遍。
+现在用 `apps/miniprogram/src/utils/first-show.ts`（按页面实例记录的 WeakMap 守卫）
+让**首次进入只加载一次**，返回页面时仍然刷新。
+
+#### 7.2.5 管理后台首屏统计
+
+`GET /api/v1/admin/stats`：此前 **12 条独立 COUNT**（其中 `users.count()` 还重复算了两次），
+现在同表多口径合并为条件聚合（`SUM(CASE WHEN ...)`），**12 → 8 条**，返回结构与口径不变。
+
+### 7.3 本轮未做完、已记入待办的项
+
+见 `docs/KNOWN-ISSUES.md` 的「待办 / 需人工动作」小节：
+生产密钥轮转与密钥管理服务接入、正式 AppID/AppSecret 与 `AUTH_MODE=wechat` 切换、
+正式域名与 HTTPS 证书、微信订阅消息模板、WAF 与备份定时任务、
+管理后台 UI 库按需引入（首屏减负）、两个无上限列表端点（需同步契约）。

@@ -7,11 +7,14 @@ import { createTestApp, login, markVerified, resetDatabase } from '../helpers';
 /**
  * 限流守卫行为验证。
  *
- * 背景：`RateLimitGuard` 是**固定窗口**限流，按「用户（或匿名 IP）+ 路由处理器」计数：
+ * 背景：`RateLimitGuard` 是**固定窗口**限流，按「用户（或匿名 IP）+ 接口类别」计数：
  *   - 写接口（POST/PUT/PATCH/DELETE）阈值 `RATE_LIMIT_WRITE`
  *   - 登录 / 刷新接口阈值 `RATE_LIMIT_AUTH`
  *   - 其余读接口阈值 `RATE_LIMIT_DEFAULT`
  *   - Redis 不可用时**降级放行**（限流是保护措施，不是业务依赖）
+ *
+ * 计数维度与 docs/SECURITY.md 第 6 节一致：**写接口共享同一个额度桶**
+ * （此前是「每个路由处理器一个桶」，实际阈值会被放大到文档承诺的数倍）。
  *
  * 此前限流只在压测中被「放宽再回滚」地间接验证过，从未验证过它**真的会拦截**。
  * 这里用低阈值 + 独立 Redis db（避免污染其他套件）做确定性验证。
@@ -132,13 +135,15 @@ describe('限流守卫 · 固定窗口', () => {
       .expect(200);
   });
 
-  it('限流按「用户 + 路由」计数：换端点即换额度', async () => {
-    // 甲在 me/privacy 上已被限流，但另一个写端点应有独立额度
+  it('限流按「用户 + 接口类别」计数：写端点之间共享额度（docs/SECURITY.md 第 6 节）', async () => {
+    // 甲在 me/privacy 上已用完写接口额度；按文档口径「写接口 30 次/分钟」是**按类别**计的，
+    // 因此另一个写端点同样被拦 —— 逐端点分桶会让攻击者把请求摊到多个端点上，
+    // 把实际阈值放大到文档承诺的数倍。
     await server()
       .put(`${API}/me/contacts`)
       .set('Authorization', `Bearer ${ctx.aliceToken}`)
       .send({ contactPhone: '13800002222', contactWechat: 'rl_alice' })
-      .expect(200);
+      .expect(429);
   });
 
   it('匿名请求按 IP 计数：同 IP 的不同用户共享额度', async () => {

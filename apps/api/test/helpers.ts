@@ -9,14 +9,25 @@ import { AllExceptionsFilter } from '../src/common/filters/all-exceptions.filter
 import { IdempotencyInterceptor } from '../src/common/interceptors/idempotency.interceptor';
 import { TransformInterceptor } from '../src/common/interceptors/transform.interceptor';
 import { buildValidationPipe } from '../src/common/pipes/validation.pipe';
+import { applyHttpHardening } from '../src/common/middleware/apply-http-hardening';
 
 export interface TestContext {
   app: INestApplication;
   dataSource: DataSource;
 }
 
+/** 起测试应用时可覆盖的 HTTP 硬化参数。 */
+export interface TestAppOptions {
+  /** `CORS_ORIGINS` 原始值 */
+  corsOrigins?: string;
+  /** 是否按生产态处理（影响 CORS 与 HSTS） */
+  isProduction?: boolean;
+  /** 是否强制下发 HSTS */
+  forceHsts?: boolean;
+}
+
 /** 启动真实 Nest 应用（连接真实 MySQL / Redis）。 */
-export async function createTestApp(): Promise<TestContext> {
+export async function createTestApp(options: TestAppOptions = {}): Promise<TestContext> {
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
   const app = moduleRef.createNestApplication();
   const dataSourceRef = moduleRef.get<DataSource>(DataSource);
@@ -25,6 +36,12 @@ export async function createTestApp(): Promise<TestContext> {
   app.useGlobalInterceptors(new IdempotencyInterceptor(dataSourceRef));
   app.useGlobalInterceptors(new TransformInterceptor());
   app.setGlobalPrefix('api/v1', { exclude: ['healthz'] });
+  // 安全响应头 + CORS 白名单：与生产同款（main.ts 走的是同一个入口）。
+  applyHttpHardening(app, {
+    corsOrigins: options.corsOrigins ?? process.env.CORS_ORIGINS ?? '',
+    isProduction: options.isProduction ?? false,
+    forceHsts: options.forceHsts ?? false,
+  });
   await app.init();
   const dataSource = moduleRef.get<DataSource>(DataSource);
 

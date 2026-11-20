@@ -15,6 +15,8 @@ import { createTestApp, resetDatabase } from '../helpers';
  *   - `wechat`：Mock 登录被拒（403 FORBIDDEN），微信登录照常；
  *   - `mock`  ：微信登录被拒（403 FORBIDDEN），Mock 登录照常；
  *   - `both`  ：两个都开（由 wechat-login.e2e-spec.ts 覆盖）。
+ *   - **非法取值**：按最严口径处理（关闭 Mock 登录）——
+ *     此前是把任何拼错的取值当成 `both`，等于「配置写错就把后门打开」。
  *
  * ⚠️ `ConfigService` 的配置工厂在**应用启动时**求值一次，
  *    之后再改 `process.env` 不生效 → 每个取值必须**各起一个应用实例**。
@@ -99,6 +101,44 @@ describe('登录方式开关 · AUTH_MODE', () => {
 
       expect(response.body.code).toBe('OK');
       expect(response.body.data.accessToken).toEqual(expect.any(String));
+    });
+  });
+
+  describe('AUTH_MODE 取值非法（fail-closed：不得退回 both 把后门打开）', () => {
+    let app: INestApplication;
+    let dataSource: DataSource;
+
+    beforeAll(async () => {
+      // 模拟「配置写错一个字母」：此前这类取值会被当成 both → Mock 后门自动打开。
+      process.env.AUTH_MODE = 'wechats';
+      ({ app, dataSource } = await createTestApp());
+    });
+
+    afterAll(async () => {
+      await app?.close();
+    });
+
+    beforeEach(async () => {
+      await resetDatabase(dataSource);
+    });
+
+    it('Mock 登录被拒 → 403 FORBIDDEN', async () => {
+      const response = await request(app.getHttpServer())
+        .post('/api/v1/auth/mock/login')
+        .send({ mockOpenid: 'mode-test-4', nickname: '测试校友' })
+        .expect(403);
+
+      expect(response.body.code).toBe('FORBIDDEN');
+    });
+
+    it('被拒的 Mock 登录不会造出用户', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/auth/mock/login')
+        .send({ mockOpenid: 'mode-test-5' })
+        .expect(403);
+
+      const rows = await dataSource.query('SELECT id FROM users');
+      expect(rows).toHaveLength(0);
     });
   });
 });

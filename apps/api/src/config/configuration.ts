@@ -4,8 +4,14 @@ export const appConfig = registerAs('app', () => ({
   env: process.env.NODE_ENV ?? 'development',
   port: Number(process.env.PORT ?? 8000),
   apiPrefix: process.env.API_PREFIX ?? '/api/v1',
-  corsOrigins: process.env.CORS_ORIGINS ?? '*',
+  // ⚠️ 这里只做「读取」，**不做放行判定**：真正的白名单判定在
+  //    `config/cors.ts`（main.ts 与集成测试共用同一份实现）。
+  //    生产态的 '*' 会在启动期被 `config/config-validation.ts` 判为致命问题。
+  corsOrigins: process.env.CORS_ORIGINS ?? '',
   publicApiBase: process.env.PUBLIC_API_BASE ?? 'http://127.0.0.1:18081',
+  // ⚠️ 兜底值只是为了让开发态「开箱即用」。
+  //    生产态下 `JWT_SECRET` 缺失或仍是占位值时，`config/config-validation.ts`
+  //    会在**启动期**直接拒绝启动（不会带着这个兜底值跑起来）。
   jwtSecret: process.env.JWT_SECRET ?? 'change-me-to-a-long-random-string',
   jwtAccessTtl: process.env.JWT_ACCESS_TTL ?? '2h',
   jwtRefreshTtl: process.env.JWT_REFRESH_TTL ?? '30d',

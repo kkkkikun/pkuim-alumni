@@ -2,6 +2,7 @@ import { listConnections } from '../../../services/index';
 import type { ConnectionPairDto } from '../../../types/index';
 import { navigateTo } from '../../../utils/navigate';
 import { restorePageScroll, trackPageScroll } from '../../../utils/scroll';
+import { shouldRefreshOnShow } from '../../../utils/first-show';
 
 interface ConnectionView extends ConnectionPairDto {
   peerMeta: string;
@@ -46,7 +47,10 @@ Page({
   },
 
   onShow(): void {
-    void this.load();
+    // 首次进入时 onLoad 已经加载过，这里不再重复发请求；返回本页时才刷新。
+    if (shouldRefreshOnShow(this)) {
+      void this.load();
+    }
     restorePageScroll('me-connections');
   },
 

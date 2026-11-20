@@ -40,7 +40,9 @@ export class SubmitVerificationDto {
   @MaxLength(64)
   degree?: string;
 
-  @ApiProperty({ description: '学号（脱敏存储）' })
+  // ⚠️ 服务端会**再脱敏一次**（docs/SECURITY.md 第 3 节第 6 条「学号脱敏存储」）：
+  //    客户端即使传了完整学号，落库的也是脱敏后的值（保留首尾各 2 位）。
+  @ApiProperty({ description: '学号（服务端会统一脱敏后存储，保留首尾各 2 位）' })
   @IsString()
   @Length(4, 32)
   studentIdMasked: string;

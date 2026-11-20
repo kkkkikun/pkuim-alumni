@@ -8,6 +8,8 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, DataSource, EntityManager, In, Repository } from 'typeorm';
 import { paginate } from '../../common/dto/pagination.dto';
+import { groupBy } from '../../common/utils/group-by';
+import { maskStudentId } from '../../common/utils/mask';
 import type { PageResult } from '../../common/dto/pagination.dto';
 import { AdminUser } from '../../database/entities/admin.entity';
 import { AlumniProfile } from '../../database/entities/alumni.entity';
@@ -90,7 +92,9 @@ export class AlumniVerificationService {
           college: dto.college,
           graduationYear: dto.graduationYear,
           degree: dto.degree ?? null,
-          studentIdMasked: dto.studentIdMasked,
+          // 学号由**服务端**脱敏后落库（docs/SECURITY.md 第 3 节第 6 条）：
+          // 客户端传什么都不能让明文学号进库。
+          studentIdMasked: maskStudentId(dto.studentIdMasked),
           remark: dto.remark ?? null,
           status: 'pending',
           submittedAt: new Date(),
@@ -164,7 +168,7 @@ export class AlumniVerificationService {
       where: { userId },
       order: { id: 'DESC' },
     });
-    return Promise.all(rows.map((row) => this.toView(row)));
+    return this.toViews(rows);
   }
 
   /**
@@ -188,7 +192,7 @@ export class AlumniVerificationService {
       .orderBy('app.id', 'DESC');
     const total = await qb.getCount();
     const rows = await qb.skip((page - 1) * pageSize).take(pageSize).getMany();
-    const views = await Promise.all(rows.map((row) => this.toView(row)));
+    const views = await this.toViews(rows);
     return paginate(views, total, page, pageSize);
   }
 
@@ -207,7 +211,11 @@ export class AlumniVerificationService {
     // 关键字：申请人真实姓名 / 学院 / 学号 / 学历（后台「认证审核」页的搜索框）
     // 详见 KNOWN-ISSUES #63
     if (params.keyword?.trim()) {
-      const keyword = `%${params.keyword.trim()}%`;
+      const raw = params.keyword.trim();
+      const keyword = `%${raw}%`;
+      // 学号是**脱敏存储**的：管理员用完整学号搜索时，
+      // 必须按同样的规则脱敏后再匹配，否则永远搜不到。
+      const maskedStudentId = maskStudentId(raw);
       qb.andWhere(
         new Brackets((where) => {
           where
@@ -215,12 +223,15 @@ export class AlumniVerificationService {
             .orWhere('app.college LIKE :keyword', { keyword })
             .orWhere('app.studentIdMasked LIKE :keyword', { keyword })
             .orWhere('app.degree LIKE :keyword', { keyword });
+          if (maskedStudentId && maskedStudentId !== raw) {
+            where.orWhere('app.studentIdMasked = :maskedStudentId', { maskedStudentId });
+          }
         }),
       );
     }
     qb.skip((params.page - 1) * params.pageSize).take(params.pageSize);
     const [entities, total] = await qb.getManyAndCount();
-    const views = await Promise.all(entities.map((item) => this.toView(item)));
+    const views = await this.toViews(entities);
     return paginate(views, total, params.page, params.pageSize);
   }
 
@@ -357,7 +368,7 @@ export class AlumniVerificationService {
       current.college = dto.college;
       current.graduationYear = dto.graduationYear;
       current.degree = dto.degree ?? current.degree;
-      current.studentIdMasked = dto.studentIdMasked;
+      current.studentIdMasked = maskStudentId(dto.studentIdMasked);
       current.remark = dto.remark ?? current.remark;
       current.status = 'resubmitted';
       current.version += 1;
@@ -402,6 +413,17 @@ export class AlumniVerificationService {
     if (bad.length) {
       throw new BadRequestException(`证明材料不存在或不属于当前用户：${bad.join(', ')}`);
     }
+    // ⚠️ 证明材料**必须**在私有桶（docs/SECURITY.md 第 3 节第 6 条「证明材料存私有桶」）。
+    //    此前 `visibility` 完全由客户端决定：用户可以把身份证/学位证上传到 **public 桶**，
+    //    那个桶里的对象是**任何人拿到地址就能下载**的 —— 私密材料就这么公开了。
+    //    现在服务端强制：证明材料只接受私有资产。
+    const publicIds = rows.filter((asset) => asset.visibility === 'public').map((asset) => asset.id);
+    if (publicIds.length) {
+      throw new BadRequestException(
+        `证明材料必须存放在私有桶（当前这些文件登记为公开）：${publicIds.join(', ')}。` +
+          '请重新上传（不指定 visibility 即为私有）。',
+      );
+    }
     return ids;
   }
 
@@ -418,51 +440,76 @@ export class AlumniVerificationService {
   }
 
   private async toView(application: VerificationApplication): Promise<VerificationView> {
-    const [user, attachments, reviews] = await Promise.all([
-      this.users.findOne({ where: { id: application.userId } }),
+    const [view] = await this.toViews([application]);
+    return view;
+  }
+
+  /**
+   * 批量装配视图（消除 N+1）。
+   *
+   * ⚠️ 此前 `toView()` 每行要打 3~4 条 SQL（申请人 / 附件 / 审核记录 / 管理员名），
+   *    而列表接口是 `Promise.all(rows.map(toView))` —— 每页 20 条就是 **80+ 条 SQL**，
+   *    页大小 100 时是 400+ 条。数据库往返是这类接口的主要开销，
+   *    页越大越慢，且**与页大小成正比**。
+   *
+   * 现在改成：申请人 / 附件 / 审核记录各**一次** `In(...)` 批量查询，
+   * 再在内存里分桶 —— 查询数固定为 4 条，与页大小无关。
+   */
+  private async toViews(applications: VerificationApplication[]): Promise<VerificationView[]> {
+    if (applications.length === 0) return [];
+    const applicationIds = applications.map((item) => item.id);
+    const userIds = [...new Set(applications.map((item) => item.userId))];
+    const [users, attachments, reviews] = await Promise.all([
+      this.users.find({ where: { id: In(userIds) } }),
       this.attachments.find({
-        where: { applicationId: application.id },
+        where: { applicationId: In(applicationIds) },
         relations: { media: true },
       }),
       this.reviews.find({
-        where: { applicationId: application.id },
+        where: { applicationId: In(applicationIds) },
         order: { id: 'ASC' },
       }),
     ]);
     // 契约 VerificationReviewDto.adminName 为必填：后台审核记录直接渲染审核人姓名。
     // 详见 KNOWN-ISSUES #61。
     const adminNames = await this.adminNames(reviews.map((item) => item.adminId));
-    return {
-      id: application.id,
-      userId: application.userId,
-      applicantName: user?.nickname ?? '校友',
-      college: application.college,
-      graduationYear: application.graduationYear,
-      degree: application.degree,
-      studentIdMasked: application.studentIdMasked,
-      status: application.status,
-      // 契约 VerificationAttachmentDto 声明了 fileName / mimeType / size / uploadedAt，
-      // 之前只返回 { id, mediaId } —— 后台审核页渲染的文件名与大小恒为空（缺陷 #75）。
-      attachments: attachments.map((item) => ({
-        id: item.id,
-        mediaId: item.mediaId,
-        fileName: item.media?.fileName ?? '',
-        mimeType: item.media?.mimeType ?? '',
-        size: item.media?.size ?? 0,
-        uploadedAt: item.media?.createdAt ?? item.createdAt,
-      })),
-      reviews: reviews.map((item) => ({
-        id: item.id,
-        adminId: item.adminId,
-        adminName: adminNames.get(item.adminId) ?? '未知管理员',
-        action: item.action,
-        note: item.note,
-        snapshotVersion: item.snapshotVersion,
-        createdAt: item.createdAt,
-      })),
-      submittedAt: application.submittedAt,
-      decidedAt: application.decidedAt,
-    };
+    const userMap = new Map(users.map((user) => [user.id, user]));
+    const attachmentsBy = groupBy(attachments, (item) => item.applicationId);
+    const reviewsBy = groupBy(reviews, (item) => item.applicationId);
+    return applications.map((application) => {
+      const user = userMap.get(application.userId);
+      return {
+        id: application.id,
+        userId: application.userId,
+        applicantName: user?.nickname ?? '校友',
+        college: application.college,
+        graduationYear: application.graduationYear,
+        degree: application.degree,
+        studentIdMasked: application.studentIdMasked,
+        status: application.status,
+        // 契约 VerificationAttachmentDto 声明了 fileName / mimeType / size / uploadedAt，
+        // 之前只返回 { id, mediaId } —— 后台审核页渲染的文件名与大小恒为空（缺陷 #75）。
+        attachments: (attachmentsBy.get(application.id) ?? []).map((item) => ({
+          id: item.id,
+          mediaId: item.mediaId,
+          fileName: item.media?.fileName ?? '',
+          mimeType: item.media?.mimeType ?? '',
+          size: item.media?.size ?? 0,
+          uploadedAt: item.media?.createdAt ?? item.createdAt,
+        })),
+        reviews: (reviewsBy.get(application.id) ?? []).map((item) => ({
+          id: item.id,
+          adminId: item.adminId,
+          adminName: adminNames.get(item.adminId) ?? '未知管理员',
+          action: item.action,
+          note: item.note,
+          snapshotVersion: item.snapshotVersion,
+          createdAt: item.createdAt,
+        })),
+        submittedAt: application.submittedAt,
+        decidedAt: application.decidedAt,
+      };
+    });
   }
 
   /** 批量取管理员名称（一次查询，避免 N+1） */

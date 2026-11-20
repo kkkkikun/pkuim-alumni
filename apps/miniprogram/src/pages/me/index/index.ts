@@ -13,6 +13,7 @@ import { navigateTo } from '../../../utils/navigate';
 import { setTabBarSelected } from '../../../utils/tabbar';
 import { settleAll } from '../../../utils/async';
 import type { Settled } from '../../../utils/async';
+import { shouldRefreshOnShow } from '../../../utils/first-show';
 
 Page({
   data: {
@@ -36,7 +37,11 @@ Page({
   onShow(): void {
     setTabBarSelected(3);
     this.syncUser();
-    void this.loadCounts();
+    // 首次进入时 onLoad 已经加载过（fetchMe + 计数），这里不再重复发请求；
+    // 之后每次回到本页才刷新计数。
+    if (shouldRefreshOnShow(this)) {
+      void this.loadCounts();
+    }
   },
 
   syncUser(): void {

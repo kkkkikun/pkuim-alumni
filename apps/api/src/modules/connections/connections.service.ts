@@ -7,10 +7,11 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, QueryFailedError, Repository } from 'typeorm';
+import { DataSource, In, QueryFailedError, Repository } from 'typeorm';
 import { paginate } from '../../common/dto/pagination.dto';
 import type { PageResult } from '../../common/dto/pagination.dto';
 import { decryptValue } from '../../common/utils/crypto';
+import { groupBy } from '../../common/utils/group-by';
 import { normalizePair, pairKey } from '../../common/utils/pair';
 import { AlumniProfile, PrivateContact } from '../../database/entities/alumni.entity';
 import {
@@ -306,7 +307,7 @@ export class ConnectionsService {
     });
     // toRequestView 是异步的，必须整体 await —— 否则返回的是 Promise 数组，
     // 序列化后每项都会变成 {}。
-    const items = await Promise.all(rows.map((row) => this.toRequestView(row)));
+    const items = await this.toRequestViews(rows);
     return paginate(items, total, page, pageSize);
   }
 
@@ -320,7 +321,7 @@ export class ConnectionsService {
       .skip((page - 1) * pageSize)
       .take(pageSize);
     const [pairs, total] = await qb.getManyAndCount();
-    const items = await Promise.all(pairs.map((pair) => this.toConnectionView(pair, userId)));
+    const items = await this.toConnectionViews(pairs, userId);
     return paginate(items, total, page, pageSize);
   }
 
@@ -405,63 +406,120 @@ export class ConnectionsService {
   }
 
   private async toRequestView(request: ConnectionRequestHistory): Promise<ConnectionRequestView> {
-    const [from, to] = await Promise.all([
-      this.users.findOne({ where: { id: request.fromUserId } }),
-      this.users.findOne({ where: { id: request.toUserId } }),
-    ]);
-    return {
+    const [view] = await this.toRequestViews([request]);
+    return view;
+  }
+
+  /**
+   * 批量装配「连接申请」视图（消除 N+1）。
+   *
+   * ⚠️ 此前每行 2 条 SQL（申请人 + 接收人），列表接口逐行调用 →
+   *    每页 20 条 = 40+ 条 SQL。现在一次批量查用户，查询数与页大小无关。
+   */
+  private async toRequestViews(
+    requests: ConnectionRequestHistory[],
+  ): Promise<ConnectionRequestView[]> {
+    if (requests.length === 0) return [];
+    const userIds = [
+      ...new Set(requests.flatMap((item) => [item.fromUserId, item.toUserId])),
+    ];
+    const users = await this.users.find({ where: { id: In(userIds) } });
+    const nameById = new Map(users.map((user) => [user.id, user.nickname ?? '校友']));
+    return requests.map((request) => ({
       id: request.id,
       fromUserId: request.fromUserId,
       toUserId: request.toUserId,
-      fromName: from?.nickname ?? '校友',
-      toName: to?.nickname ?? '校友',
+      fromName: nameById.get(request.fromUserId) ?? '校友',
+      toName: nameById.get(request.toUserId) ?? '校友',
       message: request.message,
       status: request.status,
       createdAt: request.createdAt,
       decidedAt: request.decidedAt,
       pairId: request.pairId,
-    };
+    }));
   }
 
   private async toConnectionView(pair: ConnectionPair, viewerId: number): Promise<ConnectionView> {
-    const peerId = pair.userAId === viewerId ? pair.userBId : pair.userAId;
-    const [peerProfile, myProfile, myGrant, peerGrant] = await Promise.all([
-      this.profiles.findOne({ where: { userId: peerId }, relations: { region: true, industry: true } }),
-      this.profiles.findOne({ where: { userId: viewerId } }),
-      this.grants.findOne({ where: { pairId: pair.id, userId: viewerId } }),
-      this.grants.findOne({ where: { pairId: pair.id, userId: peerId } }),
+    const [view] = await this.toConnectionViews([pair], viewerId);
+    return view;
+  }
+
+  /**
+   * 批量装配「我的连接」视图（消除 N+1）。
+   *
+   * ⚠️ 此前每行 4~5 条 SQL（对方资料 + 我的资料 + 双方授权 + 联系方式），
+   *    而且**我自己的资料在每一行都重复查了一遍**。
+   *    现在改成：资料 / 授权 / 联系方式各一次批量查询，
+   *    查询数固定，与页大小无关。
+   *
+   * ⚠️ 可见性判定逻辑**一字未改**：四重条件
+   *    （连接有效 ∧ 双方 allow_contact_share=1 ∧ 双方 contact_share_grants.allow=1）
+   *    仍然逐条成立，缺一不可。
+   */
+  private async toConnectionViews(
+    pairs: ConnectionPair[],
+    viewerId: number,
+  ): Promise<ConnectionView[]> {
+    if (pairs.length === 0) return [];
+    const peerIds = pairs.map((pair) => (pair.userAId === viewerId ? pair.userBId : pair.userAId));
+    const pairIds = pairs.map((pair) => pair.id);
+    const profileUserIds = [...new Set([...peerIds, viewerId])];
+
+    const [profiles, grants, contacts] = await Promise.all([
+      this.profiles.find({
+        where: { userId: In(profileUserIds) },
+        relations: { region: true, industry: true },
+      }),
+      this.grants.find({
+        where: { pairId: In(pairIds), userId: In([...new Set([...peerIds, viewerId])]) },
+      }),
+      this.contacts.find({ where: { userId: In([...new Set(peerIds)]) } }),
     ]);
 
-    const myShared = Boolean(myGrant?.allow) && Boolean(myProfile?.allowContactShare);
-    const peerShared = Boolean(peerGrant?.allow) && Boolean(peerProfile?.allowContactShare);
+    const profileByUserId = new Map(profiles.map((profile) => [profile.userId, profile]));
+    const grantsByPairUser = new Map(
+      grants.map((grant) => [`${grant.pairId}:${grant.userId}`, grant]),
+    );
+    const contactByUserId = new Map(contacts.map((contact) => [contact.userId, contact]));
+    const myProfile = profileByUserId.get(viewerId);
 
-    let peerContact: ConnectionView['peerContact'] = null;
-    if (myShared && peerShared) {
-      const contact = await this.contacts.findOne({ where: { userId: peerId } });
-      if (contact) {
-        peerContact = {
-          name: peerProfile?.displayName ?? '校友',
-          phone: decryptValue(contact.phoneCipher, this.secret),
-          wechat: decryptValue(contact.wechatCipher, this.secret),
-          email: decryptValue(contact.emailCipher, this.secret),
-        };
+    return pairs.map((pair, index) => {
+      const peerId = peerIds[index];
+      const peerProfile = profileByUserId.get(peerId);
+      const myGrant = grantsByPairUser.get(`${pair.id}:${viewerId}`);
+      const peerGrant = grantsByPairUser.get(`${pair.id}:${peerId}`);
+
+      const myShared = Boolean(myGrant?.allow) && Boolean(myProfile?.allowContactShare);
+      const peerShared = Boolean(peerGrant?.allow) && Boolean(peerProfile?.allowContactShare);
+
+      let peerContact: ConnectionView['peerContact'] = null;
+      if (myShared && peerShared) {
+        const contact = contactByUserId.get(peerId);
+        if (contact) {
+          peerContact = {
+            name: peerProfile?.displayName ?? '校友',
+            phone: decryptValue(contact.phoneCipher, this.secret),
+            wechat: decryptValue(contact.wechatCipher, this.secret),
+            email: decryptValue(contact.emailCipher, this.secret),
+          };
+        }
       }
-    }
 
-    return {
-      id: pair.id,
-      userAId: pair.userAId,
-      userBId: pair.userBId,
-      peerUserId: peerId,
-      peerName: peerProfile?.displayName ?? '校友',
-      peerCollege: peerProfile?.college ?? null,
-      peerRegionName: peerProfile?.region?.name ?? null,
-      peerIndustryName: peerProfile?.industry?.name ?? null,
-      status: pair.status,
-      establishedAt: pair.establishedAt,
-      myContactShared: myShared,
-      peerContactShared: peerShared,
-      peerContact,
-    };
+      return {
+        id: pair.id,
+        userAId: pair.userAId,
+        userBId: pair.userBId,
+        peerUserId: peerId,
+        peerName: peerProfile?.displayName ?? '校友',
+        peerCollege: peerProfile?.college ?? null,
+        peerRegionName: peerProfile?.region?.name ?? null,
+        peerIndustryName: peerProfile?.industry?.name ?? null,
+        status: pair.status,
+        establishedAt: pair.establishedAt,
+        myContactShared: myShared,
+        peerContactShared: peerShared,
+        peerContact,
+      };
+    });
   }
 }

@@ -6,6 +6,7 @@ import { AppController } from './app.controller';
 import { AuthModule } from './auth/auth.module';
 import { AuthService } from './auth/auth.service';
 import { configurations } from './config/configuration';
+import { assertRuntimeConfig } from './config/config-validation';
 import { AlumniStageGuard } from './common/guards/alumni-stage.guard';
 import { AUTH_CONTEXT, JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { PermissionsGuard } from './common/guards/permissions.guard';
@@ -26,7 +27,14 @@ import { UploadsModule } from './modules/uploads/uploads.module';
 
 @Module({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true, load: configurations, envFilePath: ['.env'] }),
+    ConfigModule.forRoot({
+      isGlobal: true,
+      load: configurations,
+      envFilePath: ['.env'],
+      // 启动期配置校验：生产态缺 JWT_SECRET / 数据库口令 / MinIO 密钥，
+      // 或 CORS 仍为 `*`、或 AUTH_MODE=mock 时**拒绝启动**（见 config/config-validation.ts）。
+      validate: assertRuntimeConfig,
+    }),
     TypeOrmModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({

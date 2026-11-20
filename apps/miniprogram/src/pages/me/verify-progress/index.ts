@@ -3,6 +3,7 @@ import type { VerificationApplicationDto, VerificationStatus } from '../../../ty
 import { formatDateTime, verificationStatusLabel } from '../../../utils/format';
 import { navigateTo } from '../../../utils/navigate';
 import { settle } from '../../../utils/async';
+import { shouldRefreshOnShow } from '../../../utils/first-show';
 
 interface ProgressView {
   status: VerificationStatus;
@@ -36,7 +37,10 @@ Page({
   },
 
   onShow(): void {
-    void this.load();
+    // 首次进入时 onLoad 已经加载过，这里不再重复发请求；返回本页时才刷新。
+    if (shouldRefreshOnShow(this)) {
+      void this.load();
+    }
   },
 
   async load(): Promise<void> {

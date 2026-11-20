@@ -1,6 +1,7 @@
 import { listVerifications } from '../../../services/index';
 import type { VerificationApplicationDto } from '../../../types/index';
 import { formatDateTime, verificationStatusLabel } from '../../../utils/format';
+import { shouldRefreshOnShow } from '../../../utils/first-show';
 
 interface HistoryView extends VerificationApplicationDto {
   statusLabel: string;
@@ -42,7 +43,10 @@ Page({
   },
 
   onShow(): void {
-    void this.load();
+    // 首次进入时 onLoad 已经加载过，这里不再重复发请求；返回本页时才刷新。
+    if (shouldRefreshOnShow(this)) {
+      void this.load();
+    }
   },
 
   onPullDownRefresh(): void {
