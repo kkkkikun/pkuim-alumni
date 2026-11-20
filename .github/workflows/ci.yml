@@ -76,7 +76,8 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '22.12'
+          # pnpm 11.7.0 要求 Node >= 22.13，22.12 会被它直接拒绝启动。
+          node-version: '22.21'
 
       # pnpm 用 npm 直接装，不用 corepack：
       #   1) corepack 自带的是 npm registry 签名公钥ring，会随 npm 轮换而过期，
