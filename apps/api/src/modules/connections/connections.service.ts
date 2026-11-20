@@ -171,7 +171,7 @@ export class ConnectionsService {
 
     const [userAId, userBId] = normalizePair(request.fromUserId, request.toUserId);
 
-    const pairId = await this.dataSource.transaction(async (manager) => {
+    await this.dataSource.transaction(async (manager) => {
       const result = await manager
         .createQueryBuilder()
         .update(ConnectionRequestHistory)

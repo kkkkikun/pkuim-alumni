@@ -1,4 +1,3 @@
-import type { Queue } from 'bullmq';
 
 /**
  * Outbox 派发与投递的核心逻辑（可单测）。

@@ -2,11 +2,16 @@ packages:
   - 'apps/*'
   - 'packages/*'
 
-# pnpm 10+ 在此声明允许执行安装脚本的依赖（原生构建）
-onlyBuiltDependencies:
-  - esbuild
-  - '@scarf/scarf'
-  - msgpackr-extract
+# pnpm 11 起，构建脚本（postinstall 等）的放行改用 allowBuilds 逐包声明布尔值；
+# 旧的 onlyBuiltDependencies 在 v11 里已经不再生效 —— 此前 esbuild / msgpackr-extract
+# 的原生构建一直被跳过，只是因为打包产物恰好还能用才没暴露。
+# esbuild：vite 的产物生成器；msgpackr-extract：原生加速模块；
+# vue-demi：按 Vue 版本切换 shim；@scarf/scarf：依赖分析上报。
+allowBuilds:
+  '@scarf/scarf': true
+  esbuild: true
+  msgpackr-extract: true
+  vue-demi: true
 
 # 不因个别依赖缺少构建脚本而中断安装（bcrypt 已改用纯 JS 的 bcryptjs）
 strictDepBuilds: false

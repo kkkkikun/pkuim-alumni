@@ -13,7 +13,7 @@ import {
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository, In } from 'typeorm';
-import { PaginationQueryDto, paginate } from '../../common/dto/pagination.dto';
+import { paginate } from '../../common/dto/pagination.dto';
 import {
   AdminActionLogQueryDto,
   AdminAlumniListQueryDto,
