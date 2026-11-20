@@ -3589,6 +3589,7 @@ npx jest --config jest.config.js --runInBand --testPathPattern=integration/<文�
 | 学号脱敏存储 | `src/common/utils/mask.ts` + `alumni.service.ts` | `privacy-hardening.e2e-spec.ts`（负向：库里检索不到完整学号；后台按完整学号仍能搜到） |
 | 证明材料只接受私有桶资产 | `alumni.service.ts::assertOwnedMedia` | `privacy-hardening.e2e-spec.ts`（负向：public 桶文件被引用 → 400，且**不写入关联表**） |
 | 审计记录只追加（删账号不删证据） | 迁移 `1730000005000`（外键 `CASCADE` → `RESTRICT`） | 迁移在测试库上 `migration:revert` → `migration:run` 往返验证通过 |
+| 审计日志记录来源 IP | `src/common/services/request-context.service.ts` + 全局拦截器 | `admin-audit-atomicity.e2e-spec.ts`（审计行的 `ip` 必须有值；此前该列从未被写过） |
 
 ### 7.2 性能：实测数字
 

@@ -70,6 +70,7 @@
 ## 7. 审计
 
 - 管理端关键操作（审核、发布、下架、账号状态）写入 `admin_action_logs`（只追加）。
+- 审计日志记录**来源 IP**（`admin_action_logs.ip`；此前该列从未被写过，管理端该列恒为空）。
 - **审计记录受数据库保护**：`admin_action_logs.admin_id` 的外键是 `ON DELETE RESTRICT`，
   删除管理员账号**不会**连带删掉他的审计痕迹（此前是 `CASCADE`，等于「删账号即删证据」）。
 - 资源审核历史 `resource_post_reviews` 与认证审核历史 `verification_reviews` 只追加，不覆盖。

@@ -2977,6 +2977,32 @@
   真正的减负需要改成按需引入（会改动管理后台的组件注册方式，且需要真实浏览器验证），
   本轮**未做**，见「待验证 / 未完成」。
 
+### 170. 审计日志的 `ip` 列从未被写过：管理端「来源 IP」恒为空
+
+- **现象**：`admin_action_logs.ip` 这一列建表至今**一行都没写过** ——
+  两处写审计日志的地方都没有设置它，而审计列表接口却把 `ip` 返回给管理端，
+  于是后台「来源 IP」列**恒为空**，事后追溯拿不到任何来源信息。
+- **处置**：新增 `src/common/services/request-context.service.ts`（`AsyncLocalStorage` 承载当前请求的
+  来源 IP）与全局拦截器 `RequestContextInterceptor`，写审计日志时随取随用；
+  服务由新的全局模块 `CommonModule` 提供（各模块共用同一个实例）。
+- **验证**：`test/integration/admin-audit-atomicity.e2e-spec.ts` 新增一例：
+  管理端写操作后，审计行的 `ip` 必须有值。
+
+### 171. `pnpm-lock.yaml` 与 `package.json` 不同步（构建靠 `--no-frozen-lockfile` 绕过）
+
+- **现象**：本轮执行 `pnpm install` 时 pnpm 重新生成了锁文件，差异 294 行 ——
+  锁文件里 `apps/api` 的依赖还写着 `bcrypt@^5.1.1`，而 `package.json` 早已换成
+  `bcryptjs@^2.4.3`（缺陷 #3 的处置：bcrypt 原生模块编不出来，改用 bcryptjs）。
+  也就是说**仓库里的锁文件自那次替换之后就没再更新过**。
+- **影响面**：`pnpm install --frozen-lockfile` 会因为「锁文件与 package.json 不同步」而失败；
+  当前部署是靠 `INSTALL_FLAGS=--no-frozen-lockfile`（见 `infra/env/env.prod.example`）绕过的 ——
+  也就是说**镜像构建实际上没有用锁文件锁住依赖版本**。
+- **本轮为什么没顺手修**：重新生成锁文件属于与「安全 / 性能」无关的改动，
+  且会牵动镜像构建链（`--frozen-lockfile` 一旦恢复可用，依赖解析结果可能与现在不同）；
+  本轮只把这条**如实记下来**，交由专门的依赖治理轮次处理。
+- **附带说明**：本 PR **不包含**锁文件变更（工作区里的改动已还原），
+  以免把与本轮目标无关的依赖变动带进同一个 PR。
+
 ## 待验证 / 未完成（不得声称已通过）> 以下均为**缺少外部资质或环境**导致的未验证项，与实现质量无关。
 > 已实测完成的项（冒烟 10/10、集成测试 39/39、k6 分级压测、备份恢复演练、管理后台构建）见 `docs/TEST-REPORT.md`。
 
@@ -2996,6 +3022,7 @@
 | WAF 规则与备份定时任务 | 备份 / 恢复 / 演练脚本齐全；**WAF 规则集**与 **cron / systemd 定时任务的安装**属人工安排 | 运维：按 `docs/top.md` §11 与 `docs/BACKUP-RESTORE.md` 安装定时任务；在边缘层配置 WAF |
 | 管理后台 UI 库按需引入（首屏减负） | 本轮只把 TDesign 拆成独立 chunk，**首屏下载量未变**（`app.use(TDesign)` 全局注册）；改成按需引入会改动组件注册方式，需要真实浏览器验证，而本机缺少浏览器冒烟所需环境 | 单独一轮迭代：改按需引入 + 跑 `infra/scripts/admin-ui-smoke.mjs` 真实浏览器冒烟 |
 | 两个无上限列表端点 | `GET /admin/events/:id/registrations` 与 `GET /alumni/verification/mine` **没有分页上限**；修复需要变更响应结构（契约变更），须同步 `packages/contracts` 与 `docs/API-SPEC.md` 并改两端客户端 | 单独一轮迭代（契约变更轮），不要在安全/性能轮里顺手改契约 |
+| 管理端「分类 CRUD / 系统设置写入」没有审计记录 | `docs/SECURITY.md` 第 7 节列举的关键操作（审核、发布、下架、账号状态）**已全部留痕**；但 `POST/PATCH/DELETE /admin/articles/categories` 与 `PUT /admin/settings` 这 4 个写端点**没有**写 `admin_action_logs`。补齐需要让 `ContentService` 的这 4 个方法支持「传入事务 manager」，再与审计写入放进同一事务（沿用缺陷 #134 的做法），属于对内容服务的结构性改动 | 单独一轮迭代（内容服务事务化改造） |
 | 通知深分页索引收益 | `(user_id, id)` 索引已建，但优化器在本次数据集上未自动改选；真实收益取决于数据分布 | 生产数据量到位后用 `EXPLAIN ANALYZE` 复测，必要时再调 |
 
 ## 已知设计取舍

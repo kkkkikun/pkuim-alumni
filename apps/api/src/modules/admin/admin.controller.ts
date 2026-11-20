@@ -14,6 +14,7 @@ import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository, In } from 'typeorm';
 import { PaginationQueryDto, paginate } from '../../common/dto/pagination.dto';
+import { RequestContextService } from '../../common/services/request-context.service';
 import {
   AdminActionLogQueryDto,
   AdminAlumniListQueryDto,
@@ -85,6 +86,7 @@ export class AdminController {
     private readonly contentService: ContentService,
     private readonly uploadsService: UploadsService,
     private readonly dataSource: DataSource,
+    private readonly requestContext: RequestContextService,
   ) {}
 
   @Get('stats')
@@ -603,6 +605,8 @@ export class AdminController {
         targetType,
         targetId: String(targetId),
         detail: (detail ?? {}) as Record<string, unknown>,
+        // 来源 IP：这一列此前**从未被写过**（管理端「来源 IP」恒为空）。
+        ip: this.requestContext.ip,
       }),
     );
   }

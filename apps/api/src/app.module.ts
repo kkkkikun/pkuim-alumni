@@ -1,12 +1,14 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AppController } from './app.controller';
 import { AuthModule } from './auth/auth.module';
 import { AuthService } from './auth/auth.service';
 import { configurations } from './config/configuration';
 import { assertRuntimeConfig } from './config/config-validation';
+import { CommonModule } from './common/common.module';
+import { RequestContextInterceptor } from './common/interceptors/request-context.interceptor';
 import { AlumniStageGuard } from './common/guards/alumni-stage.guard';
 import { AUTH_CONTEXT, JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { PermissionsGuard } from './common/guards/permissions.guard';
@@ -61,6 +63,7 @@ import { UploadsModule } from './modules/uploads/uploads.module';
         },
       }),
     }),
+    CommonModule,
     AuthModule,
     MeModule,
     AlumniModule,
@@ -77,6 +80,9 @@ import { UploadsModule } from './modules/uploads/uploads.module';
   controllers: [AppController],
   providers: [
     { provide: AUTH_CONTEXT, useExisting: AuthService },
+    // 请求上下文（来源 IP）：审计日志要能记下「谁从哪来」。
+    // 服务本身由全局的 CommonModule 提供（各模块共用同一个实例）。
+    { provide: APP_INTERCEPTOR, useClass: RequestContextInterceptor },
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: PermissionsGuard },
     { provide: APP_GUARD, useClass: AlumniStageGuard },

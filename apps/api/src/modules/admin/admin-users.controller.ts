@@ -8,6 +8,7 @@ import type { RequestUser } from '../../common/decorators';
 import { AdminUser, AdminUserRole, Role } from '../../database/entities/admin.entity';
 import { AdminActionLog } from '../../database/entities/admin.entity';
 import { User } from '../../database/entities/user.entity';
+import { RequestContextService } from '../../common/services/request-context.service';
 import { ContentService } from '../content/content.service';
 import {
   CreateAdminUserBodyDto,
@@ -27,6 +28,7 @@ export class AdminUsersController {
     @InjectRepository(User) private readonly users: Repository<User>,
     private readonly dataSource: DataSource,
     private readonly contentService: ContentService,
+    private readonly requestContext: RequestContextService,
   ) {}
 
   @Post('users')
@@ -311,6 +313,8 @@ export class AdminUsersController {
         targetType,
         targetId: String(targetId),
         detail,
+        // 来源 IP：这一列此前**从未被写过**（管理端「来源 IP」恒为空）。
+        ip: this.requestContext.ip,
       }),
     );
   }
