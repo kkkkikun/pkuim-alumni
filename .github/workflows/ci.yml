@@ -121,42 +121,29 @@ jobs:
 
       # 集成测试不会自动建表（生产约定 synchronize: false / migrationsRun: false），
       # 所以先跑一遍迁移，把表结构铺到测试库上。
-      # 对象存储用 docker 直接起，而不是 services:——
-      # 官方 minio/minio 镜像的默认 CMD 不是「server /data」，services: 无法改命令，
-      # 只能在步骤里显式 docker run；桶由应用启动时 makeBucket 自动创建。
-      - name: Start MinIO
+      # 对象存储用 rustfs（MinIO 协议兼容的 S3 实现）。
+      # 为什么不是 minio/minio：当前环境里 Docker Hub 的 minio/minio 已无法匿名拉取
+      # （quay.io 源返回 401 UNAUTHORIZED），而 rustfs 可正常拉取，
+      # 并已实测通过 App 真正用到的那套 S3 操作：建桶 / 写对象 / 读对象 / 预签名 URL。
+      # 桶由应用启动时 bucketExists + makeBucket 幂等创建，不需要预置。
+      - name: Start object storage
         run: |
-          # 依次尝试两个官方源：quay.io 是 MinIO 现在的官方发布地，
-          # Docker Hub 上的 minio/minio 对匿名拉取并不总是可用。
-          started=0
-          # 三个源依次尝试：quay.io（官方发布地）→ Docker Hub → 本项目一直在用的镜像站
-          # （docker-compose.prod.yml 里的 MINIO_IMAGE 就是它，本地拉取实测可用）。
-          for image in quay.io/minio/minio:latest minio/minio:latest \
-            swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/minio/minio:latest; do
-            if docker run -d --name ci-minio \
-              -p 9000:9000 \
-              -e MINIO_ROOT_USER="$MINIO_ACCESS_KEY" \
-              -e MINIO_ROOT_PASSWORD="$MINIO_SECRET_KEY" \
-              "$image" server /data; then
-              started=1
-              break
-            fi
-            echo "拉取 $image 失败，换下一个源"
-            docker rm -f ci-minio >/dev/null 2>&1 || true
-          done
-          if [ "$started" -ne 1 ]; then
-            echo "MinIO 镜像拉取失败"
-            exit 1
-          fi
+          set -euo pipefail
+          docker run -d --name ci-s3 -p 9000:9000 \
+            -e RUSTFS_ACCESS_KEY="$MINIO_ACCESS_KEY" \
+            -e RUSTFS_SECRET_KEY="$MINIO_SECRET_KEY" \
+            -e RUSTFS_CONSOLE_ENABLE=false \
+            -e RUSTFS_VOLUMES=/data \
+            rustfs/rustfs:latest
           for attempt in $(seq 1 30); do
             if curl -sf http://127.0.0.1:9000/minio/health/live >/dev/null; then
-              echo "MinIO 已就绪"
+              echo "对象存储已就绪"
               exit 0
             fi
             sleep 2
           done
-          echo "MinIO 启动超时"
-          docker logs ci-minio
+          echo "对象存储启动超时"
+          docker logs ci-s3
           exit 1
 
       - name: Apply migrations to the test database
