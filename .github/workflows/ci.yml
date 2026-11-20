@@ -115,5 +115,13 @@ jobs:
       - name: Apply migrations to the test database
         run: pnpm --filter @nmg/api db:migrate
 
+      # 再灌一次 seed：集成测试的「固定基座」——字典表（regions / industries）、
+      # RBAC（roles / permissions / role_permissions）与管理员账号——由 seed 灌入，
+      # helpers.ts 把它们列为 PRESERVED_TABLES（用例之间不清空，只清业务表）。
+      # 只跑迁移不跑 seed 的话字典表是空的，用例插入带 region_code 的档案就会撞外键
+      # （fk_alumni_profiles_region），整条集成链会红成一片。
+      - name: Seed the test database
+        run: pnpm --filter @nmg/api db:seed
+
       - name: Integration tests
         run: pnpm --filter @nmg/api test:integration
