@@ -8,11 +8,16 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  *   数据量上来后只能全表扫 + filesort：
  *   - `notices.status + published_at` —— 公告列表与首页聚合都按「已发布 + 发布时间倒序」查，
  *     而 `notices` 表**一个索引都没有**；
- *   - `articles.category_id` —— 资讯按分类筛选 + 按发布时间倒序；
  *   - `notifications.user_id + id` —— 「我的通知」是 `WHERE user_id=? ORDER BY id DESC`，
  *     现有索引 `(user_id, read_at, created_at)` 既不能过滤也不能供排序（`id` 夹不进去）；
- *   - `alumni_profiles.graduation_year` —— 通讯录按毕业年份筛选；
- *   - `admin_action_logs.created_at` —— 后台审计日志按时间区间过滤。
+ *   - `alumni_profiles.graduation_year` —— 通讯录按毕业年份筛选。
+ *
+ * ⚠️ 更正（第二轮复核）：本文件的注释此前还列了
+ *    `articles.category_id` 与 `admin_action_logs.created_at` 两条，
+ *    但下面的 `INDEXES` 常量里**并没有它们** ——
+ *    也就是说「注释承诺了、库里其实没有」。
+ *    这两个索引已由后续迁移 `1730000006000-AddRemainingQueryIndexes` 真正补上，
+ *    本文件不再声称自己建了它们。
  *
  * 另一处：审计日志的「只追加」此前**只是代码约定** ——
  * `admin_action_logs.admin_id` 的外键是 `ON DELETE CASCADE`，

@@ -1,8 +1,7 @@
-import { CanActivate, ExecutionContext, HttpException, HttpStatus, Injectable, OnModuleDestroy } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import Redis from 'ioredis';
+import { CanActivate, ExecutionContext, HttpException, HttpStatus, Injectable } from '@nestjs/common';
 import type { AuthenticatedRequest } from '../decorators';
 import { ResponseCode } from '../constants';
+import { RateLimiterService, resolveRateLimitCategory } from '../services/rate-limiter.service';
 
 /**
  * 固定窗口限流。按「用户（或 IP）+ 接口类别」计数。
@@ -13,87 +12,32 @@ import { ResponseCode } from '../constants';
  *    攻击者只要把请求分散到多个写端点，总量可以远超文档承诺的阈值。
  *    现在按**类别**分桶：auth / write / read，与文档口径一致（也更严格）。
  *
+ * ⚠️ 复核补漏（第二轮）：计数逻辑已抽到 `RateLimiterService`，
+ *    因为**鉴权失败的请求也必须计额** ——
+ *    此前本守卫排在 `JwtAuthGuard` 之后，伪造 / 过期令牌的请求
+ *    在到达这里之前就被 401 拒掉，等于完全不受限流保护。
+ *    现在 `JwtAuthGuard` 的失败路径也会调用同一个服务（按 IP 计）。
+ *
  * Redis 不可用时降级放行（限流是保护措施，不是业务依赖）。
  * `RATE_LIMIT_ENABLED=false` 时完全关闭（集成测试使用）。
  */
 @Injectable()
-export class RateLimitGuard implements CanActivate, OnModuleDestroy {
-  private readonly redis: Redis;
-  private readonly enabled: boolean;
-
-  constructor(private readonly config: ConfigService) {
-    this.enabled = this.config.get<string>('app.rateLimit.enabled', 'true') !== 'false';
-    this.redis = new Redis({
-      host: this.config.get<string>('redis.host', '127.0.0.1'),
-      port: this.config.get<number>('redis.port', 6379),
-      password: this.config.get<string | undefined>('redis.password'),
-      db: this.config.get<number>('redis.db', 0),
-      lazyConnect: true,
-      maxRetriesPerRequest: 1,
-    });
-    this.redis.on('error', () => undefined);
-  }
-
-  /** 关闭 Redis 连接，避免进程无法退出（集成测试 / 优雅停机）。 */
-  async onModuleDestroy(): Promise<void> {
-    try {
-      // lazyConnect 下未建立连接时直接 disconnect，避免 quit 触发一次多余握手
-      if (this.redis.status === 'wait' || this.redis.status === 'end') {
-        this.redis.disconnect();
-        return;
-      }
-      await this.redis.quit();
-    } catch {
-      this.redis.disconnect();
-    }
-  }
+export class RateLimitGuard implements CanActivate {
+  constructor(private readonly limiter: RateLimiterService) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    if (!this.enabled) {
+    if (!this.limiter.isEnabled) {
       return true;
     }
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
     const method = request.method.toUpperCase();
     const handler = context.getHandler().name;
 
-    const { windowSeconds, default: def, write, auth } = this.config.get<{
-      windowSeconds: number;
-      default: number;
-      write: number;
-      auth: number;
-    }>('app.rateLimit', { windowSeconds: 60, default: 240, write: 30, auth: 20 });
+    const { category, limit } = resolveRateLimitCategory(method, handler, this.limiter.limits);
+    const identity = request.user?.id ? `u${request.user.id}` : `ip${request.ip ?? 'unknown'}`;
 
-    let limit = def;
-    let category = 'read';
-    if (method === 'POST' || method === 'PUT' || method === 'PATCH' || method === 'DELETE') {
-      limit = write;
-      category = 'write';
-    }
-    // 登录 / 刷新单独一档（文档第 6 节：20 次/分钟）。
-    if (/login|refresh/i.test(handler)) {
-      limit = auth;
-      category = 'auth';
-    }
-
-    const identity = request.user?.id
-      ? `u${request.user.id}`
-      : `ip${request.ip ?? 'unknown'}`;
-    const bucket = Math.floor(Date.now() / (windowSeconds * 1000));
-    const key = `ratelimit:${identity}:${category}:${bucket}`;
-
-    let count = 1;
-    try {
-      await this.redis.connect().catch(() => undefined);
-      count = await this.redis.incr(key);
-      if (count === 1) {
-        await this.redis.expire(key, windowSeconds + 5);
-      }
-    } catch {
-      // Redis 不可用时降级放行，不阻断业务（限流是保护措施而非业务依赖）
-      return true;
-    }
-
-    if (count > limit) {
+    const allowed = await this.limiter.consume(identity, category, limit);
+    if (!allowed) {
       throw new HttpException(
         {
           code: ResponseCode.RATE_LIMITED,

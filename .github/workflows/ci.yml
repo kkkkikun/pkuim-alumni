@@ -119,6 +119,20 @@ jobs:
       - name: Build
         run: pnpm build
 
+      # 小程序单测（第二轮补上的 runner）。
+      #
+      # 为什么单独一步而不是并进 pnpm test：
+      #   `pnpm test` 在根目录是 `pnpm -r test`，会连着跑 api 的**集成测试**
+      #   （需要 MySQL / Redis / 对象存储，且会 TRUNCATE 业务表），
+      #   放在对象存储起来之前会红。小程序单测是纯 Node 环境、不碰数据库，
+      #   单独一步既跑得快，也不会被集成测试的前置条件绑住。
+      #
+      # 为什么不用 `pnpm --filter @nmg/miniprogram test` 之外的方式：
+      #   小程序包**没有自己的 jest 依赖**（加依赖会动 lockfile），
+      #   它的 test 脚本复用 api 包里已装好的 jest —— 与 jest.config.js 的注释一致。
+      - name: Miniprogram unit tests
+        run: pnpm --filter @nmg/miniprogram test
+
       # 集成测试不会自动建表（生产约定 synchronize: false / migrationsRun: false），
       # 所以先跑一遍迁移，把表结构铺到测试库上。
       # 对象存储用 rustfs（MinIO 协议兼容的 S3 实现）。

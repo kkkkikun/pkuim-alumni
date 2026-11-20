@@ -123,10 +123,11 @@ async function save(): Promise<void> {
   errors.displayName = form.displayName.trim() ? '' : '请填写管理员姓名';
   if (!editingId.value) {
     errors.username = form.username.trim() ? '' : '请填写登录账号';
-    errors.password = form.password.length >= 6 ? '' : '密码至少 6 位';
+    // 与服务端 DTO 对齐：初始口令必填，且至少 8 位
+    errors.password = form.password.length >= 8 ? '' : '密码至少 8 位';
   } else {
     errors.username = '';
-    errors.password = form.password && form.password.length < 6 ? '密码至少 6 位' : '';
+    errors.password = form.password && form.password.length < 8 ? '密码至少 8 位' : '';
   }
   if (errors.username || errors.displayName || errors.password) {
     MessagePlugin.warning('请先完善表单信息');

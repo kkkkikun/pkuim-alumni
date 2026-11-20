@@ -331,6 +331,15 @@ export class ConnectionsService {
     if (pair.userAId !== userId && pair.userBId !== userId) {
       throw new ForbiddenException('无权查看该连接关系');
     }
+    // ⚠️ 复核补漏（第二轮）：此前**不校验关系状态** ——
+    //    关系已解除（status='revoked'）后，详情接口仍然返回对方的
+    //    学院 / 地区 / 行业（联系方式虽然已随解除被撤销，但资料字段还在）。
+    //    列表接口只给 active 的关系，详情却给已解除的 —— 两边口径不一致，
+    //    等于「解除连接」之后仍能查到对方资料。
+    //    现在与列表口径一致：非 active 一律 404（不泄露关系是否存在）。
+    if (pair.status !== 'active') {
+      throw new NotFoundException('连接关系不存在');
+    }
     return this.toConnectionView(pair, userId);
   }
 

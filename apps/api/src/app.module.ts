@@ -54,7 +54,9 @@ import { UploadsModule } from './modules/uploads/uploads.module';
         timezone: 'Z',
         charset: 'utf8mb4',
         extra: {
-          connectionLimit: 20,
+          // 连接池大小：环境变量 `DB_POOL_SIZE`（默认 20）。
+          // 口径见 docs/CONCURRENCY-DESIGN.md「连接池与实例数」一节。
+          connectionLimit: config.get<number>('database.poolSize', 20),
           // BIGINT 主键统一以 number 返回（与 data-source.ts 一致）。
           // 否则 API 返回的 id 是字符串，导致前端类型不一致、
           // 且 dto.targetUserId === fromUserId 这类严格比较失效。

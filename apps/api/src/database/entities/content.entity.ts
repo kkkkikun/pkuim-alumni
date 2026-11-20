@@ -35,6 +35,8 @@ export class ArticleCategory {
 }
 
 @Index('idx_articles_published', ['status', 'publishedAt'])
+// 资讯按分类筛选 + 按发布时间倒序：见迁移 1730000006000。
+@Index('idx_articles_category', ['categoryId', 'publishedAt'])
 @Entity({ name: 'articles' })
 export class Article {
   @PrimaryGeneratedColumn({ name: 'id', type: 'bigint', unsigned: true })

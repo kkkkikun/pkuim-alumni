@@ -26,6 +26,8 @@ coverage/
 .env
 .env.*
 !.env.example
+# 本地一次性测试环境变量（含测试库 / MinIO / JWT 的本地口令）
+.local-test.env
 *.key
 private.*.key
 *.pem
@@ -69,3 +71,4 @@ Thumbs.db
 # --- 临时文件 --------------------------------------------------------------
 /tmp/
 *.tmp
+perf-baseline.json

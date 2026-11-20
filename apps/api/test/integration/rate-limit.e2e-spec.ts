@@ -161,4 +161,28 @@ describe('限流守卫 · 固定窗口', () => {
     // 两个不同用户拿到的是不同令牌（说明没有发生响应回放）
     expect(second.body.data.accessToken).not.toBe(first.body.data.accessToken);
   });
+
+  // ---------------------------------------------------------------------
+  // 复核补漏（第二轮）：**认证失败的请求也必须计额**
+  //
+  // 此前限流守卫排在 JWT 守卫之后，伪造 / 过期令牌的请求在到达限流之前
+  // 就被 401 拒掉 —— 攻击者塞一个垃圾 Bearer 值就能无限打受保护端点。
+  // 现在认证失败会先按 IP 计一次额度，超阈值直接 429。
+  // ---------------------------------------------------------------------
+  it('带伪造令牌的请求同样消耗额度，超过阈值后返回 429', async () => {
+    // 读接口阈值 = 5（IP 桶；此前本文件里没有别的读请求占用过这个桶）
+    for (let i = 0; i < 5; i += 1) {
+      const response = await server()
+        .get(`${API}/me/profile`)
+        .set('Authorization', 'Bearer not-a-real-token');
+      expect(response.status).toBe(401);
+    }
+
+    // 第 6 次必须被限流挡下（而不是继续给 401）
+    const blocked = await server()
+      .get(`${API}/me/profile`)
+      .set('Authorization', 'Bearer not-a-real-token');
+    expect(blocked.status).toBe(429);
+    expect(blocked.body.code).toBe('RATE_LIMITED');
+  });
 });

@@ -30,6 +30,24 @@ export const appConfig = registerAs('app', () => ({
   },
 }));
 
+/** 连接池大小的默认值（此前是 app.module.ts 里的硬编码 20）。 */
+export const DEFAULT_DB_POOL_SIZE = 20;
+
+/**
+ * 解析连接池大小。
+ *
+ * ⚠️ 复核补漏（第二轮）：此前 `connectionLimit: 20` 是 app.module.ts 里的**硬编码魔数**，
+ *    既不能按环境调，也没有任何文档写明它是怎么算出来的
+ *    （docs/CONCURRENCY-DESIGN.md 全文没提过连接池）。
+ *    现在改为环境变量 `DB_POOL_SIZE`，默认值不变（20），
+ *    并在 docs/CONCURRENCY-DESIGN.md 补上「连接池与实例数」的口径。
+ */
+export function resolvePoolSize(): number {
+  const raw = Number(process.env.DB_POOL_SIZE ?? DEFAULT_DB_POOL_SIZE);
+  if (!Number.isInteger(raw) || raw < 1) return DEFAULT_DB_POOL_SIZE;
+  return raw;
+}
+
 export const databaseConfig = registerAs('database', () => {
   // DATABASE_URL 优先（与 src/database/data-source.ts 的解析规则保持一致），
   // 避免「迁移连到 A 库、应用连到 B 库」这类割裂事故。
@@ -45,6 +63,7 @@ export const databaseConfig = registerAs('database', () => {
         password: parsed.password ? decodeURIComponent(parsed.password) : '',
         database: dbName,
         logging: process.env.DB_LOGGING === 'true',
+        poolSize: resolvePoolSize(),
       };
     } catch {
       // URL 非法时退回分离式环境变量
@@ -57,6 +76,7 @@ export const databaseConfig = registerAs('database', () => {
     password: process.env.DB_PASSWORD ?? '',
     database: process.env.DB_NAME ?? 'nmg_pku_alumni',
     logging: process.env.DB_LOGGING === 'true',
+    poolSize: resolvePoolSize(),
   };
 });
 

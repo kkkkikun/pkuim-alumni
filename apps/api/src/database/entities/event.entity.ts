@@ -105,6 +105,8 @@ export class Event {
  * 取消报名复用同一行（status 改回 'registered'）。
  */
 @Index('uk_event_registration', ['eventId', 'userId'], { unique: true })
+// 「我的活动」：WHERE user_id=? ORDER BY id DESC —— 见迁移 1730000006000。
+@Index('idx_event_registration_user', ['userId', 'id'])
 @Entity({ name: 'event_registrations' })
 export class EventRegistration {
   @PrimaryGeneratedColumn({ name: 'id', type: 'bigint', unsigned: true })
