@@ -1,0 +1,114 @@
+# Dispatches the next task of the unattended agent queue to @LL-ki.
+#
+# The agent cannot dispatch itself: the Source skips every item authored by the agent's own
+# account, so a follow-up task has to come from another account. This workflow acts as that
+# dispatcher. It reads .agent/dispatch-queue.json from main, and opens one issue that mentions
+# the agent when the queue holds a task and the agent looks idle.
+#
+# The trigger is the merge itself: every merge to main carries the queue forward, and that
+# push is what asks for the next task. A schedule is kept only as a backstop, because GitHub's
+# cron scheduler is unreliable on private repositories — it ran twice in nine hours.
+#
+# The agent looks busy when a pull request from an agent branch is open, or when the current
+# task already has an open dispatch issue. A pull request from an agent branch that nobody
+# touched for two hours belongs to a session that is gone, so it is closed and the queue moves
+# on; without that the loop would stall on the first lost session.
+#
+# Each step reads the queue file itself: a multi-line brief must not travel through
+# GITHUB_OUTPUT, which only accepts one line per value.
+name: Agent dispatch
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: agent-dispatch
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the queue
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Decide whether to dispatch
+        id: decide
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          QUEUE=.agent/dispatch-queue.json
+          if [ ! -f "$QUEUE" ]; then
+            echo "dispatch=false" >>"$GITHUB_OUTPUT"
+            echo "no queue file"
+            exit 0
+          fi
+          ID=$(jq -r '.current.id // empty' "$QUEUE")
+          BRIEF=$(jq -r '.current.brief // empty' "$QUEUE")
+          if [ -z "$ID" ] || [ -z "$BRIEF" ]; then
+            echo "dispatch=false" >>"$GITHUB_OUTPUT"
+            echo "the queue holds no current task"
+            exit 0
+          fi
+          MARKER="<!-- agent-dispatch:$ID -->"
+          # Sweep the leftovers of a session that died before it could clean up.
+          # A pull request from an agent branch that nobody touched for two hours belongs
+          # to a session that is gone. So does the dispatch issue that started it: left
+          # open, it would tell the next run that this task is still in flight, and the
+          # queue would never move again. Both are closed here, oldest first, so the
+          # task is dispatched again from the queue.
+          STALE=$(gh pr list --repo "$REPO" --state open --limit 50 --json number,headRefName,updatedAt \
+            --jq '[.[] | select(.headRefName | startswith("agent/")) | select((now - (.updatedAt | fromdateiso8601)) > 7200) | .number] | join(" ")')
+          for number in $STALE; do
+            echo "closing stale agent pull request #$number"
+            gh pr close "$number" --repo "$REPO" \
+              --comment "自动派活工作流关闭：此 PR 已两小时没有更新，判定上一轮会话已结束，下一轮从队列重新开始。" || true
+          done
+          STALE_ISSUES=$(gh api "repos/$REPO/issues?state=open&per_page=100" \
+            --jq '[.[] | select(.user.login == "github-actions[bot]") | select(.body // "" | contains("<!-- agent-dispatch:")) | select((now - (.updated_at | fromdateiso8601)) > 7200) | .number] | join(" ")')
+          for number in $STALE_ISSUES; do
+            echo "closing stale dispatch issue #$number"
+            gh issue close "$number" --repo "$REPO" \
+              --comment "自动派活工作流关闭：此派活单已两小时没有对应的 agent PR，判定上一轮会话已结束，下一轮从队列重新开始。" || true
+          done
+          # Only a dispatch issue opened by the dispatcher counts as "this task is in flight".
+          # A marker left on an issue a person opened must not block the queue forever.
+          INFLIGHT=$(gh api "repos/$REPO/issues?state=open&per_page=100" \
+            --jq '[.[] | select(.user.login == "github-actions[bot]") | select(.body // "" | contains("'"$MARKER"'"))] | length')
+          if [ "$INFLIGHT" -gt 0 ]; then
+            echo "dispatch=false" >>"$GITHUB_OUTPUT"
+            echo "task $ID is already dispatched and still open"
+            exit 0
+          fi
+          OPEN=$(gh pr list --repo "$REPO" --state open --limit 50 --json headRefName --jq '[.[] | select(.headRefName | startswith("agent/"))] | length')
+          if [ "$OPEN" -gt 0 ]; then
+            echo "dispatch=false" >>"$GITHUB_OUTPUT"
+            echo "$OPEN agent pull request(s) are open"
+            exit 0
+          fi
+          echo "dispatch=true" >>"$GITHUB_OUTPUT"
+
+      - name: Open the dispatch issue
+        if: steps.decide.outputs.dispatch == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          QUEUE=.agent/dispatch-queue.json
+          ID=$(jq -r '.current.id' "$QUEUE")
+          TITLE=$(jq -r '.current.title' "$QUEUE")
+          BRIEF=$(jq -r '.current.brief' "$QUEUE")
+          BODY=$(printf '@LL-ki %s\n\n<!-- agent-dispatch:%s -->\n' "$BRIEF" "$ID")
+          gh issue create --repo "$REPO" --title "[agent-dispatch] $TITLE" --body "$BODY"
