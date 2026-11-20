@@ -2997,11 +2997,35 @@
 - **影响面**：`pnpm install --frozen-lockfile` 会因为「锁文件与 package.json 不同步」而失败；
   当前部署是靠 `INSTALL_FLAGS=--no-frozen-lockfile`（见 `infra/env/env.prod.example`）绕过的 ——
   也就是说**镜像构建实际上没有用锁文件锁住依赖版本**。
-- **本轮为什么没顺手修**：重新生成锁文件属于与「安全 / 性能」无关的改动，
-  且会牵动镜像构建链（`--frozen-lockfile` 一旦恢复可用，依赖解析结果可能与现在不同）；
-  本轮只把这条**如实记下来**，交由专门的依赖治理轮次处理。
-- **附带说明**：本 PR **不包含**锁文件变更（工作区里的改动已还原），
-  以免把与本轮目标无关的依赖变动带进同一个 PR。
+- **影响 CI**：主干新增的 CI 门禁（`.github/workflows/ci.yml`）用
+  `pnpm install --frozen-lockfile` 安装依赖 —— 在**干净检出**里它会直接失败：
+  `ERR_PNPM_OUTDATED_LOCKFILE`（先报 `apps/worker/package.json`，再报 `apps/api`）。
+  也就是说**任何 PR 的 CI 都会卡在安装步骤**，与 PR 内容无关。
+- **本轮的处置**：把锁文件**按 package.json 重新生成**并随本 PR 一起提交 ——
+  这不是「升级依赖」，而是让锁文件**记录 package.json 里早已选定的依赖**
+  （`bcryptjs@2.4.3` 是缺陷 #3 的既定处置，`apps/worker` 的 5 个依赖此前根本不在锁文件里）。
+  重新生成后**没有任何依赖版本被改动**（与当前 `node_modules` 里的版本逐一相同），
+  而 `pnpm install --frozen-lockfile` 在干净检出里恢复可用 ——
+  依赖版本重新被锁住，构建不再靠 `--no-frozen-lockfile` 绕过。
+- **验证**：干净副本里 `pnpm install --frozen-lockfile --lockfile-only` 退出码 0
+  （修复前是 `ERR_PNPM_OUTDATED_LOCKFILE`）。
+
+### 172. `pnpm lint` 从来无法执行：仓库既没有 `eslint` 依赖，也没有 ESLint 配置文件
+
+- **现象**：`apps/api/package.json` 里的 `lint` 脚本是 `eslint "src/**/*.ts"`，
+  `admin-web` 的脚本则写着「lint 由根仓库 ESLint 统一配置」——
+  但仓库**根目录既没有 eslint 依赖，也没有任何 ESLint 配置文件**
+  （`git log --all -- '.eslintrc*' 'eslint.config.*'` 为空）。
+  于是 `pnpm lint` 一律报 `eslint: not found` 并以退出码 1 结束。
+- **影响面**：主干新增的 CI 门禁里有一步就是 `pnpm lint` ——
+  即使账号的 Actions 额度恢复，这一步也会让 CI 变红。
+  （本 PR 的 CI 另有**更早**的阻塞：GitHub 侧报
+  “The job was not started because recent account payments have failed or your spending limit needs to be increased”。）
+- **本轮为什么没修**：补上 ESLint 需要「新增开发依赖 + 新建配置文件 + 修完全仓库的违规」，
+  属于**工具链治理**，与本轮的安全/性能目标无关，且改动面会波及大量与本轮无关的文件；
+  门禁阈值与校验强度一律不动（本轮**没有**关闭或放宽任何 lint 规则）。
+- **建议**：单独一轮做「工具链治理」：定 ESLint 版本与 flat config →
+  先让 CI 只报告不失败 → 再逐条清零 → 最后才把它变成硬门禁。
 
 ## 待验证 / 未完成（不得声称已通过）> 以下均为**缺少外部资质或环境**导致的未验证项，与实现质量无关。
 > 已实测完成的项（冒烟 10/10、集成测试 39/39、k6 分级压测、备份恢复演练、管理后台构建）见 `docs/TEST-REPORT.md`。
