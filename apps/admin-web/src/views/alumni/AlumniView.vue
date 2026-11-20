@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue';
-import { MessagePlugin } from 'tdesign-vue-next';
+import { MessagePlugin } from '@/plugins/tdesign';
 import type { UserStatus } from '@nmg/contracts';
 import {
   fetchAlumni,

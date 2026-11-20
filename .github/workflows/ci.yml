@@ -133,6 +133,14 @@ jobs:
       - name: Miniprogram unit tests
         run: pnpm --filter @nmg/miniprogram test
 
+      # 管理后台单元测试（第三轮新增的 runner）。
+      #
+      # 与小程序一样**复用 api 包里已装好的 jest**（不引入新依赖，锁文件不变）——
+      # 管理后台包是 ESM（package.json 里 "type": "module"），
+      # 所以它的 jest 配置用 `.cjs` 后缀。
+      - name: Admin web unit tests
+        run: pnpm --filter @nmg/admin-web test
+
       # 集成测试不会自动建表（生产约定 synchronize: false / migrationsRun: false），
       # 所以先跑一遍迁移，把表结构铺到测试库上。
       # 对象存储用 rustfs（MinIO 协议兼容的 S3 实现）。
@@ -173,3 +181,84 @@ jobs:
 
       - name: Integration tests
         run: pnpm --filter @nmg/api test:integration
+
+      # 第三轮：把与**安全 / 性能 / 契约**相关的静态校验接入 CI。
+      #
+      # 为什么现在才接：这些校验器此前只在本机手动跑，
+      # 仓库里没有任何门禁保证它们是绿的 —— 契约漂移、响应结构漂移、
+      # 迁移与实体不一致，都只能靠人记得跑。
+      #
+      # ⚠️ 选哪些是有讲究的：
+      #   - **只接不依赖外部服务**的（不需要跑着的 API / 数据库 / 浏览器）；
+      #   - 依赖跑着的 API 的那批（check-contract-routes / check-client-paths /
+      #     check-response-shape / check-api-spec-doc / check-spec-coverage）
+      #     留待 API 起来之后再跑（见下一步）。
+      # 接进 CI 之前已逐个在**干净检出**上跑过，全部为绿。
+      - name: Static contract and safety checks
+        run: |
+          set -euo pipefail
+          # 契约 ↔ 小程序类型镜像（契约改了、小程序镜像没改 → 运行期静默分叉）
+          node infra/scripts/check-contract-mirror.mjs
+          # 契约 / 服务端 / 枚举 / RBAC 矩阵 / 事务逃逸 / 状态码断言
+          node infra/scripts/check-enum-consistency.mjs
+          node infra/scripts/check-rbac-matrix.mjs
+          node infra/scripts/check-transaction-escape.mjs
+          node infra/scripts/check-status-code-assertions.mjs
+          node infra/scripts/check-dead-error-code.mjs
+          node infra/scripts/check-swagger-param-usage.mjs
+          node infra/scripts/check-request-dto.mjs
+          node infra/scripts/check-concurrent-upsert.mjs
+          node infra/scripts/check-test-coverage.mjs
+          # 管理后台与小程序两端的静态一致性
+          node infra/scripts/check-admin-web.mjs
+          node infra/scripts/check-miniprogram.mjs
+          node infra/scripts/check-miniprogram-imports.mjs
+          node infra/scripts/check-miniprogram-styles.mjs
+          node infra/scripts/check-miniprogram-dates.mjs
+          node infra/scripts/check-miniprogram-assets.mjs
+          node infra/scripts/check-miniprogram-demo-content.mjs
+          # 迁移清单与目录是否一致（迁移漏提交 → 上线时才炸）
+          bash infra/scripts/check-pending-migrations.sh --static-only
+
+      # 依赖**跑着的 API**的那批契约校验（第三轮）。
+      #
+      # 这些脚本要拿真实的 Swagger 文档与真实响应体，
+      # 所以必须先起一个 API 进程（用刚建好的测试库）。
+      # 脚本本身只做**只读**请求，不产生业务数据。
+      - name: Start the API for contract checks
+        run: |
+          set -euo pipefail
+          PORT=18099 NODE_ENV=test node apps/api/dist/main.js > /tmp/api-contract-checks.log 2>&1 &
+          echo $! > /tmp/api-contract-checks.pid
+          for attempt in $(seq 1 60); do
+            # ⚠️ `healthz` 被排除在全局前缀之外（`setGlobalPrefix(API_PREFIX, { exclude: ['healthz'] })`），
+            #    所以它在**根路径** `/healthz`，不是 `/api/v1/healthz`。
+            if curl -sf http://127.0.0.1:18099/healthz >/dev/null; then
+              echo "API 已就绪"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "API 启动超时"
+          cat /tmp/api-contract-checks.log
+          exit 1
+
+      - name: Contract and response-shape checks against the running API
+        run: |
+          set -euo pipefail
+          SWAGGER=http://127.0.0.1:18099/api/v1/docs-json
+          BASE=http://127.0.0.1:18099/api/v1
+          node infra/scripts/check-contract-routes.mjs --swagger "$SWAGGER"
+          node infra/scripts/check-client-paths.mjs --swagger "$SWAGGER"
+          node infra/scripts/check-api-spec-doc.mjs --swagger "$SWAGGER"
+          node infra/scripts/check-spec-coverage.mjs --swagger "$SWAGGER"
+          node infra/scripts/check-request-contract.mjs --swagger "$SWAGGER"
+          # 真实响应体 vs 客户端声明的返回类型（契约与实现对不上的最后一道防线）
+          node infra/scripts/check-response-shape.mjs --base "$BASE"
+
+      - name: Stop the API used for contract checks
+        if: always()
+        run: |
+          if [ -f /tmp/api-contract-checks.pid ]; then
+            kill "$(cat /tmp/api-contract-checks.pid)" 2>/dev/null || true
+          fi

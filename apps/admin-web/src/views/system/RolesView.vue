@@ -1,29 +1,39 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
-import type { AdminPermission, AdminRole } from '@nmg/contracts';
+import type { AdminPermission, AdminPermissionDto, AdminRole, AdminRoleDto } from '@nmg/contracts';
 import { fetchPermissions, fetchRoles } from '@/api/admin';
 import { errorMessage } from '@/api/http';
 import { PERMISSION_LABELS, ROLE_LABELS, ROLE_PERMISSIONS } from '@/stores/auth';
 import PageHeader from '@/components/PageHeader.vue';
 import StateBox from '@/components/StateBox.vue';
 
-const roles = ref<AdminRole[]>([]);
-const permissions = ref<AdminPermission[]>([]);
+// ⚠️ 第三轮：`GET /admin/roles` 与 `/admin/permissions` 改为分页结构，
+//    且**条目是目录整行**（契约 `AdminRoleDto` / `AdminPermissionDto`），
+//    不再是「代码字符串」。
+//    此前的写法把返回的对象当代码字符串用（`ROLE_LABELS[role]` 恒为 undefined，
+//    角色名渲染成 `[object Object]`）—— 契约写清楚之后一并纠正。
+const roles = ref<AdminRoleDto[]>([]);
+const permissions = ref<AdminPermissionDto[]>([]);
 const loading = ref(false);
 const error = ref<string | null>(null);
 
 const matrixColumns = computed(() => [
   { colKey: 'role', title: '角色', width: 160 },
-  ...permissions.value.map((code) => ({ colKey: code, title: permissionLabel(code), width: 96 })),
+  ...permissions.value.map((item) => ({ colKey: item.code, title: permissionLabel(item.code), width: 96 })),
 ]);
 
 async function load(): Promise<void> {
   loading.value = true;
   error.value = null;
   try {
-    const [roleList, permissionList] = await Promise.all([fetchRoles(), fetchPermissions()]);
-    roles.value = roleList;
-    permissions.value = permissionList;
+    // 目录表很小（角色 5 个 / 权限点 12 个），一次取完：
+    // 用 pageSize=100（服务端上限）换回「整目录」语义，同时仍然有上限。
+    const [rolePage, permissionPage] = await Promise.all([
+      fetchRoles({ page: 1, pageSize: 100 }),
+      fetchPermissions({ page: 1, pageSize: 100 }),
+    ]);
+    roles.value = rolePage.items;
+    permissions.value = permissionPage.items;
   } catch (e) {
     error.value = errorMessage(e);
   } finally {
@@ -69,12 +79,12 @@ onMounted(() => {
         </div>
         <div class="surface__body">
           <div class="role-grid">
-            <div v-for="role in roles" :key="role" class="role-card">
-              <strong>{{ roleLabel(role) }}</strong>
-              <span class="mono muted">{{ role }}</span>
+            <div v-for="role in roles" :key="role.id" class="role-card">
+              <strong>{{ roleLabel(role.code) }}</strong>
+              <span class="mono muted">{{ role.code }}</span>
               <div class="role-card__tags">
                 <t-tag
-                  v-for="code in ROLE_PERMISSIONS[role] || []"
+                  v-for="code in ROLE_PERMISSIONS[role.code] || []"
                   :key="code"
                   variant="light"
                   size="small"
@@ -115,12 +125,12 @@ onMounted(() => {
             <p>依据系统初始化种子数据展示</p>
           </div>
         </div>
-        <t-table :data="roles" :columns="matrixColumns" row-key="role">
+        <t-table :data="roles" :columns="matrixColumns" row-key="id">
           <template #role="{ row }">
-            {{ roleLabel(row) }}
+            {{ roleLabel(row.code) }}
           </template>
-          <template v-for="code in permissions" :key="code" #[code]="{ row }">
-            <t-tag v-if="hasPermission(row, code)" theme="success" variant="light" size="small">
+          <template v-for="item in permissions" :key="item.code" #[item.code]="{ row }">
+            <t-tag v-if="hasPermission(row.code, item.code)" theme="success" variant="light" size="small">
               ✓
             </t-tag>
             <span v-else class="muted">—</span>

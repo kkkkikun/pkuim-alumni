@@ -522,6 +522,24 @@ export interface SessionUser {
 
 export type AuthSessionResponse = { user: SessionUser | null; stage: string | null };
 export type MeResponse = { user: UserProfile; alumniProfile: MyAlumniProfile | null; stage: AlumniStage };
+
+/**
+ * `GET /me/summary` 的响应（契约 `MeSummaryResponse`）。
+ *
+ * ⚠️ 第三轮新增：小程序「我的」页首屏的四个计数。
+ *    此前这四个数字要靠 4 个列表接口各取一页才能拿到（首屏 5 个请求），
+ *    现在 1 个请求给全（首屏 2 个请求）。
+ */
+export interface MeSummaryResponse {
+  /** 我的活动报名数 */
+  eventCount: number;
+  /** 我收到的联系申请数 */
+  requestCount: number;
+  /** 我发布的资源 / 需求数 */
+  postCount: number;
+  /** 未读通知数（**实时**，服务端不缓存） */
+  unreadCount: number;
+}
 export type DirectoryResponse = PageResult<DirectoryEntry>;
 export type ResourcesResponse = PageResult<ResourcePostDto>;
 export type EventsResponse = PageResult<EventDto>;
@@ -538,9 +556,21 @@ export type UploadUrlResponse = { url: string; expiresIn: number };
 export type PrivacyResponse = PrivacySettings;
 export type LoginResponse = LoginResult;
 export type RefreshResponse = TokenPair;
-export type EventRegistrationsResponse = EventRegistrationDto[];
+/**
+ * `GET /admin/events/:id/registrations` 的响应（契约 `EventRegistrationsResponse`）。
+ *
+ * ⚠️ 第三轮：从「裸数组（全部报名记录）」改为 `{items, meta}` 分页结构。
+ */
+export type EventRegistrationsResponse = PageResult<EventRegistrationDto>;
 export type VerificationStatusResponse = { status: VerificationStatus };
 export type VerificationApplicationResponse = VerificationApplicationDto;
+
+/**
+ * `GET /alumni/verification/mine` 的响应（契约 `VerificationsMineResponse`）。
+ *
+ * ⚠️ 第三轮：从「裸数组（全部认证申请）」改为 `{items, meta}` 分页结构。
+ */
+export type VerificationsMineResponse = PageResult<VerificationApplicationDto>;
 
 /* ------------------------------ 上传（契约未定义，客户端本地约定） ------------------------------ */
 

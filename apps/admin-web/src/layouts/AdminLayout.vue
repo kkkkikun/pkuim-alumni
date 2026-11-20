@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { useRoute } from 'vue-router';
-import { MessagePlugin } from 'tdesign-vue-next';
+import { MessagePlugin } from '@/plugins/tdesign';
 import { useAuthStore, ROLE_LABELS } from '@/stores/auth';
 import { menuGroups } from '@/utils/menu';
 import { mockEnabled } from '@/api/mock';

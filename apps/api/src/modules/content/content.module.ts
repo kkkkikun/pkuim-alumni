@@ -4,11 +4,12 @@ import { Article, ArticleCategory, Notice } from '../../database/entities/conten
 import { SystemSetting } from '../../database/entities/system.entity';
 import { ContentController } from './content.controller';
 import { ContentService } from './content.service';
+import { ViewCounterService } from './view-counter.service';
 
 @Module({
   imports: [TypeOrmModule.forFeature([Article, ArticleCategory, Notice, SystemSetting])],
   controllers: [ContentController],
-  providers: [ContentService],
-  exports: [ContentService],
+  providers: [ContentService, ViewCounterService],
+  exports: [ContentService, ViewCounterService],
 })
 export class ContentModule {}

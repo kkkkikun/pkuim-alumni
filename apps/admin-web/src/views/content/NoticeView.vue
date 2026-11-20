@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { reactive, ref } from 'vue';
-import { MessagePlugin, DialogPlugin } from 'tdesign-vue-next';
+import { DialogPlugin, MessagePlugin } from '@/plugins/tdesign';
 import type { NoticeDto } from '@nmg/contracts';
 import {
   createNotice,

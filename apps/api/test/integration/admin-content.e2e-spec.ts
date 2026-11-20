@@ -179,18 +179,22 @@ describe('管理端内容与联系申请分支', () => {
   /* ------------------------- 角色 / 权限 / 审计 / 设置 ------------------------- */
 
   it('管理员可读取角色、权限、审计日志与系统设置', async () => {
+    // ⚠️ 第三轮：`/admin/roles`、`/admin/permissions`、`/admin/settings`
+    //    从「裸数组（无上限全表）」改为 `{items, meta}` 分页结构。
     const roles = await server()
       .get(`${API}/admin/roles`)
       .set('Authorization', `Bearer ${ctx.adminToken}`)
       .expect(200);
-    expect(Array.isArray(roles.body.data)).toBe(true);
-    expect(roles.body.data.length).toBeGreaterThan(0);
+    expect(Array.isArray(roles.body.data.items)).toBe(true);
+    expect(roles.body.data.items.length).toBeGreaterThan(0);
+    expect(roles.body.data.meta).toBeDefined();
 
     const permissions = await server()
       .get(`${API}/admin/permissions`)
       .set('Authorization', `Bearer ${ctx.adminToken}`)
       .expect(200);
-    expect(permissions.body.data.length).toBeGreaterThan(0);
+    expect(permissions.body.data.items.length).toBeGreaterThan(0);
+    expect(permissions.body.data.meta).toBeDefined();
 
     const logs = await server()
       .get(`${API}/admin/action-logs`)
@@ -204,7 +208,8 @@ describe('管理端内容与联系申请分支', () => {
       .get(`${API}/admin/settings`)
       .set('Authorization', `Bearer ${ctx.adminToken}`)
       .expect(200);
-    expect(settings.body.data).toBeDefined();
+    expect(Array.isArray(settings.body.data.items)).toBe(true);
+    expect(settings.body.data.meta).toBeDefined();
   });
 
   /**

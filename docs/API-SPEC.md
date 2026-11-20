@@ -4,6 +4,25 @@
 > 两者不一致时以 `packages/contracts` 为准，并同步修正本文件。
 > 前缀：`/api/v1`。统一响应信封：`{code, message, data, requestId}`。
 
+## 第三轮的契约变更（迁移说明）
+
+> 这一轮**允许变更对外响应结构**（前两轮不允许）。共三类，客户端必须同步。
+
+| 端点 | 改动前 | 改动后 |
+|---|---|---|
+| `GET /admin/events/:id/registrations` | 裸数组（**全部**报名记录，无上限） | `{items, meta}`，入参 `page` / `pageSize` |
+| `GET /alumni/verification/mine` | 裸数组（**全部**认证申请，无上限） | `{items, meta}`，入参 `page` / `pageSize` |
+| `GET /admin/roles`、`GET /admin/permissions`、`GET /admin/settings` | 裸数组（全表，无上限） | `{items, meta}`，入参 `page` / `pageSize` |
+| `GET /articles`、`GET /notices`、`GET /resources`（**列表**） | `body` 是整篇正文（MEDIUMTEXT，`pageSize=100` 时单次响应可达数十 MB） | `body` 只返回**前 200 字摘要**；完整正文走详情接口。管理端列表不变（仍为全文） |
+| `GET /me/summary` | —（不存在） | **新增**：一次返回「我的」首屏的四个计数（`eventCount` / `requestCount` / `postCount` / `unreadCount`），替代此前 4 个只为拿数字的列表请求 |
+
+- 角色 / 权限点 / 设置项的**条目结构**此前契约写窄了（写成 `AdminRole[]` 等代码联合类型，
+  实际返回的是目录整行）。第三轮起契约写清楚：`AdminRoleDto` / `AdminPermissionDto` / `SystemSettingDto`。
+- `viewCount` 的**一致性口径**由「即时一致」改为**最终一致**：
+  详情接口返回的值 = 库里的基线值 + 尚未落库的增量（用户看到的数字当场就是对的），
+  但数据库行里的 `view_count` 可能滞后最多一个刷回周期（60 秒）。
+  详见 `docs/SECURITY.md` 第 2.2 节。
+
 ## 通用约定
 
 | 项 | 约定 |
@@ -11,7 +30,8 @@
 | 认证 | `Authorization: Bearer <accessToken>`；access token 有效期 2h，refresh token 30d 且可吊销 |
 | 请求标识 | 请求可携带 `X-Request-Id`，未携带则服务端生成并在响应回传 |
 | 幂等 | 写接口可携带 `Idempotency-Key`；同一 (scope, key) 在有效期内（默认 24h）只执行一次并回放原响应。scope = `METHOD:实际路径:u{用户ID}` —— **路径取本次请求的真实路径（含资源 id，如 `/api/v1/connections/17/contact-grant`），不是路由模板**（模板会让「一把钥匙开两个不同资源」互相串扰，缺陷 #140）；**含用户维度**（不同用户用同一幂等键互不影响）；匿名请求不启用幂等。请求指纹（方法 + 路径 + 查询串 + 请求体）不一致、或同键正在处理中 → 409 `IDEMPOTENCY_CONFLICT`（**专用码**，不是通用 `CONFLICT`）；**请求失败会释放幂等键**，客户端可用同一键安全重试；超过有效期后同键**重新执行**而不是回放旧响应。客户端注意：**重试同一个动作必须沿用同一把钥匙**，每次现生成新钥匙等于没有幂等 |
-| 分页 | 入参 `page`（≥1）、`pageSize`（1~100）；出参 `{items, meta:{page,pageSize,total,totalPages}}` |
+| 分页 | 入参 `page`（≥1）、`pageSize`（1~100）；出参 `{items, meta:{page,pageSize,total,totalPages}}`。**第三轮起，所有列表接口一律是这个形状**（此前有三个端点返回裸数组，见下方「第三轮的契约变更」） |
+| 列表正文 | `GET /articles`、`GET /notices`、`GET /resources` 的**列表**响应里，`body` 只返回**前 200 字的摘要**（末尾带 `…`）；完整正文走对应的详情接口（`GET /articles/:id` 等）。管理端列表（`/admin/*`）仍返回**全文** —— 后台编辑弹窗直接回填列表行里的正文，截断会导致保存时静默截断正文 |
 | 错误码 | `VALIDATION_ERROR`（入参校验失败，400）`AUTH_REQUIRED`（**未携带**有效令牌，401）`AUTH_FAILED`（**凭据无效**：密码错 / 令牌失效 / 账号停用，401）`FORBIDDEN`（无权限，403）`NOT_FOUND`（对象不存在，404）`CONFLICT`（业务状态冲突，409）`RATE_LIMITED`（429）`VERIFICATION_REQUIRED`（**需先完成校友身份认证**，403 —— 与 `FORBIDDEN` 区分开，客户端据此引导到认证页）`IDEMPOTENCY_CONFLICT`（幂等键用于不同内容或正在处理中，409 —— 专用码，不是通用 `CONFLICT`）`INTERNAL_ERROR`（500） |
 | 限流 | 读接口 240 次/分钟，��接口 30 次/分钟，登录与刷新 20 次/分钟（按用户或 IP） |
 | 权限 | 用户侧接口需登录；管理端接口需管理员令牌且具备对应权限点 |
@@ -35,6 +55,7 @@
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/me` | 当前用户 + 校友资料（含隐私开关与我的联系方式，仅本人） |
+| GET | `/me/summary` | 「我的」页首屏计数汇总（`eventCount` / `requestCount` / `postCount` / `unreadCount`）。**一次请求给全**，替代此前 4 个只为拿数字的列表请求 |
 | GET | `/me/profile` | 我的校友档案（我方视角：档案 + 隐私开关 + 我的联系方式） |
 | PATCH | `/me/profile` | 更新资料（`displayName/college/degree/graduationYear/regionCode/industryCode/direction/intro`） |
 | GET | `/me/contacts` | 我的联系方式（仅本人可见） |
@@ -56,7 +77,7 @@
 | POST | `/alumni/verification` | 提交认证申请（含 `attachmentMediaIds` 证明材料） | 登录 |
 | GET | `/alumni/verification/:id` | 认证申请详情 | 本人或审核员 |
 | GET | `/alumni/verification/:id/history` | 审核历史（只追加） | 本人或审核员 |
-| GET | `/alumni/verification/mine` | 我的全部认证申请（按时间倒序） | 本人 |
+| GET | `/alumni/verification/mine` | 我的全部认证申请（按时间倒序，**分页**：`page` / `pageSize`，出参 `{items, meta}`） | 本人 |
 | PUT | `/alumni/verification/:id/resubmit` | 补充材料后重新提交 | 本人 |
 | GET | `/alumni/:id` | 校友**公开名片**（与通讯录条目同构，不含联系方式与私密字段） | 公开 |
 | PATCH | `/admin/users/:id/status` | 启用/停用账号 | `alumni:manage` |
@@ -180,12 +201,12 @@
 | GET | `/admin/resources/:id/attachments/:mediaId/url` | `resource:review` |
 | GET/POST/PATCH/DELETE | `/admin/events[/:id]` | `event:manage` |
 | GET | `/admin/events/:id` | 活动详情（管理端） | `event:manage` |
-| GET | `/admin/events/:id/registrations` | 活动报名名单 | `event:manage` |
-| GET/POST/PATCH/DELETE | `/admin/articles[/:id]`、`/admin/notices[/:id]` | `content:manage` |
+| GET | `/admin/events/:id/registrations` | 活动报名名单（**分页**：`page` / `pageSize`，出参 `{items, meta}`） | `event:manage` |
+| GET/POST/PATCH/DELETE | `/admin/articles[/:id]`、`/admin/notices[/:id]` | `content:manage`（列表返回**全文**正文：后台编辑弹窗直接回填列表行） |
 | GET | `/admin/users`、POST `/admin/users`、PATCH `/admin/users/:id` | `admin:manage` |
-| GET | `/admin/roles`、`/admin/permissions` | `admin:manage` |
+| GET | `/admin/roles`、`/admin/permissions` | `admin:manage`（**分页**：`page` / `pageSize`，出参 `{items, meta}`） |
 | GET | `/admin/action-logs` | `audit:view` |
-| GET/PUT | `/admin/settings` | `settings:manage` |
+| GET/PUT | `/admin/settings` | `settings:manage`（GET **分页**：`page` / `pageSize`，出参 `{items, meta}`） |
 
 角色与权限点见 `docs/DATABASE-DESIGN.md` §8。
 

@@ -5,6 +5,7 @@ import { ApiPaths } from './paths';
 import { get, patch, post, put } from './request';
 import type {
   MeResponse,
+  MeSummaryResponse,
   MyAlumniProfile,
   PageResult,
   PrivacySettings,
@@ -25,6 +26,16 @@ export async function fetchMe(): Promise<MeResponse> {
     privacy: result.alumniProfile ? result.alumniProfile.privacy : null,
   });
   return result;
+}
+
+/**
+ * 「我的」页首屏计数汇总（**一次请求**给出四个计数）。
+ *
+ * ⚠️ 第三轮：此前这四个数字要靠 4 个列表接口各取一页才能拿到，
+ *    首屏因此要打 5 个请求；现在 1 个请求给全，首屏降到 2 个请求。
+ */
+export function fetchMeSummary(): Promise<MeSummaryResponse> {
+  return get<MeSummaryResponse>(ApiPaths.meSummary);
 }
 
 /** 我的校友资料 */
@@ -66,10 +77,19 @@ export function getVerification(id: number): Promise<VerificationApplicationDto>
   return get<VerificationApplicationDto>(ApiPaths.alumniVerificationItem(id));
 }
 
-/** 当前认证状态（取最近一条认证申请） */
+/**
+ * 当前认证状态（取最近一条认证申请）。
+ *
+ * ⚠️ 第三轮：`GET /alumni/verification/mine` 从「裸数组」改为 `{items, meta}` 分页结构，
+ *    这里取第一页的第一条（服务端按 id 倒序，第一条就是最近一次申请）。
+ */
 export async function getVerificationStatus(): Promise<{ status: VerificationStatus }> {
-  const applications = await get<VerificationApplicationDto[]>(ApiPaths.alumniVerificationMine);
-  const latest = applications && applications.length ? applications[0] : null;
+  const page = await get<PageResult<VerificationApplicationDto>>(ApiPaths.alumniVerificationMine, {
+    page: 1,
+    pageSize: 1,
+  });
+  const items = page && Array.isArray(page.items) ? page.items : [];
+  const latest = items.length ? items[0] : null;
   return { status: latest ? latest.status : 'pending' };
 }
 

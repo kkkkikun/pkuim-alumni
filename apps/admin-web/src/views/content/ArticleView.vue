@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
-import { MessagePlugin, DialogPlugin } from 'tdesign-vue-next';
+import { DialogPlugin, MessagePlugin } from '@/plugins/tdesign';
 import type { ArticleCategoryDto, ArticleDto } from '@nmg/contracts';
 import {
   createArticle,

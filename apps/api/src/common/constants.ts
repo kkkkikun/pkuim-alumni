@@ -37,3 +37,23 @@ export const CipherScope = {
   WECHAT: 'contact_wechat',
   EMAIL: 'contact_email',
 } as const;
+
+/**
+ * 进程内 TTL 缓存的键（第三轮）。
+ *
+ * 口径见 `docs/SECURITY.md` 第 2.1 节：
+ *  - `rbac:*` = 管理员的权限事实（TTL ≤ 60 秒，写操作主动失效）；
+ *  - `dict:*` = 字典 / 分类 / 系统设置（写多读少，TTL ≤ 300 秒）。
+ */
+export const CacheKeys = {
+  /** 管理员 RBAC 解析结果：`rbac:admin:<adminId>` */
+  adminRbac: (adminId: number) => `rbac:admin:${adminId}`,
+  /** 地区字典 */
+  regions: 'dict:regions',
+  /** 行业字典 */
+  industries: 'dict:industries',
+  /** 资讯分类 */
+  categories: 'dict:categories',
+  /** 公开系统设置 */
+  publicSettings: 'dict:settings',
+} as const;

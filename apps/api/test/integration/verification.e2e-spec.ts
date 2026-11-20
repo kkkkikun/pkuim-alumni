@@ -165,9 +165,12 @@ describe('校友身份认证 · 提交与审核 (e2e)', () => {
       .get('/api/v1/alumni/verification/mine')
       .set('Authorization', `Bearer ${user.accessToken}`)
       .expect(200);
-    expect(mine.body.data).toHaveLength(1);
-    expect(mine.body.data[0].id).toBe(submitted.body.data.id);
-    expect(mine.body.data[0].status).toBe('pending');
+    // ⚠️ 第三轮：`/alumni/verification/mine` 从「裸数组（全部申请、无上限）」
+    //    改为 `{items, meta}` 分页结构。
+    expect(mine.body.data.items).toHaveLength(1);
+    expect(mine.body.data.items[0].id).toBe(submitted.body.data.id);
+    expect(mine.body.data.items[0].status).toBe('pending');
+    expect(mine.body.data.meta.total).toBe(1);
   });
 
   it('同一用户不能同时提交两条进行中的认证', async () => {

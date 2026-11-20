@@ -31,28 +31,10 @@ export const ROLE_PERMISSIONS: Record<AdminRole, AdminPermission[]> = {
   event_admin: ['event:manage', 'audit:view'],
 };
 
-export const ROLE_LABELS: Record<AdminRole, string> = {
-  super_admin: '超级管理员',
-  alumni_reviewer: '校友审核员',
-  content_admin: '内容管理员',
-  event_admin: '活动管理员',
-  resource_reviewer: '资源审核员',
-};
-
-export const PERMISSION_LABELS: Record<AdminPermission, string> = {
-  'dashboard:view': '查看数据总览',
-  'alumni:view': '查看校友列表',
-  'alumni:manage': '管理校友资料与账号状态',
-  'verification:review': '身份审核',
-  'resource:review': '资源审核',
-  'resource:manage': '资源管理',
-  'event:manage': '活动管理',
-  'content:manage': '内容管理',
-  'notification:broadcast': '通知群发',
-  'admin:manage': '管理员与角色管理',
-  'audit:view': '查看操作日志',
-  'settings:manage': '系统设置与字典维护',
-};
+// ⚠️ 中文名常量在 `./role-labels.ts`（**无依赖**的纯常量模块）里定义 ——
+//    放在这里会与 `api/mock.ts` 形成循环依赖，浏览器求值时撞 TDZ → 页面白屏。
+//    这里**转出**一份，保留原有的导入路径不变（`@/stores/auth`）。
+export { PERMISSION_LABELS, ROLE_LABELS } from './role-labels';
 
 export const useAuthStore = defineStore('auth', () => {
   const admin = computed(() => sessionState.admin);

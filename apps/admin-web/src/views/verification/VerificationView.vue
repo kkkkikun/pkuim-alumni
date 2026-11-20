@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { reactive, ref } from 'vue';
-import { MessagePlugin } from 'tdesign-vue-next';
+import { MessagePlugin } from '@/plugins/tdesign';
 import type { ReviewAction, VerificationApplicationDto, VerificationStatus } from '@nmg/contracts';
 import {
   decideVerification,

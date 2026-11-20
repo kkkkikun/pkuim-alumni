@@ -1,9 +1,6 @@
 import {
   fetchMe,
-  fetchUnreadCount,
-  listMyConnectionRequests,
-  listMyEvents,
-  listMyResources,
+  fetchMeSummary,
 } from '../../../services/index';
 import { getState, isLoggedIn, stageLabel } from '../../../store/index';
 import type { AlumniStage } from '../../../types/index';
@@ -11,8 +8,8 @@ import { ensureLogin } from '../../../utils/guard';
 import { showToast } from '../../../utils/feedback';
 import { navigateTo } from '../../../utils/navigate';
 import { setTabBarSelected } from '../../../utils/tabbar';
-import { settleAll } from '../../../utils/async';
-import type { Settled } from '../../../utils/async';
+import { settle } from '../../../utils/async';
+import { toSummaryView } from '../../../utils/summary';
 import { shouldRefreshOnShow } from '../../../utils/first-show';
 
 Page({
@@ -74,23 +71,18 @@ Page({
       this.setData({ eventCount: 0, requestCount: 0, postCount: 0, unreadCount: 0 });
       return;
     }
-    const results = await settleAll([
-      listMyEvents({ page: 1, pageSize: 1 }),
-      listMyConnectionRequests({ page: 1, pageSize: 1 }),
-      listMyResources({ page: 1, pageSize: 1 }),
-      fetchUnreadCount(),
-    ]);
-    const total = (result: Settled<{ meta: { total: number } }>): number =>
-      result.ok && result.value && result.value.meta ? result.value.meta.total : 0;
-    const unread = (result: Settled<{ unread: number }>): number =>
-      result.ok && result.value && typeof result.value.unread === 'number'
-        ? result.value.unread
-        : 0;
+    // ⚠️ 第三轮：此前这里是 **4 个请求**（我的活动 / 联系申请 / 我的发布 / 未读数），
+    //    每次都为了拿一个数字把整页数据查出来 —— 首屏因此要打 5 个请求。
+    //    现在这四个数字由 `GET /me/summary` **一次**给出，首屏降到 2 个请求。
+    const result = await settle(fetchMeSummary());
+    // ⚠️ 用展示模型层做兜底：服务端少给一个字段时显示 0，而不是 `undefined`
+    //    （`undefined` 参与 WXML 运算会得到 `NaN`）。
+    const summary = toSummaryView(result.ok ? result.value : null);
     this.setData({
-      eventCount: total(results[0]),
-      requestCount: total(results[1]),
-      postCount: total(results[2]),
-      unreadCount: unread(results[3]),
+      eventCount: summary.eventCount,
+      requestCount: summary.requestCount,
+      postCount: summary.postCount,
+      unreadCount: summary.unreadCount,
     });
   },
 

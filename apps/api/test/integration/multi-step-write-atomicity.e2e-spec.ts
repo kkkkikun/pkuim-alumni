@@ -5,6 +5,7 @@ import { createTestApp, ensureAdmin, login, resetDatabase } from '../helpers';
 import { AlumniVerificationService } from '../../src/modules/alumni/alumni.service';
 import { MeService } from '../../src/modules/me/me.service';
 import { ContentService } from '../../src/modules/content/content.service';
+import { ViewCounterService } from '../../src/modules/content/view-counter.service';
 
 /**
  * 多步写的原子性（缺陷 #118 ~ #120）。
@@ -254,11 +255,14 @@ describe('多步写的原子性 (e2e)', () => {
       );
       // 关键断言：并发中的标题必须还在（不能被这次浏览覆盖回旧值）
       expect(rows[0].title).toBe('并发改的标题');
-      // 浏览计数照常累加
-      expect(Number(rows[0].view_count)).toBe(6);
+      // ⚠️ 第三轮：浏览计数改为 **Redis 计数 + 惰性刷回**，
+      //    所以**库里的** view_count 此刻可能还没变（最终一致）。
+      //    这里断言的是「浏览没有把并发改的标题覆盖掉」——
+      //    计数本身由下面那条用例（响应值 + 刷回后落库）覆盖。
+      expect(Number(rows[0].view_count)).toBeLessThanOrEqual(6);
     });
 
-    it('#120 对照：正常浏览只让计数 +1，且不刷新「更新时间」', async () => {
+    it('#120 对照：浏览计数的响应值当场正确，刷回后落库，且不刷新「更新时间」', async () => {
       const articleId = await insertPublishedArticle('正常浏览的标题');
       const before = await dataSource.query(
         'SELECT updated_at FROM articles WHERE id = ?',
@@ -266,6 +270,9 @@ describe('多步写的原子性 (e2e)', () => {
       );
 
       const response = await server().get(`${API}/articles/${articleId}`).expect(200);
+      // ⚠️ 第三轮：`viewCount` 的口径是「最终一致」——
+      //    **响应里的值当场就是真值**（基线 5 + 本次 1 = 6），
+      //    但**库里的行**要等刷回（最多一个周期）才变。
       expect(response.body.data.viewCount).toBe(6);
 
       const rows = await dataSource.query(
@@ -273,9 +280,23 @@ describe('多步写的原子性 (e2e)', () => {
         [articleId],
       );
       expect(rows[0].title).toBe('正常浏览的标题');
-      expect(Number(rows[0].view_count)).toBe(6);
       // 浏览不是「编辑」：更新时间不得被刷新
       expect(String(rows[0].updated_at)).toBe(String(before[0].updated_at));
+
+      // 显式触发一次刷回（模拟 60 秒周期到达），验证计数**最终**落库。
+      const created = await dataSource.query('SELECT created_at FROM articles WHERE id = ?', [
+        articleId,
+      ]);
+      await app
+        .get(ViewCounterService)
+        .flush('articles', [{ id: articleId, createdAt: new Date(created[0].created_at) }]);
+      const after = await dataSource.query(
+        'SELECT view_count, updated_at FROM articles WHERE id = ?',
+        [articleId],
+      );
+      expect(Number(after[0].view_count)).toBe(6);
+      // 刷回同样不得刷新「更新时间」
+      expect(String(after[0].updated_at)).toBe(String(before[0].updated_at));
     });
   });
 });

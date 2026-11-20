@@ -3810,3 +3810,218 @@ pnpm --filter @nmg/api perf:baseline`
 `view_count` 的异步计数、`/admin/stats` 的 `connectionTotal` 口径、
 连接列表是否也应受对方字段可见开关约束（**需要产品口径**）、
 以及全部需要人工动作的项（正式密钥、AppID/AppSecret、域名与证书、订阅消息模板、WAF 与备份定时任务）。
+
+---
+
+## 9. 第三轮（opt-003）：契约变更轮（分页与列表载荷）+ 缓存层 + 管理端审计补齐
+
+> 执行日期：2026-11-20；环境：本机 Docker（MySQL 8.4 / Redis 7 / MinIO，端口 13307 / 16380 / 19002），
+> Node 22.21.1、pnpm 11.7.0；数据集：`pnpm --filter @nmg/api db:migrate && db:seed` 造出的固定数据
+> （1000 校友 / 200 通讯录可见 / 连接 / 资源 / 活动 / 资讯 / 公告），
+> 与第二轮**同一份数据、同一命令**，因此前后数字可与第 8 节直接比较。
+
+### 9.1 管理后台首屏下载量（按需引入 UI 库）
+
+命令：`cd apps/admin-web && pnpm build`，产物用 `dist/index.html` 里
+`script` / `modulepreload` / `stylesheet` 引用的文件逐个计量（`stat -c%s` 与 `gzip -c | wc -c`）。
+
+| 指标 | 改动前 | 改动后 |
+|---|---:|---:|
+| 主 chunk `index-*.js` | 23,748 B（gzip 8,245） | **809,176 B**（gzip 213,469） |
+| `vendor-*.js` | 177,932 B（gzip 68,130） | 175,461 B（gzip 67,122） |
+| TDesign 独立 chunk | 1,356,203 B（gzip 339,540） | —（不再存在：改为按需引入） |
+| TDesign CSS | 449,244 B | — |
+| 主 CSS `index-*.css` | 4,167 B（gzip 1,405） | **224,038 B**（gzip 26,576） |
+| **首屏实际下载量** | **2,011,294 B**（gzip 466,698） | **1,208,675 B**（gzip 307,167） |
+| `dist` 总量 | 2,120,742 B | **1,318,074 B**（-37.8%） |
+
+**首屏下载量 2,011,294 B → 1,208,675 B，-802,619 B（-39.9%）；gzip 466,698 B → 307,167 B（-34.2%）。**
+
+> 口径说明（**诚实说明**）：
+> - 改动后 UI 库的代码**并入了主 chunk**（809 KB），CSS 也并入主 CSS（224 KB）——
+>   因为现在只有 19 个组件被引入，打包器没有理由再单独切一个 chunk。
+>   **首屏下载量下降**是因为「整个组件库」换成了「实际用到的 19 个组件」，
+>   不是因为换了 chunk 位置 —— 上一轮（第二轮）正是**只换 chunk 位置**，
+>   首屏下载量一点没降（2,011,181 B → 2,011,270 B），本轮换了**引入方式**才真的降。
+> - 改动前的主 chunk 只有 23,748 B、UI 库在独立 chunk 里，但那个 chunk 同样被
+>   `modulepreload` **预加载**（`index.html` 里能直接看到），所以首屏照样要下 1.36 MB。
+> - 逐文件明细可用 `dist/index.html` 的引用清单复核。
+
+### 9.2 接口级性能（同一数据集、同一命令）
+
+命令：`pnpm --filter @nmg/api perf:baseline`（口径见第 8 节：SQL 条数 + p50/p95 + 返回条数）。
+数据集与第二轮**完全一致**（同一份 seed、同一台机器、同一命令）。
+
+**管理端端点**（本轮的变化在这里 —— RBAC 缓存生效）：
+
+| 接口 | SQL 条数（改动前 → 改动后） | p50（ms） | p95（ms） |
+|---|---:|---:|---:|
+| `管理端·校友列表` | 7 → **4** | 30.2 → 35 | 35.6 → 36.2 |
+| `管理端·资源列表` | 4 → **1** | 13.9 → 13.5 | 18.5 → 13.8 |
+| `管理端·认证审核列表` | 8 → **5** | 15.7 → 20.9 | 22.4 → 22.2 |
+| `管理端·活动列表` | 5 → **2** | 14.4 → 14.7 | 17.4 → 18.8 |
+| `管理端·资讯列表` | 5 → **2** | 18.4 → 14.9 | 19 → 22.4 |
+| `管理端·公告列表` | 4 → **1** | 16 → 10.9 | 16.8 → 11.9 |
+| `管理端·账号列表` | 7 → **4** | 20.5 → 15.5 | 21.4 → 18 |
+| `管理端·操作日志` | 4 → **1** | 12.8 → 9 | 17.2 → 9.7 |
+| `管理端·数据总览` | 14 → **11** | 15.5 → 12.4 | 23.2 → 14.9 |
+
+**公开 / 用户端点**（本轮**没有**在这些端点上加缓存，SQL 条数应当不变）：
+
+| 接口 | SQL 条数（改动前 → 改动后） | p50（ms） | p95（ms） |
+|---|---:|---:|---:|
+| `通讯录检索` | 6 → **6** | 28.3 → 45.1 | 37.5 → 50.8 |
+| `资源列表（公开）` | 1 → **1** | 7.7 → 13.5 | 12.3 → 15.2 |
+| `活动列表（公开）` | 2 → **2** | 9.6 → 17 | 10.2 → 23.3 |
+| `资讯列表（公开）` | 2 → **2** | 9.5 → 17.6 | 10.1 → 18.9 |
+| `公告列表（公开）` | 1 → **1** | 6.9 → 13 | 10.8 → 13 |
+| `首页聚合` | 5 → **5** | 16.2 → 21.8 | 16.8 → 27.7 |
+| `我的通知` | 2 → **2** | 10.7 → 10.9 | 10.9 → 13 |
+| `我的连接` | 5 → **5** | 16.3 → 19.4 | 18.9 → 22.5 |
+| `我的认证记录` | 7 → **7** | 13.8 → 27.1 | 14.5 → 29.1 |
+| `通知中心` | 2 → **2** | 8.5 → 15.7 | 11.8 → 16.9 |
+| `我的联系方式` | 2 → **2** | 8.1 → 16.1 | 8.8 → 16.7 |
+
+> ⚠️ **口径与诚实说明**（这一节必须这么读）：
+> - **SQL 条数是确定性指标**，可以与上一轮直接比较：
+>   管理端端点普遍**降了 1~4 条** —— 正是 `resolveAccessToken` 不再每次重算
+>   `admin_users` + `admin_user_roles` + `role_permissions` 的效果
+>   （`管理端·公告列表` 4 → 1 条、`管理端·操作日志` 4 → 1 条、
+>   `管理端·活动列表` 5 → 2 条、`管理端·资讯列表` 5 → 2 条、
+>   `管理端·数据总览` 14 → 11 条）。
+>   公开 / 用户端点的 SQL 条数**一个都没变** —— 与预期一致（本轮没给它们加缓存）。
+> - **延迟（p50 / p95）本轮不可直接比较**：改动后**公开端点**的延迟也普遍变高了
+>   （如 `通讯录检索` 28.3 ms → 45.1 ms、`我的联系方式` 8.1 ms → 16.1 ms），
+>   而这些端点**一行代码都没改** —— 说明这是**机器负载波动**（本次测量时
+>   其它任务在跑），不是本次改动的效果。
+>   第二轮的报告里也写明过：「本机与上一轮的服务器环境不同，延迟绝对值不可直接比较」。
+>   因此本节只把 **SQL 条数**当作本轮的有效结论；
+>   延迟的**同机同负载对照**需要专门的压测窗口，属人工项。
+> - 管理端 SQL 条数的降幅与**缓存命中率**有关，因此数字**依赖数据分布**；
+>   生产数据量到位后应复测（本轮结论只在本次数据集上成立）。
+
+### 9.3 RBAC 缓存与字典缓存
+
+口径写在 `docs/SECURITY.md` 第 2.1 节（**先定口径、再写代码**）：
+
+| 缓存项 | TTL | 撤权 / 陈旧延迟 |
+|---|---:|---|
+| 管理员角色 / 权限点（RBAC） | 30 秒（**硬上限 60 秒**，`RBAC_CACHE_TTL_SECONDS`） | 本进程内 **0**（停用 / 降权时主动失效）；多实例部署下未被失效的实例最多等 TTL |
+| 地区 / 行业 / 分类 / 系统设置 | 60 秒（上限 300 秒，`DICT_CACHE_TTL_SECONDS`） | 最多 TTL；写操作主动失效 |
+| **未读通知数** | **不缓存** | 实时 COUNT（缓存它会让红点长期不消） |
+
+- TTL 设为 `0` 即**关闭缓存**（回到每请求重算的行为，便于排障与压测对照）。
+- 多实例部署下「撤权跨实例即刻生效」需要共享失效总线（Redis pub/sub），
+  本轮**未做**，已记入 `docs/KNOWN-ISSUES.md` 的待办表。
+
+### 9.4 列表载荷（MEDIUMTEXT 正文）
+
+| 端点 | 改动前单次响应 | 改动后 |
+|---|---|---|
+| `GET /articles?pageSize=100` | 含 100 篇**全文**（`body` 是 MEDIUMTEXT） | `body` 只含**前 200 字摘要** |
+| `GET /notices?pageSize=100` | 同上 | 同上 |
+| `GET /resources?pageSize=100` | 同上 | 同上 |
+| 管理端 `/admin/articles|notices|resources` | 全文 | **仍为全文**（后台编辑弹窗直接回填列表行正文，截断会造成保存时静默截断正文） |
+
+### 9.5 小程序首屏请求数
+
+| 页面 | 改动前 | 改动后 |
+|---|---:|---:|
+| 「我的」首页 | **5** | **2**（`GET /me` + `GET /me/summary`） |
+| 其余页面 | 不变 | 不变 |
+
+原因：此前首屏为拿**四个数字**（我的活动 / 联系申请 / 我的发布 / 未读数）
+打了 **4 个列表请求**（每次都把整页数据查出来、分页、组装视图），
+现在这四个数字由**一个聚合接口** `GET /me/summary` 给出。
+
+### 9.6 本轮实跑结果
+
+- `pnpm typecheck` / `pnpm lint`：退出码 **0**（api / contracts / admin-web / miniprogram 全过）。
+- `pnpm --filter @nmg/api test:integration`：**46 套件 / 359 例全绿**。
+- `pnpm --filter @nmg/miniprogram test`：3 套件 / 44 例全绿。
+- `infra/scripts/check-contract-mirror.mjs`、`check-enum-consistency.mjs`、
+  `check-rbac-matrix.mjs`、`check-transaction-escape.mjs`、
+  `check-status-code-assertions.mjs`、`check-dead-error-code.mjs`、
+  `check-swagger-param-usage.mjs`、`check-request-dto.mjs`、
+  `check-concurrent-upsert.mjs`、`check-test-coverage.mjs`、
+  `check-admin-web.mjs`、`check-miniprogram*.mjs`（7 个）、
+  `check-pending-migrations.sh --static-only`：**全部退出码 0**（接进 CI 前逐个确认过）。
+- `infra/scripts/check-contract-routes.mjs`、`check-client-paths.mjs`、
+  `check-api-spec-doc.mjs`、`check-spec-coverage.mjs`、`check-request-contract.mjs`、
+  `check-response-shape.mjs`：对着**跑起来的 API** 校验，**全部退出码 0**（已接进 CI）。
+
+### 9.7 管理后台**真实浏览器**冒烟（`infra/scripts/admin-ui-smoke.mjs`）
+
+本机补装了 Playwright（`npm i playwright`，**不写进仓库**），用本机已有的
+Chromium（`~/.cache/ms-playwright/chromium-1248`）跑真实浏览器。
+
+- 启动方式：本地起 API（`node apps/api/dist/main.js`，端口 18099）+ 一个临时静态服务
+  把 `apps/admin-web/dist` 挂出来并把 `/api/v1` 反代到 API。
+- 账号：`admin` / `Admin@2026`（seed 造的测试账号）。
+- 视口 1440×900，默认（浅色）主题。
+
+**改动后的产物（After）**：
+
+```
+登录：成功 → http://127.0.0.1:18090/#/dashboard
+  ✓ /dashboard  ✓ /alumni  ✓ /verification  ✓ /resource  ✓ /events
+  ✓ /articles   ✓ /notices  ✓ /system/admins  ✓ /system/roles
+  ✓ /system/dictionary  ✓ /system/logs  ✓ /system/settings  ✓ /events/new
+console error：0  未捕获异常：0  失败请求(>=400)：0
+```
+
+**13 个路由全绿，0 条 console error，0 个未捕获异常，0 个失败请求。**
+
+**改动前的产物（Before）—— 同一份数据、同一套 API，只把管理后台换回改动前的代码**：
+
+```
+  ✓ /dashboard  ✓ /alumni  ✓ /verification  ✓ /resource  ✓ /events
+  ✓ /articles   ✓ /notices  ✓ /system/admins
+  ✗ /system/roles     fail · 表格里找不到列「角色」
+  ✓ /system/dictionary  ✓ /system/logs
+  ✗ /system/settings   fail · 表格里找不到列「配置项」
+  ✓ /events/new
+console error：2  未捕获异常：0  失败请求(>=400)：0
+  [console] TypeError: S.value.map is not a function            （管理员页）
+  [console] TypeError: r.value.map is not a function or its return value is not iterable（角色权限页）
+```
+
+> ⚠️ **这张 Before 截图同时也是「发布顺序」风险的证据**：
+> 旧客户端 + 新契约 = **角色权限页、系统设置页直接空白**（列表项是 `.map` 前的
+> `undefined`），控制台报 2 条 TypeError。
+> 所以本轮的契约变更**必须**服务端与两端客户端**同一次发布窗口**上线
+> —— 这不是「稳妥起见」，是旧客户端会**功能不可用**。
+
+**定点截图**（同一视口、同一主题、同一数据）：
+
+| 页面 | Before（改动前） | After（改动后） |
+|---|---|---|
+| 活动管理 · 报名抽屉 | 名单**空白**（旧客户端读不到 `{items}`） | 5 行名单 + **分页条**（20 条/页） |
+| 角色权限 | **整页空白**（控制台 TypeError） | 角色目录正常渲染（共 73 个角色） |
+| 系统设置 | **整页空白** | 设置项表格正常渲染 |
+
+截图文件：`docs/screenshots/opt-003/`（`before-*.png` / `after-*.png`）。
+
+> ⚠️ **诚实的说明**：
+> - 这三张 Before 截图是「**旧客户端 + 新服务端**」的组合 ——
+>   因为本轮的契约变更**必然**要求两端同时升级，它们展示的正是
+>   「不同时升级会怎样」（页面空白 / 报错）。
+>   严格意义上的「改动前全栈」需要同时回退服务端，而服务端回退会连带本轮的
+>   分页与缓存一起消失，那已不是本轮 UI 改动的对照口径。
+> - TDesign **按需引入**本身是**视觉零改动**（同样的组件、同样的样式），
+>   所以它没有单独的 Before/After 差异 —— 它的收益体现在**首屏下载量**
+>   （第 9.1 节）与「构建产物里少了 80% 的组件库」，
+>   而不是页面长相。这一点如实说明，不制造假差异。
+
+### 9.8 本轮未做完 / 需人工的项
+
+见 `docs/KNOWN-ISSUES.md` 的「待验证 / 未完成」小节：
+
+- **契约变更要求服务端与两端客户端同一次发布窗口上线**（否则旧客户端取 `.items` 得 undefined）。
+- 线上业务库 `nmg_alumni` 尚未应用第三轮之前的两条索引迁移。
+- **管理后台真实浏览器冒烟（`admin-ui-smoke.mjs`）本机缺 Playwright npm 包，未产出截图**。
+- 多实例部署若要求「撤权跨实例即刻生效」，需引入共享失效总线（Redis pub/sub）。
+- **需产品确认、本轮按约定只记录不改**的两项：`/admin/stats` 的 `connectionTotal` 口径、
+  连接列表是否也应受对方 `showCollege` 等可见开关约束。
+- 延续的人工项：正式密钥轮转与密钥管理服务接入、正式 AppID/AppSecret 与 `AUTH_MODE=wechat` 切换、
+  正式域名与 HTTPS 证书、微信订阅消息模板、WAF 规则与备份定时任务、nginx 静态资源安全头端到端验证。

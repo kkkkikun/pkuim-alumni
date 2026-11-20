@@ -28,6 +28,12 @@ export const appConfig = registerAs('app', () => ({
     write: Number(process.env.RATE_LIMIT_WRITE ?? 30),
     auth: Number(process.env.RATE_LIMIT_AUTH ?? 20),
   },
+  // 进程内 TTL 缓存（第三轮引入；口径见 docs/SECURITY.md 第 2.1 节）。
+  // ⚠️ RBAC 的 TTL **硬上限 60 秒**（降权后最长 60 秒内仍可操作 = 安全语义的上界）；
+  //    写成 0 即关闭缓存（回到每请求重算的行为，便于排障与压测对照）。
+  rbacCacheTtlSeconds: process.env.RBAC_CACHE_TTL_SECONDS ?? '30',
+  // 字典 / 分类 / 系统设置缓存的 TTL（上限 300 秒；0 = 关闭）。
+  dictCacheTtlSeconds: process.env.DICT_CACHE_TTL_SECONDS ?? '60',
 }));
 
 /** 连接池大小的默认值（此前是 app.module.ts 里的硬编码 20）。 */

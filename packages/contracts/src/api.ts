@@ -5,8 +5,9 @@
 import type { PageResult } from './common';
 import type {
   AdminLoginResult,
-  AdminPermission,
+  AdminPermissionDto,
   AdminRole,
+  AdminRoleDto,
   AdminStats,
   AlumniStage,
   ArticleDto,
@@ -46,6 +47,8 @@ export const ApiPaths = {
 
   // Me
   me: '/me',
+  /** 首屏计数汇总（一次请求给出四个计数；未读数实时取、不缓存） */
+  meSummary: '/me/summary',
   meProfile: '/me/profile',
   mePrivacy: '/me/privacy',
   meContacts: '/me/contacts',
@@ -347,6 +350,23 @@ export interface SessionUser {
 
 export type AuthSessionResponse = { user: SessionUser | null; stage: string | null };
 export type MeResponse = { user: UserProfile; alumniProfile: MyAlumniProfile | null; stage: AlumniStage };
+
+/**
+ * `GET /me/summary` 的响应：小程序「我的」页首屏的四个计数。
+ *
+ * ⚠️ 第三轮新增。此前这四个数字要靠 4 个列表接口各取一页才能拿到，
+ *    首屏因此要打 5 个请求；现在 1 个请求给全。
+ */
+export interface MeSummaryResponse {
+  /** 我的活动报名数 */
+  eventCount: number;
+  /** 我收到的联系申请数 */
+  requestCount: number;
+  /** 我发布的资源 / 需求数 */
+  postCount: number;
+  /** 未读通知数（**实时**，服务端不缓存） */
+  unreadCount: number;
+}
 export type DirectoryResponse = PageResult<DirectoryEntry>;
 export type ResourcesResponse = PageResult<ResourcePostDto>;
 export type EventsResponse = PageResult<EventDto>;
@@ -357,17 +377,34 @@ export type ConnectionsResponse = PageResult<ConnectionPairDto>;
 export type ConnectionPairResponse = ConnectionPairDto;
 export type ConnectionRequestsResponse = PageResult<ConnectionRequestDto>;
 export type VerificationsResponse = PageResult<VerificationApplicationDto>;
-/** `GET /alumni/verification/mine` 返回我的全部认证申请（按时间倒序的数组） */
-export type VerificationsMineResponse = VerificationApplicationDto[];
+/**
+ * `GET /alumni/verification/mine` 返回我的认证申请（按时间倒序，**分页**）。
+ *
+ * ⚠️ 第三轮起改为 `{items, meta}`：此前返回**全部**申请（裸数组、无上限），
+ *    一��提交了上百次认证的用户每次都要把整份历史拉下来。
+ *    与其它列表接口口径统一（见 docs/API-SPEC.md 第 3 节）。
+ */
+export type VerificationsMineResponse = PageResult<VerificationApplicationDto>;
 export type RegionsResponse = RegionDto[];
 export type IndustriesResponse = IndustryDto[];
 export type CategoriesResponse = ArticleCategoryDto[];
 export type MediaAssetResponse = MediaAssetDto;
 export type UploadUrlResponse = { url: string; expiresIn: number };
 export type AdminStatsResponse = AdminStats;
-export type AdminRolesResponse = AdminRole[];
-export type AdminPermissionsResponse = AdminPermission[];
-export type SettingsResponse = SystemSettingDto[];
+/**
+ * `GET /admin/roles` 返回分页后的角色目录。
+ *
+ * ⚠️ 第三轮起改为 `{items, meta}`：此前返回**全表**（裸数组、无上限）。
+ */
+export type AdminRolesResponse = PageResult<AdminRoleDto>;
+/**
+ * `GET /admin/permissions` 返回分页后的权限点目录（同上：无上限裸数组 → 分页）。
+ */
+export type AdminPermissionsResponse = PageResult<AdminPermissionDto>;
+/**
+ * `GET /admin/settings` 返回分页后的系统设置项（同上：无上限裸数组 → 分页）。
+ */
+export type SettingsResponse = PageResult<SystemSettingDto>;
 /** 连接详情中对方联系方式字段的类型（整体恒为四重条件成立时才非空） */
 export type PeerContactResponse = PeerContact | null;
 export type AdminLoginResponse = AdminLoginResult;
@@ -379,4 +416,10 @@ export type VerificationStatusResponse = { status: VerificationStatus };
 /** `GET /alumni/:id` 返回的是**公开名片投影**，与通讯录条目同构，不含联系方式 */
 export type AlumniProfileResponse = DirectoryEntry;
 export type PrivacyResponse = PrivacySettings;
-export type EventRegistrationsResponse = EventRegistrationDto[];
+/**
+ * `GET /admin/events/:id/registrations` 返回该活动的报名名单（**分页**）。
+ *
+ * ⚠️ 第三轮起改为 `{items, meta}`：此前返回**全部**报名记录（裸数组、无上限），
+ *    一个 1000 人活动的点名 = 1000 行全量返回。
+ */
+export type EventRegistrationsResponse = PageResult<EventRegistrationDto>;

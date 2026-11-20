@@ -31,6 +31,17 @@ export interface EventView {
   createdAt: Date;
 }
 
+/** 管理端报名名单的一行（契约 `EventRegistrationDto`） */
+export interface EventRegistrationView {
+  id: number;
+  eventId: number;
+  userId: number;
+  userName: string;
+  status: string;
+  note: string | null;
+  createdAt: Date;
+}
+
 @Injectable()
 export class EventsService {
   constructor(
@@ -255,16 +266,30 @@ export class EventsService {
     return paginate(items, total, page, pageSize);
   }
 
-  /** 管理端：活动报名名单。 */
-  async registrationRoster(eventId: number) {
-    const rows = await this.registrations.find({
-      where: { eventId },
-      order: { id: 'ASC' },
-    });
+  /**
+   * 管理端：活动报名名单（**分页**）。
+   *
+   * ⚠️ 第三轮：此前一次性返回该活动的**全部**报名记录（裸数组、无上限）——
+   *    一个 1000 人活动的点名 = 1000 行全量返回，浏览器与服务端都吃不消。
+   *    现在按 `page/pageSize` 分页，与其它列表接口口径统一（`{items, meta}`）。
+   *
+   * 计数与取数分两条 SQL：先 COUNT 拿总数，再取当页 —— 不做「取全量再切片」。
+   */
+  async registrationRoster(
+    eventId: number,
+    page = 1,
+    pageSize = 20,
+  ): Promise<PageResult<EventRegistrationView>> {
+    const qb = this.registrations
+      .createQueryBuilder('registration')
+      .where('registration.eventId = :eventId', { eventId })
+      .orderBy('registration.id', 'ASC');
+    const total = await qb.getCount();
+    const rows = await qb.skip((page - 1) * pageSize).take(pageSize).getMany();
     const userIds = rows.map((row) => row.userId);
     const users = userIds.length ? await this.users.find({ where: userIds.map((id) => ({ id })) }) : [];
     const nameMap = new Map(users.map((user) => [user.id, user.nickname]));
-    return rows.map((row) => ({
+    const items = rows.map((row) => ({
       id: row.id,
       eventId: row.eventId,
       userId: row.userId,
@@ -273,6 +298,7 @@ export class EventsService {
       note: row.note,
       createdAt: row.createdAt,
     }));
+    return paginate(items, total, page, pageSize);
   }
 
   async adminList(params: {

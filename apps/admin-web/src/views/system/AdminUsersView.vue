@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
-import { MessagePlugin } from 'tdesign-vue-next';
-import type { AdminRole, AdminUserDto } from '@nmg/contracts';
+import { MessagePlugin } from '@/plugins/tdesign';
+import type { AdminRole, AdminRoleDto, AdminUserDto } from '@nmg/contracts';
 import {
   createAdminUser,
   fetchAdminUsers,
@@ -53,9 +53,11 @@ const statusOptions = [
   // 结果是**永远筛不出任何行**的摆设筛选项（缺陷 #114）。
 ];
 
-const roleCatalogue = ref<AdminRole[]>([]);
+// ⚠️ 第三轮：`GET /admin/roles` 改为分页结构，条目是**目录整行**
+//    （契约 `AdminRoleDto`），不再是「代码字符串」。
+const roleCatalogue = ref<AdminRoleDto[]>([]);
 const roleOptions = computed(() =>
-  roleCatalogue.value.map((role) => ({ label: ROLE_LABELS[role] || role, value: role })),
+  roleCatalogue.value.map((item) => ({ label: ROLE_LABELS[item.code] || item.code, value: item.code })),
 );
 
 const dialogVisible = ref(false);
@@ -163,7 +165,9 @@ async function save(): Promise<void> {
 
 async function loadRoles(): Promise<void> {
   try {
-    roleCatalogue.value = await fetchRoles();
+    // 角色目录表很小（5 个），一次取完；pageSize=100 是服务端上限。
+    const page = await fetchRoles({ page: 1, pageSize: 100 });
+    roleCatalogue.value = page.items;
   } catch (error) {
     // 错误提示由统一的 HTTP 客户端统一弹出
   }

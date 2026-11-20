@@ -442,9 +442,11 @@ describe('§10.4 端到端验收 · 18 步', () => {
       .get(`${API}/admin/events/${ctx.eventId}/registrations`)
       .set('Authorization', `Bearer ${ctx.adminToken}`)
       .expect(200);
-    expect(roster.body.data).toHaveLength(1);
-    expect(roster.body.data[0].userId).toBe(ctx.aliceUserId);
-    expect(roster.body.data[0].status).toBe('registered');
+    // ⚠️ 第三轮：报名名单改为分页结构 `{items, meta}`（此前是裸数组、无上限）。
+    expect(roster.body.data.items).toHaveLength(1);
+    expect(roster.body.data.items[0].userId).toBe(ctx.aliceUserId);
+    expect(roster.body.data.items[0].status).toBe('registered');
+    expect(roster.body.data.meta.total).toBe(1);
   });
 
   /* ------------------------------ 第 17 步 ------------------------------ */

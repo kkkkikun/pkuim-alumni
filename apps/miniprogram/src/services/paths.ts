@@ -21,6 +21,8 @@ export const ApiPaths = {
 
   // Me
   me: '/me',
+  /** 首屏计数汇总（一次请求给出四个计数；第三轮新增） */
+  meSummary: '/me/summary',
   meProfile: '/me/profile',
   mePrivacy: '/me/privacy',
   meContacts: '/me/contacts',

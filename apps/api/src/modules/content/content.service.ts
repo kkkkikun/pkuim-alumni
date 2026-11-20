@@ -1,8 +1,13 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Brackets, DataSource, EntityManager, QueryFailedError, Repository } from 'typeorm';
+import { Brackets, DataSource, EntityManager, Repository } from 'typeorm';
 import { paginate } from '../../common/dto/pagination.dto';
 import type { PageResult } from '../../common/dto/pagination.dto';
+import { TtlCacheService } from '../../common/services/ttl-cache.service';
+import { toBodyExcerpt } from '../../common/utils/excerpt';
+import { CacheKeys } from '../../common/constants';
+import { isDuplicateKeyError } from '../../common/utils/duplicate-key';
+import { ViewCounterService } from './view-counter.service';
 import { Article, ArticleCategory, Notice } from '../../database/entities/content.entity';
 import { SystemSetting } from '../../database/entities/system.entity';
 import {
@@ -49,15 +54,29 @@ export class ContentService {
     @InjectRepository(Notice) private readonly notices: Repository<Notice>,
     @InjectRepository(SystemSetting) private readonly settings: Repository<SystemSetting>,
     private readonly dataSource: DataSource,
+    private readonly cache: TtlCacheService,
+    private readonly viewCounter: ViewCounterService,
   ) {}
 
-  async listArticles(params: {
-    page: number;
-    pageSize: number;
-    categoryId?: number;
-    status?: string;
-    keyword?: string;
-  }): Promise<PageResult<ArticleView>> {
+  /**
+   * 资讯列表。
+   *
+   * ⚠️ `bodyExcerpt`：**公开**列表只返回正文**摘要**（前 200 字）——
+   *    `body` 列是 MEDIUMTEXT，`pageSize=100` 时单次响应可达数十 MB。
+   *    完整正文走 `GET /articles/:id`。
+   *    管理端列表必须给**全文**（编辑弹窗直接回填列表行里的正文，
+   *    截断会让管理员保存时静默截断正文 —— 那是数据损坏）。
+   */
+  async listArticles(
+    params: {
+      page: number;
+      pageSize: number;
+      categoryId?: number;
+      status?: string;
+      keyword?: string;
+    },
+    options: { bodyExcerpt?: boolean } = {},
+  ): Promise<PageResult<ArticleView>> {
     const qb = this.articles
       .createQueryBuilder('article')
       .leftJoinAndSelect('article.category', 'category')
@@ -80,7 +99,12 @@ export class ContentService {
     }
     qb.skip((params.page - 1) * params.pageSize).take(params.pageSize);
     const [entities, total] = await qb.getManyAndCount();
-    return paginate(entities.map((item) => this.toArticleView(item)), total, params.page, params.pageSize);
+    return paginate(
+      entities.map((item) => this.toArticleView(item, options.bodyExcerpt === true)),
+      total,
+      params.page,
+      params.pageSize,
+    );
   }
 
   async articleDetail(id: number): Promise<ArticleView> {
@@ -89,15 +113,22 @@ export class ContentService {
       relations: { category: true },
     });
     if (!article || article.status !== 'published') throw new NotFoundException('内容不存在');
-    await this.incrementViewCount('articles', id);
-    article.viewCount += 1;
+    await this.incrementViewCount('articles', id, article);
     return this.toArticleView(article);
   }
 
+  /**
+   * 资讯分类（含各分类下已发布文章数）。
+   *
+   * ⚠️ 第三轮：走进程内 TTL 缓存（口径见 docs/SECURITY.md 第 2.1 节）。
+   *    分类增删改、资讯发布 / 下架会**主动失效**这条缓存。
+   */
   async listCategories() {
+    const cached = this.cache.get<unknown[]>(CacheKeys.categories);
+    if (cached) return cached;
     const rows = await this.categories.find({ order: { sortOrder: 'ASC' } });
     const counts = await this.publishedArticleCounts();
-    return rows.map((category) => ({
+    const result = rows.map((category) => ({
       id: category.id,
       name: category.name,
       slug: category.slug,
@@ -107,6 +138,8 @@ export class ContentService {
       // 只统计**已发布**文章 —— 草稿数量属于内部信息，公开列表不应泄露。
       articleCount: counts.get(category.id) ?? 0,
     }));
+    this.cache.set(CacheKeys.categories, result, this.cache.dictionaryTtlSeconds);
+    return result;
   }
 
   /** 各分类下已发布文章的数量（一次 GROUP BY，避免 N+1） */
@@ -122,12 +155,21 @@ export class ContentService {
     return new Map(rows.map((row) => [Number(row.categoryId), Number(row.cnt)]));
   }
 
-  async listNotices(params: {
-    page: number;
-    pageSize: number;
-    status?: string;
-    keyword?: string;
-  }): Promise<PageResult<NoticeView>> {
+  /**
+   * 公告列表。
+   *
+   * ⚠️ `bodyExcerpt`：公开列表只返回正文**摘要**（同 `listArticles` 的理由：
+   *    `body` 是 MEDIUMTEXT，列表响应可达数十 MB），完整正文走详情接口。
+   */
+  async listNotices(
+    params: {
+      page: number;
+      pageSize: number;
+      status?: string;
+      keyword?: string;
+    },
+    options: { bodyExcerpt?: boolean } = {},
+  ): Promise<PageResult<NoticeView>> {
     const qb = this.notices
       .createQueryBuilder('notice')
       .orderBy('notice.publishedAt', 'DESC')
@@ -146,34 +188,62 @@ export class ContentService {
     }
     qb.skip((params.page - 1) * params.pageSize).take(params.pageSize);
     const [entities, total] = await qb.getManyAndCount();
-    return paginate(entities.map((item) => this.toNoticeView(item)), total, params.page, params.pageSize);
+    return paginate(
+      entities.map((item) => this.toNoticeView(item, options.bodyExcerpt === true)),
+      total,
+      params.page,
+      params.pageSize,
+    );
   }
 
   async noticeDetail(id: number): Promise<NoticeView> {
     const notice = await this.notices.findOne({ where: { id } });
     if (!notice || notice.status !== 'published') throw new NotFoundException('公告不存在');
-    await this.incrementViewCount('notices', id);
-    notice.viewCount += 1;
+    await this.incrementViewCount('notices', id, notice);
     return this.toNoticeView(notice);
   }
 
   /**
-   * 浏览计数：**只动计数列**的原子更新（缺陷 #120）。
+   * 浏览计数：**Redis 计数 + 惰性刷回**（第三轮）。
    *
-   * 原实现是「读出整行 → view_count += 1 → 整行 save」，
-   * 于是每次浏览都会把**读到的旧值整行写回** ——
-   * 并发中的管理端修改（标题 / 正文 / 状态）会被这次浏览**静默覆盖**（丢失更新），
-   * 而且 `updated_at` 也会被刷新（内容其实没人改过）。
+   * ## 为什么改
    *
-   * ⚠️ 显式写 `updated_at = updated_at`：
-   *   该列在迁移里带 `ON UPDATE CURRENT_TIMESTAMP`，
-   *   只要**别的**列变了它就会自动刷新；显式赋值可以让 MySQL 跳过自动更新，
-   *   从而做到「浏览不产生任何副作用」。
+   * 此前每次浏览都直接 `UPDATE articles SET view_count = view_count + 1` ——
+   * 热门文章的所有浏览者**串行争抢同一行锁**，这一行就是热点。
+   *
+   * ## 现在的做法
+   *
+   * 浏览只在 Redis 里 `HINCRBY` 计数（无行锁）；
+   * 累计到 20 次或到 60 秒周期时，才把增量**一次性**写回数据库
+   * （仍然只动 `view_count` 一列）。
+   *
+   * ## 一致性（契约里已写明：即时一致 → 最终一致）
+   *
+   * - 详情接口返回的 `viewCount` = 「库里的基线值 + 尚未落库的增量」，
+   *   所以**用户看到的数字当场就是对的**；
+   * - 但**数据库行里的 `view_count` 可能滞后**（最多一个刷回周期）。
+   *
+   * ## Redis 不可用时
+   *
+   * **降级为直接写库**（与改动前完全一致）：计数不会丢，
+   * 只是又回到了「每次浏览写一行」的旧模式。
+   *
+   * ⚠️ 显式写 `updated_at = updated_at`（降级路径）：
+   *   该列带 `ON UPDATE CURRENT_TIMESTAMP`，只要**别的**列变了它就会自动刷新；
+   *   显式赋值让 MySQL 跳过自动更新 —— 浏览不得产生任何副作用（缺陷 #120）。
    */
-  private async incrementViewCount(table: 'articles' | 'notices', id: number): Promise<void> {
-    await this.dataSource.query(
-      `UPDATE ${table} SET view_count = view_count + 1, updated_at = updated_at WHERE id = ?`,
-      [id],
+  private async incrementViewCount(
+    table: 'articles' | 'notices',
+    id: number,
+    target: { viewCount: number; createdAt: Date },
+  ): Promise<void> {
+    // ⚠️ `record` 返回的是**用户应当看到的总数**（当场就是真值），
+    //    Redis 不可用时它降级为直接写库并返回「基线 + 1」。
+    target.viewCount = await this.viewCounter.record(
+      table,
+      id,
+      target.viewCount,
+      target.createdAt,
     );
   }
 
@@ -326,14 +396,23 @@ export class ContentService {
 
   /* ------------------------------ 分类与系统设置 ------------------------------ */
 
-  async createCategory(payload: CreateCategoryBodyDto) {
-    const category = await this.categories.save(
-      this.categories.create({
+  /**
+   * 新建资讯分类。
+   *
+   * ⚠️ `manager`：传入事务 manager 时，本次写入与**审计日志**同事务
+   *    （缺陷 #134 同款做法：审计写失败时业务写必须一起回滚）。
+   */
+  async createCategory(payload: CreateCategoryBodyDto, manager?: EntityManager) {
+    const categories = manager ? manager.getRepository(ArticleCategory) : this.categories;
+    const category = await categories.save(
+      categories.create({
         name: payload.name,
         slug: payload.slug,
         sortOrder: payload.sortOrder ?? 0,
       }),
     );
+    // 分类变了 → 分类字典缓存失效（写操作主动失效，不等 TTL）
+    this.cache.delete(CacheKeys.categories);
     return {
       id: category.id,
       name: category.name,
@@ -343,13 +422,17 @@ export class ContentService {
     };
   }
 
-  async updateCategory(id: number, payload: UpdateCategoryBodyDto) {
-    const category = await this.categories.findOne({ where: { id } });
+  /** 修改资讯分类（同上：支持事务 manager）。 */
+  async updateCategory(id: number, payload: UpdateCategoryBodyDto, manager?: EntityManager) {
+    const categories = manager ? manager.getRepository(ArticleCategory) : this.categories;
+    const category = await categories.findOne({ where: { id } });
     if (!category) throw new NotFoundException('分类不存在');
     if (payload.name !== undefined) category.name = payload.name;
     if (payload.slug !== undefined) category.slug = payload.slug;
     if (payload.sortOrder !== undefined) category.sortOrder = payload.sortOrder;
-    await this.categories.save(category);
+    await categories.save(category);
+    // 分类变了 → 分类字典缓存失效
+    this.cache.delete(CacheKeys.categories);
     const counts = await this.publishedArticleCounts();
     return {
       id: category.id,
@@ -360,59 +443,87 @@ export class ContentService {
     };
   }
 
-  async deleteCategory(id: number): Promise<{ deleted: boolean }> {
-    const result = await this.categories.delete({ id });
+  /** 删除资讯分类（同上：支持事务 manager）。 */
+  async deleteCategory(id: number, manager?: EntityManager): Promise<{ deleted: boolean }> {
+    const categories = manager ? manager.getRepository(ArticleCategory) : this.categories;
+    const result = await categories.delete({ id });
     if (!result.affected) throw new NotFoundException('分类不存在');
+    // 分类变了 → 分类字典缓存失效
+    this.cache.delete(CacheKeys.categories);
     return { deleted: true };
   }
 
-  async upsertSetting(payload: UpsertSettingBodyDto) {
-    const existing = await this.settings.findOne({ where: { key: payload.key } });
+  /**
+   * 写入系统设置（upsert）。
+   *
+   * ⚠️ `manager`：传入事务 manager 时，本次写入与**审计日志**同事务。
+   *
+   * ⚠️ **并发兜底必须在「事务之外」重试**（缺陷 #137）：
+   *    两个并发请求都读不到既有行 → 都去 INSERT → 后到的那一个撞主键唯一约束。
+   *    这时正确的处置是**回滚整个事务、重来一遍**：
+   *    重来时是**新的快照**，能看到另一个事务刚提交的那一行，于是走「更新」分支。
+   *    ⚠️ **不能**在同一个事务里重读并补救 ——
+   *    MySQL 的 REPEATABLE READ 下，事务里的一致性读只看到**事务开始时的快照**，
+   *    另一个事务刚提交的那一行**看不见**；
+   *    而用 `FOR UPDATE`（当前读）去补救又会与本事务自己持有的行锁**自死锁**。
+   *    所以：**在事务内只做「读 → 写」，把唯一键冲突抛给调用方，由调用方重试事务。**
+   */
+  async upsertSetting(payload: UpsertSettingBodyDto, manager?: EntityManager) {
+    const settings = manager ? manager.getRepository(SystemSetting) : this.settings;
+    const existing = await settings.findOne({ where: { key: payload.key } });
     if (existing) {
       existing.value = payload.value;
       if (payload.description !== undefined) existing.description = payload.description;
-      await this.settings.save(existing);
+      await settings.save(existing);
+      this.invalidateSettingCaches();
       return existing;
     }
     try {
-      const created = await this.settings.save(
-        this.settings.create({
+      const created = await settings.save(
+        settings.create({
           key: payload.key,
           value: payload.value,
           description: payload.description ?? null,
         }),
       );
+      this.invalidateSettingCaches();
       return created;
     } catch (error) {
       // ⚠️ 并发下两个请求都读不到既有行 → 都会去 INSERT，
       //    后到的那一个撞主键 `key` 的唯一约束（缺陷 #137）。
-      //    「先查后插」在单线程下没问题，**并发**下必须有兜底：
-      //    捕获唯一键冲突后改成**更新**既有行，而不是甩 500 给用户。
-      if (!this.isDuplicateKey(error)) throw error;
-      const concurrent = await this.settings.findOne({ where: { key: payload.key } });
+      //    「先查后插」在单线程下没问题，**并发**下必须有兜底。
+      //    事务路径：把冲突抛给调用方 → 调用方**重试整个事务**（新快照 → 走更新分支）。
+      //    非事务路径（autocommit）：此时没有快照问题，直接重读并更新即可。
+      if (!isDuplicateKeyError(error)) throw error;
+      if (manager) throw error;
+      const concurrent = await settings.findOne({ where: { key: payload.key } });
       if (!concurrent) throw error;
       concurrent.value = payload.value;
       if (payload.description !== undefined) concurrent.description = payload.description;
-      await this.settings.save(concurrent);
+      await settings.save(concurrent);
+      this.invalidateSettingCaches();
       return concurrent;
     }
   }
 
-  /** MySQL 唯一键冲突（ER_DUP_ENTRY / 1062）。 */
-  private isDuplicateKey(error: unknown): boolean {
-    if (!(error instanceof QueryFailedError)) return false;
-    const driverError = error.driverError as { code?: string; errno?: number } | undefined;
-    return driverError?.code === 'ER_DUP_ENTRY' || driverError?.errno === 1062;
+  /** 设置项变了 → 公开设置缓存失效（写操作主动失效，不等 TTL）。 */
+  private invalidateSettingCaches(): void {
+    this.cache.delete(CacheKeys.publicSettings);
   }
 
-  private toArticleView(article: Article): ArticleView {
+  /**
+   * 资讯视图。
+   *
+   * ⚠️ `excerpt=true` 时 `body` 只返回**摘要**（公开列表用，见 `listArticles`）。
+   */
+  private toArticleView(article: Article, excerpt = false): ArticleView {
     return {
       id: article.id,
       categoryId: article.categoryId,
       categoryName: article.category?.name ?? null,
       title: article.title,
       summary: article.summary,
-      body: article.body,
+      body: excerpt ? toBodyExcerpt(article.body) : article.body,
       coverMediaId: article.coverMediaId,
       status: article.status,
       publishedAt: article.publishedAt,
@@ -422,11 +533,16 @@ export class ContentService {
     };
   }
 
-  private toNoticeView(notice: Notice): NoticeView {
+  /**
+   * 公告视图。
+   *
+   * ⚠️ `excerpt=true` 时 `body` 只返回**摘要**（公开列表用，见 `listNotices`）。
+   */
+  private toNoticeView(notice: Notice, excerpt = false): NoticeView {
     return {
       id: notice.id,
       title: notice.title,
-      body: notice.body,
+      body: excerpt ? toBodyExcerpt(notice.body) : notice.body,
       status: notice.status,
       publishedAt: notice.publishedAt,
       viewCount: notice.viewCount,

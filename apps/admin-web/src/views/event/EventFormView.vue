@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { MessagePlugin } from 'tdesign-vue-next';
+import { MessagePlugin } from '@/plugins/tdesign';
 import type { CreateEventBody, EventDto } from '@nmg/contracts';
 import { createEvent, fetchEventDetail, updateEvent } from '@/api/admin';
 import { errorMessage } from '@/api/http';

@@ -5,7 +5,7 @@ import axios, {
   type AxiosResponse,
   type InternalAxiosRequestConfig,
 } from 'axios';
-import { MessagePlugin } from 'tdesign-vue-next';
+import { MessagePlugin } from '@/plugins/tdesign';
 import { ApiPaths, ErrorCode, type ApiErrorPayload, type ApiResponse, type TokenPair } from '@nmg/contracts';
 import { applyTokens, clearSession, emitUnauthorized, sessionState } from './session';
 import { mockEnabled, mockRequest } from './mock';

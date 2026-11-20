@@ -9,7 +9,8 @@
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "vue-tsc --noEmit",
-    "lint": "eslint \"src/**/*.ts\""
+    "lint": "eslint \"src/**/*.ts\"",
+    "test": "node ../api/node_modules/jest/bin/jest.js --config jest.config.cjs"
   },
   "dependencies": {
     "@nmg/contracts": "workspace:*",

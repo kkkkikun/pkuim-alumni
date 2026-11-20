@@ -12,13 +12,18 @@ export class ContentController {
 
   @Public()
   @Get('articles')
-  @ApiOperation({ summary: '资讯列表' })
+  @ApiOperation({ summary: '资讯列表（正文为摘要）' })
   listArticles(@Query() query: ArticleListQueryDto) {
-    return this.contentService.listArticles({
-      page: query.page,
-      pageSize: query.pageSize,
-      categoryId: query.categoryId,
-    });
+    // ⚠️ 公开列表只返回正文**摘要**（`body` 是 MEDIUMTEXT，
+    //    pageSize=100 时单次响应可达数十 MB）。完整正文走 `GET /articles/:id`。
+    return this.contentService.listArticles(
+      {
+        page: query.page,
+        pageSize: query.pageSize,
+        categoryId: query.categoryId,
+      },
+      { bodyExcerpt: true },
+    );
   }
 
   @Public()
@@ -37,9 +42,13 @@ export class ContentController {
 
   @Public()
   @Get('notices')
-  @ApiOperation({ summary: '通知公告列表' })
+  @ApiOperation({ summary: '通知公告列表（正文为摘要）' })
   listNotices(@Query() query: PaginationQueryDto) {
-    return this.contentService.listNotices({ page: query.page, pageSize: query.pageSize });
+    // ⚠️ 同 `GET /articles`：公开列表只返回正文摘要，完整正文走详情接口。
+    return this.contentService.listNotices(
+      { page: query.page, pageSize: query.pageSize },
+      { bodyExcerpt: true },
+    );
   }
 
   @Public()
