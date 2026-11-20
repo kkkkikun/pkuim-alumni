@@ -3021,17 +3021,15 @@
   即使账号的 Actions 额度恢复，这一步也会让 CI 变红。
   （本 PR 的 CI 另有**更早**的阻塞：GitHub 侧报
   “The job was not started because recent account payments have failed or your spending limit needs to be increased”。）
-- **本轮的处置**：把 ESLint 真正装上并配好 —— 根目录新增 `eslint.config.js`
-  （ESLint 官方 recommended + typescript-eslint recommended + prettier），
-  根 devDependencies 增加 `eslint` / `typescript-eslint` / `eslint-config-prettier` / `@eslint/js`，
-  并**清掉 `apps/api/src` 里 26 处真实的 `no-unused-vars` 违规**（22 处是没人用的 import，
-  4 处是没人用的局部变量/参数）。现在 `pnpm lint` 退出码 0，CI 的 Lint 步骤可以通过。
-- **规则集没有放水**：用的就是官方 recommended 档；`no-console` 也按仓库里已有的
-  `eslint-disable no-console` 注释**打开**（此前那些注释是无效的）。
-  唯一的一处放宽是「未使用的参数以 `_` 前缀表示故意不用」（通用约定）。
-- **仍未覆盖**：小程序（`apps/miniprogram`）与管理后台（`apps/admin-web`）还没有 lint 脚本
-  （小程序在微信运行时里跑，管理后台是 Vue SFC，两者各有自己的把关方式）。
-  worker 与契约包也还没有 lint 脚本 —— 属于后续工具链治理，本轮只把 CI 门禁真正需要的那一步修好。
+- **处置（主干已完成，本 PR 沿用）**：主干在并行的一轮里把 ESLint 真正装上了
+  （`eslint.config.mjs` + 根依赖 `eslint` / `@typescript-eslint/*`，
+  并清掉 27 处真实的 lint 违规），本 PR 与主干同步后**直接沿用主干的配置与清理**，
+  不再自带一份重复的工具链改动（避免两边配置漂移）。
+  现在 `pnpm lint` 退出码 0，CI 的 Lint 步骤可以通过。
+- **仍未覆盖**：管理后台的 `.vue` 单文件组件还没纳入 lint
+  （需要 `vue-eslint-parser` + `eslint-plugin-vue`），小程序侧也没有 lint 脚本
+  （它在微信运行时里跑，`Page` / `wx` 等是运行时注入的全局对象）。
+  两者的把关方式目前分别是 `vue-tsc --noEmit` + `check-admin-web.mjs`、小程序静态校验脚本。
 
 ## 待验证 / 未完成（不得声称已通过）> 以下均为**缺少外部资质或环境**导致的未验证项，与实现质量无关。
 > 已实测完成的项（冒烟 10/10、集成测试 39/39、k6 分级压测、备份恢复演练、管理后台构建）见 `docs/TEST-REPORT.md`。
