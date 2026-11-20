@@ -1,0 +1,95 @@
+# 自动合并 agent 的 PR：CI 绿了就进主干。
+#
+# 为什么不用 GitHub 原生 auto-merge / 分支保护：
+# 这是一个私有仓库挂在 free 账号下，GitHub 要求 GitHub Pro 才提供
+# branch protection 的 required status checks 与仓库级 auto-merge，
+# API 直接返回 403（"Upgrade to GitHub Pro or make this repository public"）。
+#
+# 所以门禁自己做，但口径不变：
+#   只有「CI 绿 + PR 来自 agent 的分支 + 作者是 agent 账号」的 PR 才会被合并，
+#   合并由本工作流以仓库身份执行，agent 本身不合并自己的 PR。
+#
+# 触发时机：CI 工作流跑完之后（workflow_run），而不是 PR 事件 ——
+# 后者会在每次 push 后触发一次，无法区分「CI 跑完了」与「CI 中途失败」。
+name: Agent merge
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: agent-merge-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    # 只处理 CI 通过的运行；分支以 agent/ 开头的是 agent 的工单分支。
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      startsWith(github.event.workflow_run.head_branch, 'agent/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Merge the agent pull request whose CI just went green
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -uo pipefail
+          AGENT_LOGIN=LL-ki
+
+          # 候选 PR：优先用事件自带的 pull_requests 列表；
+          # 万一该字段为空（push 触发的运行就是这样），回退到按分支名反查。
+          NUMBERS=$(jq -r '.workflow_run.pull_requests[]?.number' "$GITHUB_EVENT_PATH" | sort -u)
+          if [ -z "$NUMBERS" ]; then
+            NUMBERS=$(gh pr list --repo "$REPO" --head "$HEAD_BRANCH" --state open \
+              --json number -q '.[].number')
+          fi
+
+          for number in $NUMBERS; do
+            echo "候选 PR #$number"
+
+            HEAD_REF=$(gh pr view "$number" --repo "$REPO" --json headRefName -q .headRefName)
+            AUTHOR=$(gh pr view "$number" --repo "$REPO" --json author -q .author.login)
+            DRAFT=$(gh pr view "$number" --repo "$REPO" --json isDraft -q .isDraft)
+            CURRENT_SHA=$(gh pr view "$number" --repo "$REPO" --json headRefOid -q .headRefOid)
+            MERGEABLE=$(gh pr view "$number" --repo "$REPO" --json mergeable -q .mergeable)
+            MERGE_STATE=$(gh pr view "$number" --repo "$REPO" --json mergeStateStatus -q .mergeStateStatus)
+
+            case "$HEAD_REF" in
+              agent/*) ;;
+              *) echo "跳过：分支 $HEAD_REF 不是 agent 工单分支"; continue ;;
+            esac
+            if [ "$AUTHOR" != "$AGENT_LOGIN" ]; then
+              echo "跳过：作者是 $AUTHOR，不是 $AGENT_LOGIN"; continue
+            fi
+            if [ "$DRAFT" = "true" ]; then
+              echo "跳过：PR 还是草稿"; continue
+            fi
+            # CI 通过的必须是当前 head 那个 commit —— 中途又推了新 commit 时，
+            # 这次绿灯对应的是旧 commit，不能拿来给新 commit 开绿灯。
+            if [ "$CURRENT_SHA" != "$HEAD_SHA" ]; then
+              echo "跳过：PR head 已变（$CURRENT_SHA != $HEAD_SHA），等下一次 CI"
+              continue
+            fi
+            # mergeable 必须是 MERGEABLE；mergeStateStatus 只用来排除
+            # 冲突(DIRTY)与状态未就绪(UNKNOWN)，其余(CLEAN/BLOCKED/UNSTABLE/
+            # HAS_HOOKS/BEHIND)都放行 —— 仓库没有分支保护，这个字段不会
+            # 变成 "MERGEABLE"，拿它当放行条件会永远不通过。
+            if [ "$MERGEABLE" != "MERGEABLE" ]; then
+              echo "跳过：mergeable=$MERGEABLE"; continue
+            fi
+            case "$MERGE_STATE" in
+              DIRTY|UNKNOWN) echo "跳过：mergeStateStatus=$MERGE_STATE"; continue ;;
+            esac
+
+            echo "合并 #$number（$HEAD_REF，$CURRENT_SHA）"
+            gh pr merge "$number" --repo "$REPO" --merge --match-head-commit "$CURRENT_SHA"
+          done

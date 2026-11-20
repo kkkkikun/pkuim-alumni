@@ -1,0 +1,118 @@
+# CI：电脑端与管理台之外，这套门禁给 pkuim-alumni 的 api / worker / admin-web / 小程序
+# 一条可重复的判定线。
+#
+# 为什么现在才有：仓库原先没有任何 CI，super agent 的 PR 只能靠人看。
+# 门禁补上之后，agent 的 auto-merge 才有意义 —— 「CI 绿了才允许进主干」
+# 由 GitHub 的分支保护强制执行，不靠 agent 自觉。
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    # 集成测试会 TRUNCATE 业务表，所以必须连测试库：
+    # apps/api/test/setup.ts 的护栏会检查生效库名里含 "test"，不含就直接抛错。
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: ci_root_password
+          MYSQL_DATABASE: nmg_alumni_test
+          MYSQL_USER: nmg
+          MYSQL_PASSWORD: ci_app_password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pci_root_password --silent"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=12
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=12
+
+    env:
+      NODE_ENV: test
+      DATABASE_URL: mysql://nmg:ci_app_password@127.0.0.1:3306/nmg_alumni_test
+      DB_HOST: 127.0.0.1
+      DB_PORT: "3306"
+      DB_NAME: nmg_alumni_test
+      DB_USER: nmg
+      DB_PASSWORD: ci_app_password
+      REDIS_URL: redis://127.0.0.1:6379
+      REDIS_HOST: 127.0.0.1
+      REDIS_PORT: "6379"
+      # 集成测试里限流关掉（test/setup.ts 里也会兜底关一次），
+      # 否则单个窗口内的大量登录会触发 429 把断言打乱。
+      RATE_LIMIT_ENABLED: "false"
+      AUTH_MODE: both
+      JWT_SECRET: ci-only-never-production-0123456789abcdef
+      JWT_ACCESS_TTL: 15m
+      JWT_REFRESH_TTL: 1d
+      DB_LOGGING: "false"
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22.12'
+
+      # pnpm 用 npm 直接装，不用 corepack：
+      #   1) corepack 自带的是 npm registry 签名公钥ring，会随 npm 轮换而过期，
+      #      过期后 `corepack prepare` 直接报 "Cannot find matching keyid" 装不上；
+      #   2) corepack 的 shim 跟着 node 版本走，跟 setup-node 的顺序耦合。
+      # 先 corepack disable 是为了避免 shim 盖住 npm 装出来的真 pnpm。
+      - name: Set up pnpm
+        run: |
+          corepack disable
+          npm install --global pnpm@11.7.0
+          pnpm --version
+
+      - name: Cache the pnpm store
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4
+        with:
+          path: ~/.pnpm-store
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-store-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Type check
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Build
+        run: pnpm build
+
+      # 集成测试不会自动建表（生产约定 synchronize: false / migrationsRun: false），
+      # 所以先跑一遍迁移，把表结构铺到测试库上。
+      - name: Apply migrations to the test database
+        run: pnpm --filter @nmg/api db:migrate
+
+      - name: Integration tests
+        run: pnpm --filter @nmg/api test:integration
