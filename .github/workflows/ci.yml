@@ -246,7 +246,9 @@ jobs:
       - name: Contract and response-shape checks against the running API
         run: |
           set -euo pipefail
-          SWAGGER=http://127.0.0.1:18099/api/v1/docs-json
+          # ⚠️ Swagger 文档挂在**根路径**（`SwaggerModule.setup('docs', app, document)`），
+          #    **不在**全局前缀 `/api/v1` 之下 —— 所以是 `/docs-json` 而不是 `/api/v1/docs-json`。
+          SWAGGER=http://127.0.0.1:18099/docs-json
           BASE=http://127.0.0.1:18099/api/v1
           node infra/scripts/check-contract-routes.mjs --swagger "$SWAGGER"
           node infra/scripts/check-client-paths.mjs --swagger "$SWAGGER"
