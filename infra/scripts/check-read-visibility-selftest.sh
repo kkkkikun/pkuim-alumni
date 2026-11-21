@@ -9,7 +9,9 @@
 #       「新增公开读端点却没人登记口径」「文档里的口径被删掉」
 #       「待拍板的条目被从 KNOWN-ISSUES 里抹掉」
 #       「已登录端点的 403 被改成 404」「新增已登录端点却没人登记可见性分界」
-#       「已登录端点的那一行文档被删掉」时，它必须报错并返回非 0。
+#       「已登录端点的那一行文档被删掉」「管理端的 404 处置被删掉」
+#       「新增管理端端点却没人登记可见性分界」
+#       「管理端的那一行文档被删掉」时，它必须报错并返回非 0。
 #
 # 为什么这个校验器值得单测：
 #   它守的是「公开读端点的可见性口径」这一层 ——
@@ -37,6 +39,12 @@
 #                                   → R6：新增已登录端点却没登记可见性分界
 #   read-visibility-auth-doc-row-removed
 #                                   → R8：已登录端点的那一行文档被删掉
+#   read-visibility-admin-404-removed
+#                                   → R10：管理端「资源不存在 → 404」的处置被删掉
+#   read-visibility-admin-endpoint-unregistered
+#                                   → R9：新增管理端端点却没登记可见性分界
+#   read-visibility-admin-doc-row-removed
+#                                   → R11：管理端的那一行文档被删掉
 #
 # 流程：
 #   0. 正向基线：干净副本上必须 0 不一致、退出码 0；
@@ -180,6 +188,12 @@ run_case "read-visibility-auth-403-changed-to-404" "AUTH_VISIBILITY_STATUS_MISSI
 run_case "read-visibility-auth-endpoint-unregistered" "AUTH_VISIBILITY_NOT_REGISTERED"
 # 已登录端点（第十二轮）：API-SPEC 里的那一行被删掉
 run_case "read-visibility-auth-doc-row-removed" "AUTH_VISIBILITY_UNDOCUMENTED"
+# 管理端（第十三轮）：「资源不存在 → 404」的处置被删掉（删不存在的活动却说「已删除」）
+run_case "read-visibility-admin-404-removed" "ADMIN_VISIBILITY_STATUS_MISSING"
+# 管理端（第十三轮）：新增端点却没登记「资源不存在 → 404」的分界
+run_case "read-visibility-admin-endpoint-unregistered" "ADMIN_VISIBILITY_NOT_REGISTERED"
+# 管理端（第十三轮）：API-SPEC 第 13.4 节里的那一行被删掉
+run_case "read-visibility-admin-doc-row-removed" "ADMIN_VISIBILITY_UNDOCUMENTED"
 
 # --- 2. 清理 ---------------------------------------------------------------
 log "[2/2] 清理临时副本……"
@@ -190,5 +204,5 @@ if [ "$FAILED" -ne 0 ]; then
   die "公开读端点可见性对账校验器反向验证失败 ❌"
 fi
 
-log "=== 反向验证通过 ✅（9 类「可见性口径失配」缺陷全部被抓出，校验器非恒过）==="
+log "=== 反向验证通过 ✅（12 类「可见性口径失配」缺陷全部被抓出，校验器非恒过）==="
 log "公开读端点可见性对账校验器反向验证通过 ✅"

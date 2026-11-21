@@ -69,6 +69,14 @@
  *    类级 `@Index` 的**类归属**、**属性名 → 列名**映射、关系列的列名来自
  *    `@JoinColumn` —— 三处只要错一处，就会报出一堆并不存在的缺口。
  *
+ * ⚠️ **第十三轮的误报率抽查**（故意在实体里加一个「合法但迁移未建」的索引）：
+ *    校验器**只**报出这一条、其余逐条仍对齐 → 没有假红。
+ *    抽查中查出并修掉 1 处**解析缺陷**：索引建在**关系属性**上时
+ *    （`@Index('idx_x', ['region'])`，真实列名取自 `@JoinColumn` 的 `region_code`），
+ *    列名曾退回「属性名小写」→ 报成 `region`，照着它补迁移会建出一个**不存在的列**。
+ *    现在关系属性的列名一律取自 `@JoinColumn`（与 R8 外键对账同一份解析）。
+ *    **口径未放宽**：R7 / R8 / R9 的判定条件一字未改，只把「解析得更准」。
+ *
  * ⚠️ 口径与判定的局限（写在这里，免得被当成万能护栏）：
  *   - 判定是**静态**的：只看源码里有没有「捕获重复键 + 转成可预期错误码」的形态，
  *     不执行代码，也不连数据库；真值由集成测试
@@ -1402,7 +1410,16 @@ function discoverEntitySchema() {
         for (const column of columns.values()) {
           if (column.prop === prop) return column.column;
         }
-        // ⚠️ 属性名找不到对应列声明 → 退回属性名本身（多半是关系列）
+        // ⚠️ **关系属性**（`@ManyToOne` / `@OneToOne` + `@JoinColumn`）：
+        //    它的列名取自 `@JoinColumn`（`region` → `region_code`），
+        //    既不是属性名、也不是属性名小写 ——
+        //    第十三轮的误报率抽查发现：这里以前直接退回属性名，
+        //    于是「索引建在关系属性上」会被报成「索引建在 `region` 上」，
+        //    **列名是错的**（照着它补迁移会建出一个不存在的列）。
+        for (const relation of relations) {
+          if (relation.prop === prop) return relation.column;
+        }
+        // 真的找不到对应列声明 → 退回属性名本身（保守：宁可报得含糊，也不猜错列名）
         return prop.toLowerCase();
       });
       indexes.push({
@@ -2078,7 +2095,8 @@ function main() {
           kind: 'MIGRATION_INDEX_MISSING',
           where: `${table.table}.${index.name}`,
           detail:
-            `实体声明了索引 \`${index.name}\`（${index.columns.join(',')}${index.unique ? '，唯一' : ''}），` +
+            `实体类 \`${table.className}\`（${table.file}）声明了索引 ` +
+            `\`${index.name}\`（列：${index.columns.join(',')}${index.unique ? '，唯一' : ''}），` +
             '但**迁移里没有创建它** —— 生产库 `synchronize: false`，跑的是迁移：' +
             '生产库上**这个索引不存在**，按该列的查询会退化成全表扫。' +
             '修法二选一（**必须逐条判断**）：补一条 TypeORM 迁移，或去掉实体里的声明',
@@ -2101,8 +2119,9 @@ function main() {
           kind: 'MIGRATION_INDEX_COLUMN_MISMATCH',
           where: `${table.table}.${index.name}`,
           detail:
-            `实体声明的索引 \`${index.name}\` 是（${index.columns.join(',')}），` +
-            `迁移里建的却是（${found.columns.join(',')}）—— 列集合不一致：` +
+            `实体类 \`${table.className}\`（${table.file}）声明的索引 ` +
+            `\`${index.name}\` 是（${index.columns.join(',')}），` +
+            `迁移 \`${found.source}\` 里建的却是（${found.columns.join(',')}）—— 列集合不一致：` +
             '按哪个列组合建的索引，决定了哪些查询能用上它',
         });
         continue;
