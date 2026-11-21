@@ -4,7 +4,13 @@
 #
 #   bash infra/scripts/check-unique-index-db-selftest.sh
 #
-# 目的：证明 `check-unique-index-db.mjs` **不是恒过**——
+# ⚠️ 第十五轮起，校验器**合并成一支** `check-db-reality.mjs`
+#    （「库内实况」= 唯一键那一半 + 实体 ↔ 库那一半）。
+#    本脚本守的是其中的**「唯一键」那一半**；
+#    实体 ↔ 库那一半由 `check-migration-schema-db-selftest.sh` 守着 ——
+#    两份自测**各自**覆盖自己那半的缺陷类别，都保留。
+#
+# 目的：证明 `check-db-reality.mjs` **不是恒过**——
 #       当「登记表要求的唯一约束在库里其实不存在」时，它必须报错并返回非 0。
 #
 # 为什么这个校验器值得单测：
@@ -23,6 +29,7 @@
 #
 # 安全约束：
 #   - 全程**只读**：只查 information_schema，不建索引、不跑迁移、不写数据；
+#     校验器自身还会把会话设成 `READ ONLY`（三重护栏，见脚本头注释）。
 #   - 缺陷注入只发生在**临时副本**里，真实工作副本永远只读。
 #
 # 前置条件：一个**已应用迁移**的测试库（连接参数走
@@ -36,7 +43,7 @@ set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 
 SCRIPT_DIR="${PROJECT_ROOT}/infra/scripts"
-CHECKER="${SCRIPT_DIR}/check-unique-index-db.mjs"
+CHECKER="${SCRIPT_DIR}/check-db-reality.mjs"
 INJECTOR="${SCRIPT_DIR}/selftest-inject.mjs"
 FAILED=0
 
@@ -107,7 +114,7 @@ expect_failure() {
 log "[0/2] 正向基线：真实测试库上的唯一键必须自洽……"
 BASE_COPY="${TMP_ROOT}/baseline"
 make_copy "$BASE_COPY"
-expect_pass "check-unique-index-db.mjs" "$BASE_COPY"
+expect_pass "check-db-reality.mjs" "$BASE_COPY"
 
 # --- 1. 注入缺陷并验证 -----------------------------------------------------
 log "[1/2] 注入「库里其实没有那道唯一约束」的缺陷……"

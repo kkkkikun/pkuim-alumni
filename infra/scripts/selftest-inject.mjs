@@ -62,6 +62,9 @@
  *   migration-schema-db-column-length-injected  → 库内实况：同一列的**长度**不一致
  *   migration-schema-db-column-nullable-injected → 库内实况：同一列的**可空性**不一致
  *   migration-schema-db-foreign-key-injected     → 库内实况：实体声明了、但**库里其实没有**的外键
+ *   migration-schema-db-column-default-injected   → 库内实况：同一列的**默认值**不一致
+ *   migration-schema-db-column-unsigned-injected  → 库内实况：同一列的**无符号性**不一致
+ *   migration-schema-db-column-enum-injected      → 库内实况：同一列的**枚举取值**不一致
  *   read-visibility-filter-removed    → 读端点可见性：**可见性过滤被删掉**（未发布内容凭 id 就能读到）
  *   read-visibility-status-changed    → 读端点可见性：「不可见 → 404」被改成 403（泄露存在性）
  *   read-visibility-endpoint-unregistered → 读端点可见性：新增公开读端点却**没登记口径**
@@ -872,6 +875,52 @@ export class InjectedSafeUpsertService {
       /@ManyToOne\(\(\) => Region, \{ onDelete: 'SET NULL', nullable: true \}\)\n  @JoinColumn\(\{ name: 'region_code' \}\)/,
       "@ManyToOne(() => Region, { onDelete: 'SET NULL', nullable: true })\n"
         + "  @JoinColumn({ name: 'region_code_injected' })",
+    );
+  },
+
+  /*
+   * 库内实况对账（第十五轮）：把实体里一列的**默认值**改掉 ——
+   * 库里那一列的默认值仍是 0，实体却说是 7：
+   * 「这一列没传值时填什么」的理解不一致（走实体的写入与走库默认值的写入会填不同的值）。
+   * 期望：DB_COLUMN_DEFAULT_MISMATCH 点名 users.version。
+   */
+  'migration-schema-db-column-default-injected'() {
+    const file = path.join(copyRoot, 'apps/api/src/database/entities/user.entity.ts');
+    replaceOnce(
+      file,
+      /@Column\(\{ name: 'version', type: 'int', default: 0 \}\)/,
+      "@Column({ name: 'version', type: 'int', default: 7 })",
+    );
+  },
+
+  /*
+   * 库内实况对账（第十五轮）：把实体里一列的**无符号性**改掉 ——
+   * 库里那一列是 `bigint unsigned`，实体却说是有符号：
+   * 有符号性与实体不一致（**外键两侧的有符号性必须一致**，
+   * 不一致时那一列连外键都建不出来）。
+   * 期望：DB_COLUMN_UNSIGNED_MISMATCH 点名 alumni_profiles.verified_by。
+   */
+  'migration-schema-db-column-unsigned-injected'() {
+    const file = path.join(copyRoot, 'apps/api/src/database/entities/alumni.entity.ts');
+    replaceOnce(
+      file,
+      /@Column\(\{ name: 'verified_by', type: 'bigint', unsigned: true, nullable: true \}\)/,
+      "@Column({ name: 'verified_by', type: 'bigint', unsigned: false, nullable: true })",
+    );
+  },
+
+  /*
+   * 库内实况对账（第十五轮）：把实体里一个**枚举列的取值**改掉 ——
+   * 库里那一列的枚举是 ('active','disabled','locked')，
+   * 实体却多了一个 'archived'：实体的类型检查放过去了，数据库会拒收（1265）。
+   * 期望：DB_COLUMN_ENUM_MISMATCH 点名 users.status。
+   */
+  'migration-schema-db-column-enum-injected'() {
+    const file = path.join(copyRoot, 'apps/api/src/database/entities/user.entity.ts');
+    replaceOnce(
+      file,
+      /export const USER_STATUSES = \['active', 'disabled', 'locked'\] as const;/,
+      "export const USER_STATUSES = ['active', 'disabled', 'locked', 'archived'] as const;",
     );
   },
 

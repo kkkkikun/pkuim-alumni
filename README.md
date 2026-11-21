@@ -450,6 +450,16 @@ node infra/scripts/miniprogram-compile-check.mjs apps/miniprogram
    登记在册的 20 个管理端端点**逐条**用不存在的 id 真去请求，断言真实响应是
    **404 `NOT_FOUND`**（静态对账只能证明「源码里写了抛 404」），
    并与 `check-read-visibility.mjs` 的登记表**逐条对齐**。
+   **第十五轮起**：上面那两支库内对账脚本**合并成一支**
+   `infra/scripts/check-db-reality.mjs`（同一层对账不再拆两半），
+   并把列的对账**扩到默认值 / `unsigned` / 枚举取值**三个维度
+   （先量过误报率：默认值 47 列可判定 0 处出入、枚举取值 21 列可判定 0 处出入、
+   `unsigned` 79 列可判定里有 9 处是「布尔位」——那 9 处不判，
+   只对非布尔位的数值列判，实测 70 列 0 处出入）。
+   它把会话设成 `READ ONLY` 且只放行 `SELECT` / `SHOW`，
+   所以**在业务库（生产库）上跑也是安全的**（连接参数走环境变量）。
+   反向验证共 **9 例**（`check-migration-schema-db-selftest.sh` 8 例 +
+   `check-unique-index-db-selftest.sh` 1 例），**已接入 CI**。
 10. **多实例的「撤权立刻生效」可以自己演练**：`infra/scripts/invalidation-bus-drill.mjs`
     起**两个 API 进程 + 一个 Redis**（外加一个总线整条关闭的**对照实例**），
     验证「实例 A 撤权 → 实例 B 的缓存立刻失效」在**跨进程**下真的成立

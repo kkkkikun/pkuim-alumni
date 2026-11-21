@@ -290,7 +290,7 @@ note VARCHAR(500), created_at, updated_at`
 | 层次 | 谁来核 | 怎么核 |
 |---|---|---|
 | 实体 ↔ 迁移（静态） | `node infra/scripts/check-error-semantics.mjs` | 扫全量实体抽出唯一键，再扫迁移抽出**真正创建**的唯一约束（`uk_*` 与复合主键），缺一个即报错；唯一键列的**长度 / 可空性**也要一致 |
-| 迁移 ↔ 库（实况） | `node infra/scripts/check-unique-index-db.mjs` | 只读 `information_schema.statistics`：登记表要求的每一道唯一约束**在库里必须真的存在** |
+| 迁移 ↔ 库（实况） | `node infra/scripts/check-db-reality.mjs` | **只读** `information_schema`：登记表要求的每一道唯一约束**在库里必须真的存在**（第十五轮起与「实体 ↔ 库」那一半合并成一支脚本，见 12.2） |
 | 登记表 ↔ 实现 | `check-error-semantics.mjs` | 少登记一条唯一键 → 报错；「撞键时返回什么、在哪处置」必须写清并能在代码里找到 |
 | **本文件 ↔ 迁移（索引清单）** | `check-error-semantics.mjs`（第十一轮新增） | 本文件里写出的**每一个** `uk_*` / `idx_*` 索引名，迁移里必须**真的创建**它（否则报 `DOC_INDEX_NOT_IN_MIGRATION`）；迁移里创建的每一个索引，本文件的清单里也必须**写明**（否则报 `MIGRATION_INDEX_NOT_IN_DOC`）。实测：42 ↔ 42 逐条对齐 |
 
@@ -322,33 +322,91 @@ note VARCHAR(500), created_at, updated_at`
 ⚠️ 新增唯一键的顺序：**先写迁移 → 再改实体 → 再登记失败语义**，
 三者缺一即报错（`check-error-semantics.mjs` 会当场点名）。
 
-### 12.2 三层对账的**库内实况**（第十四轮新增）
+### 12.2 三层对账的**库内实况**（第十四轮新增，第十五轮合并 + 扩面）
 
 12.1 那张表核的是「**实体 ↔ 迁移**」（静态）。
 它证明得了「迁移里**写了**创建那道索引 / 外键 / 列」，
 证明不了「**这个库里真的有**」——
 迁移没被应用过、库是从旧备份恢复的、有人手工 `DROP` 过，静态脚本**一律看不见**。
 
-第十四轮把这一层也补上了（**只读**，全程只查 `information_schema`）：
+第十四轮把这一层也补上了（**只读**，全程只查 `information_schema`），
+第十五轮把它与「唯一键」的库内实况**合并成一支**脚本
+（此前是 `check-migration-schema-db.mjs` 与 `check-unique-index-db.mjs` 两支 ——
+同一层对账被拆成两半，跑两遍、报两套口径）：
 
 | 层次 | 谁来核 | 怎么核 |
 |---|---|---|
-| 实体 ↔ **库（实况）** | `node infra/scripts/check-migration-schema-db.mjs` | 只读 `information_schema` 的 `columns` / `statistics` / `key_column_usage`：实体声明的**每一条**索引 / 外键 / 列，在库里必须**真的存在**且**逐条一致**（列集合、唯一性、指向、类型、长度、可空性）；**反向**也查：库里多出来的索引 / 外键 / 列同样报 |
+| 实体 ↔ **库（实况）** | `node infra/scripts/check-db-reality.mjs` | 只读 `information_schema` 的 `columns` / `statistics` / `key_column_usage`：实体声明的**每一条**索引 / 外键 / 列，在库里必须**真的存在**且**逐条一致**（列集合、唯一性、指向、类型、长度、可空性、**默认值**、**`unsigned`**、**枚举取值**）；**反向**也查：库里多出来的索引 / 外键 / 列同样报 |
+| 登记表 ↔ **库（实况）** | 同一支脚本 | 同一支脚本里核唯一键那一半：登记表要求的每一道唯一约束**在库里必须真的存在**，库里多出来的（来源不明的）唯一约束同样报 |
 
 判定码：`DB_TABLE_MISSING` / `DB_INDEX_MISSING` / `DB_INDEX_COLUMN_MISMATCH` /
 `DB_INDEX_UNIQUENESS_MISMATCH` / `DB_INDEX_NOT_DECLARED` /
 `DB_FOREIGN_KEY_MISSING` / `DB_FOREIGN_KEY_TARGET_MISMATCH` /
 `DB_FOREIGN_KEY_NOT_DECLARED` / `DB_COLUMN_MISSING` / `DB_COLUMN_DEF_MISMATCH` /
-`DB_COLUMN_NOT_DECLARED`。
+`DB_COLUMN_NOT_DECLARED` / `DB_UNIQUE_MISSING` / `DB_UNIQUE_NOT_DECLARED` /
+**`DB_COLUMN_DEFAULT_MISMATCH`** / **`DB_COLUMN_UNSIGNED_MISMATCH`** /
+**`DB_COLUMN_ENUM_MISMATCH`**（后三个是第十五轮新增的维度）。
 
 实测（MySQL 8.4，`nmg_alumni_test`）：**32 张表 / 40 条实体索引 / 46 条实体外键 /
-271 列逐条对齐，0 处出入**。反向验证 5 例（`check-migration-schema-db-selftest.sh`）
-全部被抓出、退出码非 0，基线退出码 0；已接进 CI。
+271 列逐条对齐，0 处出入**；21 个登记唯一键也全部真实存在。
+反向验证 **9 例**（`check-migration-schema-db-selftest.sh` 8 例 +
+`check-unique-index-db-selftest.sh` 1 例）全部被抓出、退出码非 0，
+基线退出码 0；已接进 CI。
 
-⚠️ **口径与 12.1 一致**（枚举取值、精度、`unsigned`、默认值、`ON DELETE` 不判），
+⚠️ **口径与 12.1 一致**（精度、`ON DELETE` 不判），
 另加两条**等价形态**（不算不一致）：
 
 - **主键等价**：唯一索引的列就是主键时，主键天然唯一（不必再建同列的唯一索引）。
 - **MySQL 自动建的外键支撑索引**：MySQL 会为没有可用索引的外键自动建一条同名索引
   （例如 `fk_alumni_profiles_verified_by`）—— 那不是索引契约的一部分。
   实体里 `unique: true` 的列由一条唯一索引兜着，同样不算「实体没声明」。
+
+#### 12.2.1 第十五轮新增的三个维度（默认值 / `unsigned` / 枚举取值）
+
+12.1 与 12.2 此前**都不判**这三项。第十五轮先**量了一遍误报率**再决定纳入与否
+（口径**只收紧、不放宽**）：
+
+| 维度 | 可判定的列数 | 实测不一致 | 结论 |
+|---|---|---|---|
+| **默认值** | 47 | **0** | ✅ 纳入 |
+| **`unsigned`** | 79 | **9** | ⚠️ **只对非布尔位的数值列**判定（见下） |
+| **枚举取值** | 21 | **0** | ✅ 纳入 |
+
+判定条件（**只报能由迁移、实体与库内实况直接判定的分歧**）：
+
+- **默认值**：只在实体**显式声明** `default:` 时判定；
+  库侧是 `CURRENT_TIMESTAMP(3)` 这类**表达式**时**不判**
+  （`@CreateDateColumn` 就是它 —— 实体侧本来就不写 `default`）。
+- **`unsigned`**：只在实体**显式声明** `unsigned:` 时判定，且
+  **布尔位**（实体类型是 `tinyint` 的那些开关列）**不判** ——
+  无符号对布尔位没有意义（取值只有 0/1）。
+  那 9 处「实体写了 `unsigned: true`、迁移与库里却是 `tinyint(1)`」的布尔位
+  若纳入判定就会变成 **9 处常驻误报**（可判定集的 11.4%），
+  故**只对非布尔位的数值列**判定（实测 70 列、0 处不一致）。
+  这 9 处的处置见 `docs/KNOWN-ISSUES.md`（**只记录、不擅改**）。
+- **枚举取值**：只在实体**显式声明** `enum:`、且取值**解析得出来**时判定
+  （取值写在 `export const X = [...]` 里；解析不出来就**不判**，绝不猜）。
+
+#### 12.2.2 在**业务库（生产库）**上跑这一支是安全的
+
+脚本自己保证**只读**（三重护栏，不是口头承诺）：
+
+1. 所有 SQL 都经过 `runQuery()` —— 只放行 `SELECT` / `SHOW` / `SET SESSION`，
+   其余**当场拒绝**（退出码 2，不会执行）；
+2. 连接建立后第一件事就是 `SET SESSION TRANSACTION READ ONLY`，
+   并回读 `@@session.transaction_read_only` 确认为 1 ——
+   之后该会话里任何写语句都会被 MySQL 拒收
+   （实测 `UPDATE` / `INSERT` / `DROP` 均返回
+   `ER_CANT_EXECUTE_IN_READ_ONLY_TRANSACTION`）；
+3. 全程不建索引、不跑迁移、不写数据、不改表。
+
+连接参数走环境变量（`DATABASE_URL`，或 `DB_HOST` / `DB_PORT` / `DB_USER` /
+`DB_PASSWORD` / `DB_NAME`），所以在业务库上直接换库名即可：
+
+```bash
+DATABASE_URL=mysql://user:pass@host:3306/nmg_alumni \
+  node infra/scripts/check-db-reality.mjs
+```
+
+脚本还会把**当前账号的权限**（`SHOW GRANTS`）打印出来 ——
+人工在生产库上跑时第一眼就能确认「这个账号能不能写库」。
