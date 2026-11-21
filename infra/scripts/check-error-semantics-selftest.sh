@@ -28,11 +28,21 @@
 #   error-semantics-composite-unique-key-unregistered
 #                                                 → R1：新增**复合**唯一索引没登记
 #   error-semantics-user-doc-row-removed          → R4：用户侧的口径改了但文档没改
+#   error-semantics-migration-unique-missing      → R5：迁移里**没建**那道唯一索引
+#   error-semantics-migration-unique-columns-changed
+#                                                 → R5：迁移里唯一索引的**列**与实体对不上
+#   error-semantics-migration-unique-not-declared → R5：迁移建了实体没声明的唯一约束
 #
 # 第九轮新增的四个用例针对**用户侧**：这一轮把唯一键登记表扩到了用户侧
 # （连接申请 / 联系方式授权 / 活动报名 / 资源附件 / 认证附件 / openid / unionid /
 # 会话 refreshToken / 幂等键 ……），不验证这些注入的话，
 # 「扩面」这一层同样可能是恒过的。
+#
+# 第十轮新增的三个用例针对**迁移层**：生产库 `synchronize: false`，
+# 真正约束数据的是迁移而不是实体声明 ——
+# 「实体里有、迁移里没建」这一类缺陷此前**完全无人核对**，
+# 而它的后果是**静默**的：撞键不报错，数据库直接写出重复行。
+# 不验证这三个注入的话，「迁移层对账」同样可能是恒过的。
 #
 # 流程：
 #   0. 正向基线：干净副本上必须 0 不一致、退出码 0；
@@ -172,6 +182,12 @@ run_case "error-semantics-user-unique-key-unregistered" "UNIQUE_COLUMN_NOT_REVIE
 run_case "error-semantics-composite-unique-key-unregistered" "UNIQUE_COLUMN_NOT_REVIEWED"
 # 用户侧：口径改了但 API-SPEC 没改
 run_case "error-semantics-user-doc-row-removed" "ERROR_SEMANTICS_UNDOCUMENTED"
+# 迁移层：唯一索引**没建**（生产库没有那道防线 → 静默写出重复行）
+run_case "error-semantics-migration-unique-missing" "MIGRATION_UNIQUE_MISSING"
+# 迁移层：唯一索引的列与实体对不上（覆盖不足 / 过严）
+run_case "error-semantics-migration-unique-columns-changed" "MIGRATION_UNIQUE_COLUMN_MISMATCH"
+# 迁移层：迁移建了实体没声明的唯一约束（库比实体多一道防线）
+run_case "error-semantics-migration-unique-not-declared" "MIGRATION_UNIQUE_NOT_DECLARED"
 
 # --- 2. 清理 ---------------------------------------------------------------
 log "[2/2] 清理临时副本……"
@@ -182,5 +198,5 @@ if [ "$FAILED" -ne 0 ]; then
   die "错误语义对账校验器反向验证失败 ❌"
 fi
 
-log "=== 反向验证通过 ✅（7 类「错误语义失配」缺陷全部被抓出，校验器非恒过）==="
+log "=== 反向验证通过 ✅（10 类「错误语义失配」缺陷全部被抓出，校验器非恒过）==="
 log "错误语义对账校验器反向验证通过 ✅"

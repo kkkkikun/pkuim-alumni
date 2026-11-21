@@ -428,6 +428,17 @@ node infra/scripts/miniprogram-compile-check.mjs apps/miniprogram
    判定必须落到「**捕获重复键的那一段 catch 块**」本身（否则同一个方法里别的冲突分支
    会让校验器恒过），并且**幂等也是一等口径**（重复提交不是错误）；
    反向验证从 3 类扩到 **7 类**缺陷注入。
+   **第十轮起**：同一支校验器再扩到**迁移层** ——
+   生产库 `synchronize: false`，真正约束数据的是
+   `apps/api/src/database/migrations/*`，所以把迁移里**真正创建的**唯一索引
+   （`uk_*` 与复合主键）抽出来，与实体声明、登记表**三方对账**
+   （缺一个即报错：实体有、迁移没建 = 生产库没有那道防线，撞键会**静默写出重复行**）；
+   唯一键列的**长度 / 可空性**也要与迁移一致。
+   反向验证从 7 类扩到 **10 类**缺陷注入。
+   另新增**库内实况**对账 `infra/scripts/check-unique-index-db.mjs`
+   （**只读** `information_schema`：静态对账只能证明「迁移里写了创建那道索引」，
+   证明不了「**这个库里真的有**」），
+   它也带自己的反向验证（`check-unique-index-db-selftest.sh`），两者**均已接入 CI**。
 10. **多实例的「撤权立刻生效」可以自己演练**：`infra/scripts/invalidation-bus-drill.mjs`
     起**两个 API 进程 + 一个 Redis**（外加一个总线整条关闭的**对照实例**），
     验证「实例 A 撤权 → 实例 B 的缓存立刻失效」在**跨进程**下真的成立

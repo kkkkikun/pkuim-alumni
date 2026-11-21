@@ -104,7 +104,7 @@
 
 ### verification_attachments
 `id, application_id FK→verification_applications, media_id FK→media_assets, created_at`；
-唯一索引 `uk_verification_attachment(app_id, media_id)`。
+唯一索引 `uk_verification_attachment(application_id, media_id)`。
 
 ## 2. 字典
 
@@ -163,7 +163,8 @@ note VARCHAR(500), snapshot_version INT NOT NULL, created_at` —— **只追加
 索引 `idx_resource_reviews_post(post_id, created_at)`。
 
 ### resource_post_attachments
-`id, post_id FK→resource_posts, media_id FK→media_assets, created_at`，唯一索引 `(post_id, media_id)`。
+`id, post_id FK→resource_posts, media_id FK→media_assets, created_at`，
+唯一索引 `uk_resource_post_attachment(post_id, media_id)`。
 
 ## 5. 活动（并发重点）
 
@@ -185,7 +186,8 @@ note VARCHAR(500), created_at, updated_at`
 - **articles**：`id, category_id FK→article_categories NULL, title VARCHAR(160), summary VARCHAR(255),
   body MEDIUMTEXT, cover_media_id, status ENUM('draft','published','offline'), published_at, view_count INT,
   created_by FK→admin_users, version, created_at, updated_at`；索引 `idx_articles_published(status, published_at)`。
-- **article_categories**：`id, name, slug UNIQUE, sort_order, created_at`。
+- **article_categories**：`id, name, slug UNIQUE, sort_order, created_at`；
+  唯一索引 `uk_article_categories_slug(slug)`。
 - **notices**：`id, title VARCHAR(160), body MEDIUMTEXT, status ENUM('draft','published','offline'),
   published_at, view_count, created_by FK→admin_users, version, created_at, updated_at`。
 
@@ -205,9 +207,12 @@ note VARCHAR(500), created_at, updated_at`
 ## 8. 管理后台 RBAC
 
 - **admin_users**：`id, username VARCHAR(64) UNIQUE, password_hash VARCHAR(255), display_name VARCHAR(64),
-  status ENUM('active','disabled'), last_login_at, created_at, updated_at`。
-- **roles**：`id, code VARCHAR(32) UNIQUE, name VARCHAR(64), description VARCHAR(255)`。
-- **permissions**：`id, code VARCHAR(64) UNIQUE, name VARCHAR(64), description VARCHAR(255)`。
+  status ENUM('active','disabled'), last_login_at, created_at, updated_at`；
+  唯一索引 `uk_admin_users_username(username)`。
+- **roles**：`id, code VARCHAR(32) UNIQUE, name VARCHAR(64), description VARCHAR(255)`；
+  唯一索引 `uk_roles_code(code)`。
+- **permissions**：`id, code VARCHAR(64) UNIQUE, name VARCHAR(64), description VARCHAR(255)`；
+  唯一索引 `uk_permissions_code(code)`。
 - **admin_user_roles**：`admin_user_id FK, role_id FK` 复合主键。
 - **role_permissions**：`role_id FK, permission_id FK` 复合主键。
 - **admin_action_logs**：`id, admin_id FK→admin_users, action VARCHAR(64), target_type VARCHAR(32),
@@ -228,9 +233,12 @@ note VARCHAR(500), created_at, updated_at`
 - **media_assets**：`id, file_name VARCHAR(255), mime_type VARCHAR(128), size BIGINT,
   bucket VARCHAR(64), object_key VARCHAR(512), visibility ENUM('public','private'),
   uploader_id BIGINT UNSIGNED NULL, created_at`；索引 `idx_media_uploader(uploader_id, created_at)`。
-- **idempotency_records**：`id, scope VARCHAR(64), idem_key VARCHAR(128), user_id BIGINT UNSIGNED NULL,
+- **idempotency_records**：`id, scope VARCHAR(255), idem_key VARCHAR(128), user_id BIGINT UNSIGNED NULL,
   request_hash CHAR(64), response_body JSON, status ENUM('in_progress','completed'),
   created_at, expires_at`；唯一索引 `uk_idempotency(scope, idem_key)`。
+  ⚠️ `scope` 的长度是 **255**（不是 64）：scope 是「方法 + **实际路径** + 用户 id」，
+  长路径会超过 64 字符（缺陷 #140）→ 由迁移 `WidenIdempotencyScope1730000004000` 放宽。
+  实体声明必须与之一致（否则 `synchronize: true` 的环境会把列缩回去）。
 - **system_settings**：`key VARCHAR(64) PK, value TEXT, description VARCHAR(255), updated_at`。
 
 ## 10. 并发与一致性策略（落到 SQL 形态）
@@ -238,7 +246,7 @@ note VARCHAR(500), created_at, updated_at`
 | 场景 | 机制 |
 |---|---|
 | 活动报名不超卖 | 事务内 `UPDATE events SET registered_count = registered_count + 1 WHERE id = :id AND status='published' AND (capacity = 0 OR registered_count < capacity)`；影响行数为 0 → `CONFLICT`；同时唯一索引 `uk_event_registration` 防重复；失败整体回滚 |
-| 重复报名 | 唯一索引冲突 → 幂等返回既有报名记录（不报错） |
+| 重复报名 | **先查后插**撞唯一索引 `uk_event_registration` → **409 `CONFLICT`**（并发撞键；顺序重复提交命中既有报名行 → 幂等返回，不报错） |
 | A、B 互相同时申请 | `pending_guard` 唯一索引保证同一对只有一条 pending；后到者返回既有申请 |
 | 重复接受申请 | `UPDATE connection_request_history SET status='accepted' WHERE id=:id AND status='pending'` 条件更新，重复点击影响行数为 0 → 幂等返回当前状态 |
 | 重复建立连接 | `INSERT ... ON DUPLICATE KEY UPDATE` 依赖 `uk_connection_pairs` |
@@ -255,3 +263,32 @@ note VARCHAR(500), created_at, updated_at`
 3. 字段级可见性按 `show_college / show_industry / show_region` 二次裁剪；
 4. 未建立连接关系时，`connection_pairs` 不存在，双方联系方式互相不可见；
 5. 任一方 `allow_contact_share=0` 或撤回授权后，另一方立即无法读取。
+
+## 12. 唯一键的口径与对账（第十轮）
+
+本文件里写出的**唯一索引 / 主键**就是「生产库里真实存在的唯一约束」，
+三者必须**一致**：本文件（口径）↔ 实体声明（`@Column({unique:true})` /
+类级 `@Index(..., {unique:true})` / `@PrimaryColumn`）↔ 迁移
+（`apps/api/src/database/migrations/*` 里**真正创建的**索引与主键）。
+
+⚠️ 为什么必须三方一致：生产库 `synchronize: false`，**真正约束数据的是迁移**。
+「实体里有、迁移里没建」= 生产库**根本没有那道防线** ——
+撞键不会报错，数据库会**静默写出重复行**，
+而业务代码里「捕获重复键 → 409」的那一段**永远不会触发**。
+
+| 层次 | 谁来核 | 怎么核 |
+|---|---|---|
+| 实体 ↔ 迁移（静态） | `node infra/scripts/check-error-semantics.mjs` | 扫全量实体抽出唯一键，再扫迁移抽出**真正创建**的唯一约束（`uk_*` 与复合主键），缺一个即报错；唯一键列的**长度 / 可空性**也要一致 |
+| 迁移 ↔ 库（实况） | `node infra/scripts/check-unique-index-db.mjs` | 只读 `information_schema.statistics`：登记表要求的每一道唯一约束**在库里必须真的存在** |
+| 登记表 ↔ 实现 | `check-error-semantics.mjs` | 少登记一条唯一键 → 报错；「撞键时返回什么、在哪处置」必须写清并能在代码里找到 |
+
+两条**已知的等价形态**（不算不一致）：
+
+- **主键等价于唯一键**（自然键主键与复合主键都算）：`admin_user_roles` / `role_permissions` /
+  `private_contacts` / `system_settings` / `regions` / `industries`
+  由主键提供唯一性，迁移里**不必**再建一条同列的唯一索引
+  （那是重复约束 = 写放大）。
+- **索引名可以不同**：对账按**列集合**判定，不按索引名判定。
+
+⚠️ 新增唯一键的顺序：**先写迁移 → 再改实体 → 再登记失败语义**，
+三者缺一即报错（`check-error-semantics.mjs` 会当场点名）。

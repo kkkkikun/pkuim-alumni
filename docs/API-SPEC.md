@@ -306,6 +306,14 @@
   `UNIQUE_KEY_REGISTRY`）是「已对账」的唯一事实来源 ——
   脚本会扫**全部实体文件**，把每个唯一键（单列唯一、复合唯一、主键自然键）
   都算出来，登记表里少一条就报错；每条还必须写清「撞键时返回什么、在哪处置」。
+- ⚠️ **对账要连着「迁移层」一起看**（第十轮补上）：生产库 `synchronize: false`，
+  真正约束数据的是 `apps/api/src/database/migrations/*` ——
+  「实体里有、迁移里没建」的话，**生产库根本没有那道防线**，
+  撞键不报错、数据库直接**静默写出重复行**，
+  上面那张表里的 409 也永远不会触发。
+  现在同一支脚本会把迁移里**真正创建**的唯一索引抽出来三方对账，
+  另有 `infra/scripts/check-unique-index-db.mjs` 对着**真实库**只读核对一遍。
+  口径见 `docs/DATABASE-DESIGN.md` 第 12 节。
 - 用例见 `apps/api/test/integration/user-write-error-semantics.e2e-spec.ts`。
 
 ## 12. 系统 `/system`
