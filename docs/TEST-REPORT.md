@@ -5532,3 +5532,114 @@ Swagger（`http://127.0.0.1:18100/docs-json`）。）
 - **专用压测窗口**排期、线上业务库应用两条索引迁移、发布窗口排期、
   正式密钥轮转、`AUTH_MODE=wechat` 切换、域名与 HTTPS、WAF 与备份定时任务、
   小程序真机复验：延续的人工项。
+
+## 20. 第十四轮（opt-014）：管理端 404 分界的**运行时**用例 + 三层对账补到**库内实况** + 复核第十三轮
+
+本轮是「**补运行时 + 补库内实况 + 复核**」轮：**对外行为一个字没改**
+（#197 / #198 / #194 / #195 / #189 / #200 等仍等产品拍板）。
+
+### 20.1 管理端「资源不存在 → 404」的运行时用例（新增套件）
+
+新增 `apps/api/test/integration/admin-not-found-boundary.e2e-spec.ts`
+（**23 例**，实跑全绿）：
+
+| 组成 | 例数 | 内容 |
+|---|---|---|
+| 逐条跑通 | **20** | 第十三轮登记的**每一个**管理端端点：用**不存在的 id** 真去请求，断言真实响应是 **404 `NOT_FOUND`**（且**不得**是 403、**不得**是 5xx） |
+| 反向验证 | 1 | 资源**存在**时（造一条真活动）这些端点**不得**返回 404 —— 否则这个 404 可能只是「参数永远解析失败」 |
+| 已知缺口钉住 | 1 | `GET /admin/events/:id/registrations` 的 **200 + 空名单**（#200）被写死在用例里：口径一旦被改，用例就红 |
+| 逐条对齐 | 1 | 运行时用例与 `check-read-visibility.mjs` 的登记表（**20 条**）必须**一一对应**：少一条 / 多一条当场红 |
+
+⚠️ **为什么要运行时用例**：静态对账（第十三轮的 R9 ~ R12）只能证明
+「**源码里写了**抛 `NotFoundException`」，证明不了「**真去请求时返回的就是 404**」——
+中间件 / 守卫 / 过滤器 / DTO 校验都可能把状态码改掉
+（DTO 校验甚至会先于业务判定生效：该 404 的请求先撞上 400）。
+管理后台正是按状态码分支的：404 =「对象不存在」，500 =「服务端坏了」。
+
+⚠️ **「逐条对齐」是怎么做的**：给 `check-read-visibility.mjs` 的 JSON 报告
+增加了 `adminRegistry`（方法 + 路径 + 口径），运行时用例跑一遍该脚本的 `--json`
+输出，把两组集合**排序后逐条比对**，并断言登记表条数为 **20**。
+
+### 20.2 「实体 ↔ 迁移」三层对账的**库内实况**（新增只读脚本）
+
+新增 `infra/scripts/check-migration-schema-db.mjs`（**只读**，全程只执行 SELECT）：
+
+| 层 | 核什么 | 不一致时报什么 |
+|---|---|---|
+| 表 | 实体声明的表在库里必须存在 | `DB_TABLE_MISSING` |
+| 索引 | 名字、列集合、唯一性（**正反**两个方向） | `DB_INDEX_MISSING` / `DB_INDEX_COLUMN_MISMATCH` / `DB_INDEX_UNIQUENESS_MISMATCH` / `DB_INDEX_NOT_DECLARED` |
+| 外键 | 列、目标表、目标列（**正反**两个方向） | `DB_FOREIGN_KEY_MISSING` / `DB_FOREIGN_KEY_TARGET_MISMATCH` / `DB_FOREIGN_KEY_NOT_DECLARED` |
+| 列 | 类型 / 长度 / 可空性；以及两边各自多出来的列 | `DB_COLUMN_MISSING` / `DB_COLUMN_DEF_MISMATCH` / `DB_COLUMN_NOT_DECLARED` |
+
+实测（MySQL 8.4，测试库 `nmg_alumni_test`）：
+
+```
+✅ 库内实况对账通过（nmg_alumni_test @ 127.0.0.1:3306）：
+   32 张表 / 40 条实体索引 / 46 条实体外键 / 271 列在库里**逐条真实存在**
+```
+
+⚠️ **口径与静态对账（第 18.1 节）完全一致，没有放宽**：
+枚举**取值**、精度、`unsigned`、默认值、`ON DELETE` 行为一律**不判**；
+另加两条**等价形态**（不算不一致）：
+
+- **主键等价**：唯一索引的列就是主键时，主键天然唯一（`admin_user_roles` /
+  `role_permissions` 由复合主键提供唯一性）；
+- **MySQL 自动建的外键支撑索引**（例如 `fk_alumni_profiles_verified_by`）
+  与实体里 `unique: true` 列的唯一索引 —— 那不是索引契约的一部分。
+
+### 20.3 反向验证：新增 **5 例**（「静态说有、库里其实没有」）
+
+新增 `infra/scripts/check-migration-schema-db-selftest.sh` +
+5 个缺陷注入用例（`selftest-inject.mjs`）。注入只发生在**临时副本**里
+（改的是副本里的**实体声明**），**真实数据库全程只读**：
+
+| 用例 | 期望判定码 | 实跑 |
+|---|---|---|
+| `migration-schema-db-entity-index-injected` | `DB_INDEX_MISSING` | ✅ 退出码 1，点名 `alumni_profiles.idx_alumni_profiles_injected_db` |
+| `migration-schema-db-index-columns-injected` | `DB_INDEX_COLUMN_MISMATCH` | ✅ 退出码 1，点名 `alumni_profiles.idx_alumni_profiles_region` |
+| `migration-schema-db-column-length-injected` | `DB_COLUMN_DEF_MISMATCH` | ✅ 退出码 1，点名 `alumni_profiles.display_name` |
+| `migration-schema-db-column-nullable-injected` | `DB_COLUMN_DEF_MISMATCH` | ✅ 退出码 1，点名 `alumni_profiles.real_name` |
+| `migration-schema-db-foreign-key-injected` | `DB_FOREIGN_KEY_MISSING` | ✅ 退出码 1，点名 `alumni_profiles.region_code_injected` |
+
+基线（干净副本 + 真实测试库）退出码 **0**；元自检（对「永远返回 0 的假校验器」
+必须判失败）通过。
+
+### 20.4 复核第十三轮产出：逐条实跑
+
+| 项 | 结果 |
+|---|---|
+| `bash infra/scripts/check-error-semantics-selftest.sh` | 退出码 **0** —— 基线绿、**17 类**退化形态全部被抓出、退出码非 0 |
+| `bash infra/scripts/check-read-visibility-selftest.sh` | 退出码 **0** —— 基线绿、**12 类**退化形态全部被抓出、退出码非 0 |
+| `node infra/scripts/check-error-semantics.mjs` | 退出码 **0**（21 个唯一键 + 32 张表 / 40 条实体索引 / 46 条实体外键 / 271 列逐条对齐） |
+| `node infra/scripts/check-read-visibility.mjs` | 退出码 **0**（16 个公开读端点 + 19 个已登录端点 + **20** 个管理端端点的口径全部对齐） |
+| 管理端登记表 ↔ 实现逐条对齐 | 20/20 条的实现里都看得见 `NotFoundException`，`docs/API-SPEC.md` 第 13.4 节逐条点名一致（R11 通过） |
+
+### 20.5 本轮实跑清单
+
+| 项 | 结果 |
+|---|---|
+| `node infra/scripts/check-migration-schema-db.mjs` | 退出码 **0**（32 表 / 40 索引 / 46 外键 / 271 列逐条对齐，0 处出入） |
+| `bash infra/scripts/check-migration-schema-db-selftest.sh` | 退出码 **0**（**5 类**缺陷全部被抓出） |
+| `bash infra/scripts/check-error-semantics-selftest.sh` | 退出码 **0**（**17 类**缺陷全部被抓出） |
+| `bash infra/scripts/check-read-visibility-selftest.sh` | 退出码 **0**（**12 类**缺陷全部被抓出） |
+| `node infra/scripts/check-error-semantics.mjs` | 退出码 **0** |
+| `node infra/scripts/check-read-visibility.mjs` | 退出码 **0** |
+| `node infra/scripts/check-rbac-matrix.mjs` | 退出码 **0** |
+| `apps/api` 集成测试（新增套件在内） | 退出码 **0** —— **55 套件 / 461 例全绿**（新增套件 1 个 / 23 例；上一轮为 54 套件 / 438 例） |
+| `pnpm typecheck` / `pnpm lint` | 退出码 **0** |
+
+### 20.6 本轮未做完 / 仍需人工
+
+- **#197 / #198**（公开活动详情的可见性与 `myRegistration`）、**#194 / #195**
+  （认证申请并发提交、连接解除后重建）、**#189**（游标分页）、
+  **`/admin/stats` 的 `connectionTotal` 口径**、**连接列表是否受对方可见开关约束**：
+  延续项，仍需产品 / 客户拍板 —— 本轮**一个字没改对外行为**。
+- **#200**：`GET /admin/events/:id/registrations` 在活动不存在时返回 200 + 空名单 ——
+  仍需**产品**拍板；本轮把现状**钉在用例里**（口径一旦被改，用例会红）。
+- **上线环境**跑一次 `node infra/scripts/check-unique-index-db.mjs` 与
+  `node infra/scripts/check-migration-schema-db.mjs`（两者都**只读**）、
+  `bash infra/scripts/healthcheck.sh`、`node infra/scripts/invalidation-bus-drill.mjs`：
+  部署侧动作（已写进 `docs/KNOWN-ISSUES.md` 的待验证表）。
+- **专用压测窗口**排期、线上业务库应用两条索引迁移、发布窗口排期、
+  正式密钥轮转、`AUTH_MODE=wechat` 切换、域名与 HTTPS、WAF 与备份定时任务、
+  小程序真机复验：延续的人工项。

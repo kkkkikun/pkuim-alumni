@@ -1763,6 +1763,14 @@ function main() {
     pending: READ_VISIBILITY_REGISTRY.filter((entry) => entry.pending).length,
     authenticatedRegistered: AUTHENTICATED_VISIBILITY_REGISTRY.length,
     adminRegistered: ADMIN_VISIBILITY_REGISTRY.length,
+    // ⚠️ 第十四轮新增：把管理端登记表本身也放进 JSON 报告 ——
+    //    运行时用例（`admin-not-found-boundary.e2e-spec.ts`）要拿它**逐条对齐**：
+    //    登记表加了端点而运行时没加（或反过来），必须当场被抓出来。
+    adminRegistry: ADMIN_VISIBILITY_REGISTRY.map((entry) => ({
+      method: entry.method,
+      path: entry.path,
+      boundary: entry.boundary,
+    })),
     issues: issues.length,
     notes: notes.length,
     detail: issues,
