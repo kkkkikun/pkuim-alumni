@@ -9,6 +9,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, DataSource, EntityManager, In, Repository } from 'typeorm';
 import { paginate } from '../../common/dto/pagination.dto';
 import { groupBy } from '../../common/utils/group-by';
+import { isDuplicateKeyError } from '../../common/utils/duplicate-key';
 import { maskStudentId } from '../../common/utils/mask';
 import type { PageResult } from '../../common/dto/pagination.dto';
 import { AdminUser } from '../../database/entities/admin.entity';
@@ -102,9 +103,17 @@ export class AlumniVerificationService {
       );
       const mediaIds = await this.assertOwnedMedia(userId, dto.attachmentMediaIds);
       if (mediaIds?.length) {
-        await attachments.save(
-          mediaIds.map((mediaId) => attachments.create({ applicationId: created.id, mediaId })),
-        );
+        try {
+          await attachments.save(
+            mediaIds.map((mediaId) => attachments.create({ applicationId: created.id, mediaId })),
+          );
+        } catch (error) {
+          // ⚠️ `verification_attachments` 有唯一索引 `uk_verification_attachment (application_id, media_id)`：
+          //   同一份证明材料被挂两次时撞唯一键 —— 落到 409（冲突），
+          //   绝不能冒泡成 500（客户端会把它当成「服务端故障」）。
+          if (!isDuplicateKeyError(error)) throw error;
+          throw new ConflictException('证明材料重复，请检查后再提交');
+        }
       }
       // 用户身份进入待审核
       await users.update({ id: userId }, { stage: 'pending_review' });
@@ -381,9 +390,16 @@ export class AlumniVerificationService {
         const known = new Set(existing.map((item) => item.mediaId));
         const toAdd = mediaIds.filter((mediaId) => !known.has(mediaId));
         if (toAdd.length) {
-          await attachments.save(
-            toAdd.map((mediaId) => attachments.create({ applicationId: current.id, mediaId })),
-          );
+          try {
+            await attachments.save(
+              toAdd.map((mediaId) => attachments.create({ applicationId: current.id, mediaId })),
+            );
+          } catch (error) {
+            // ⚠️ `uk_verification_attachment (application_id, media_id)`：
+            //   并发补交同一份材料时撞唯一键 → 409（冲突），不得抛成 500。
+            if (!isDuplicateKeyError(error)) throw error;
+            throw new ConflictException('证明材料重复，请检查后再提交');
+          }
         }
       }
       await users.update({ id: userId }, { stage: 'pending_review' });

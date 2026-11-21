@@ -5023,3 +5023,107 @@ Tests:       3 failed, 5 passed, 8 total
 - 延续的人工项：发布窗口排期（`docs/RELEASE-ORDER.md`）、线上业务库应用两条索引迁移、
   正式密钥轮转与密钥管理服务接入、正式 AppID/AppSecret 与 `AUTH_MODE=wechat` 切换、
   正式域名与 HTTPS 证书、微信订阅消息模板、WAF 规则与备份定时任务、小程序真机复验。
+
+## 16. 第九轮（opt-009）：用户侧写端点的错误语义对账 + 复核第八轮产出 + 跨进程撤权演练
+
+### 16.1 用户侧唯一键的逐条核对（扩面）
+
+第八轮把「写操作的错误语义」核到了**管理端**（3 个唯一键）；
+本轮把同一套口径**扩到用户侧** —— 先扫**全部实体文件**，把每个唯一键
+（单列唯一 / 复合唯一 / 主键自然键）都算出来，再逐条核「撞了返回什么」：
+
+| 唯一键 | 端点 | 修复前的行为 | 本轮之后 |
+|---|---|---|---|
+| `users.uk_users_openid` | `POST /auth/mock/login`、`/auth/wechat/login` | 并发首登时 `ER_DUP_ENTRY` → **500** | **重跑整个事务**命中既有用户；重试耗尽 → 409 |
+| `users.uk_users_unionid` | 同上 | 同一 unionid 绑两个账号 → **500** | 先查清楚 → **409 `CONFLICT`** |
+| `user_sessions.uk_user_sessions_token` | 登录 / `POST /auth/refresh` | 撞键 → **500** | 重新签发一次；仍撞 → **409** |
+| `alumni_profiles.uk_alumni_profiles_user` | `PATCH /me/profile` 等 | 并发建档 → **500** | 读回既有档案（幂等）；读不到 → **409** |
+| `private_contacts`（主键 `user_id`） | `PUT /me/contacts` 等 | 并发建行 → **500** | 读回既有行（幂等）；读不到 → **409** |
+| `connection_request_history.uk_connection_request_pending` | `POST /connections/requests` | 撞键读不到既有申请 → **500** | 幂等返回既有申请；读不到 → **409** |
+| `contact_share_grants.uk_contact_grant` | `PUT /connections/:id/contact-grant` | 撞键读不到既有行 → **500** | 更新既有授权行（幂等）；读不到 → **409** |
+| `event_registrations.uk_event_registration` | `POST /events/:id/registrations` | 已是 409（但把**所有** DB 错误都当成 409） | 只把**重复键**转 409，其余照旧抛出不掩盖真缺陷 |
+| `resource_post_attachments.uk_resource_post_attachment` | `POST /resources`、`PATCH /resources/:id` | 撞键 → **500** | **409** |
+| `verification_attachments.uk_verification_attachment` | `POST /alumni/verification`、`PUT …/resubmit` | 撞键 → **500** | **409** |
+| `connection_pairs.uk_connection_pairs` | `POST /connections/requests/:id/accept` | `INSERT IGNORE` 吸收冲突（幂等） | 维持幂等，并**点名**索引 |
+| `idempotency_records.uk_idempotency` | 带 `Idempotency-Key` 的写请求 | 撞键读不到既有记录 → **500** | **409 `IDEMPOTENCY_CONFLICT`** |
+
+### 16.2 唯一键登记表：从「只查已登记的实体」到「扫全量」
+
+`infra/scripts/check-error-semantics.mjs` 的登记表（`UNIQUE_KEY_REGISTRY`）扩到
+**21 条**（管理端 9 + 用户侧 12），并把对账口径收紧了三处：
+
+1. **扫全量实体**：此前只检查「登记表里已有的实体」上有没有漏登记的唯一列 ——
+   新表上的新唯一键**根本看不见**。现在扫 `apps/api/src/database/entities/*.ts`
+   的**每一个实体类**，把单列唯一、复合唯一（类级 `@Index(..., { unique: true })`）、
+   主键自然键都算出来，**少登记一条就报错**。
+2. **判定落到「捕获重复键的那一段」**：此前只要求「方法体里出现 `ConflictException`」——
+   而同一个方法里往往还有**别的**冲突分支（「名额已满」之类），
+   把捕获重复键的那一段删掉之后判定仍然成立 → **校验器会变成恒过的**。
+   现在必须定位到**含重复键判定的 catch 块本身**，看它给出了什么结果。
+3. **幂等也是一等口径**：登记表允许声明「撞键 → 幂等命中」（返回既有行），
+   而不是一律 409 —— 重复提交**不是错误**，把它当错误反而是错的。
+
+### 16.3 用例（15 例，全绿）
+
+`apps/api/test/integration/user-write-error-semantics.e2e-spec.ts`：
+幂等路径 4 例（重复申请 / 重复授权 / 重复报名 / 并发首登）、
+冲突路径 8 例（八种唯一键 → **409 / `CONFLICT`**，且**不得** 5xx）、
+404 路径 3 例。
+
+⚠️ 冲突用例用**故障注入**（让持久层抛出真实的 `ER_DUP_ENTRY` / `errno=1062`）
+而不是「碰运气」制造并发 —— 靠运气的用例跑十次可能只红一次，那不叫回归防线。
+
+### 16.4 反向验证：3 个用例 → 7 个
+
+`infra/scripts/check-error-semantics-selftest.sh` 新增四个用户侧注入用例
+（用户侧处置被删掉 / 用户侧新增唯一列没登记 / 新增**复合**唯一索引没登记 /
+用户侧口径改了但文档没改）。实测：**7 个用例全部被抓出、退出码非 0**，
+基线（干净副本）退出码 0。
+
+### 16.5 复核第八轮产出：9 份自测脚本逐条对账
+
+| 自测脚本 | 基线 | 退化形态 | 退出码 |
+|---|---|---|---|
+| `check-error-semantics-selftest.sh` | 绿 | 7 类缺陷全被抓出（本轮从 3 类扩到 7 类） | 0 |
+| `check-admin-web-selftest.sh` | 绿 | 2 类被抓出 | 0 |
+| `check-contract-mirror-selftest.sh` | 绿 | 1 类被抓出 | 0 |
+| `check-miniprogram-selftest.sh` | 绿 | 3 类被抓出 | 0 |
+| `check-rbac-matrix-selftest.sh` | 绿 | 1 类被抓出 | 0 |
+| `check-contract-routes-selftest.sh` | 绿 | 2 类被抓出 | 0 |
+| `check-api-spec-doc-selftest.sh` | 绿 | 1 类被抓出 | 0 |
+| `check-client-paths-selftest.sh` | 绿 | 2 类被抓出 | 0 |
+| `check-spec-coverage-selftest.sh` | 绿 | 1 类被抓出 | 0 |
+
+（另复核了 CI 里的其余三个反向验证：`check-response-shape` 7 类、
+`check-enum-consistency` 4 类、`check-request-dto` 4 类、
+以及总线自证 `check-invalidation-bus`（基线 10 例绿 + 三种退化形态全被抓出）——
+全部退出码 0。四个依赖跑着 API 的自测用的是**本轮构建**的 API 的
+Swagger（`http://127.0.0.1:18100/docs-json`）。）
+
+### 16.6 跨进程撤权演练（本轮新增，仓库侧自证）
+
+`infra/scripts/invalidation-bus-drill.mjs`：起**两个 API 进程 + 一个 Redis**，
+外加**一个总线整条关闭的对照实例**（退化形态对照，防止演练本身假绿）。
+
+实测（本机，测试库）：
+
+| 观测点 | 结果 |
+|---|---|
+| 实例 B（总线可用）在实例 A 降权后的响应 | **403**，延迟 **7~8 ms**（不等 TTL） |
+| 对照实例（`RBAC_INVALIDATION_ENABLED=false`） | 同一段时间里**仍然 200**（陈旧，回落到 TTL 上界） |
+| 靶子账号收尾 | 角色已复原并**停用**（仓库不提供删除管理员的端点） |
+
+### 16.7 本轮未做完 / 仍需人工
+
+- **上线环境跑一次** `node infra/scripts/invalidation-bus-drill.mjs`
+  与 `bash infra/scripts/healthcheck.sh`（部署侧动作）。
+- **认证申请并发提交**会产生两条 pending 申请（`verification_applications`
+  没有「同一用户仅一条 pending」的唯一约束）→ 需产品 / 架构确认后加约束（#194）。
+- **连接解除后无法重建**（`uk_connection_pairs` 命中历史行，`INSERT IGNORE` 把它挡掉）
+  → 需产品确认业务口径（#195）。
+- **游标分页**（#189，需产品 / 客户拍板）、**`/admin/stats` 的 `connectionTotal` 口径**
+  与连接列表可见开关（需产品确认）：延续项，只记录不改。
+- **专用压测窗口**下的缓存延迟对照：仍需人工排期。
+- 延续的人工项：发布窗口排期（`docs/RELEASE-ORDER.md`）、线上业务库应用两条索引迁移、
+  正式密钥轮转与密钥管理服务接入、正式 AppID/AppSecret 与 `AUTH_MODE=wechat` 切换、
+  正式域名与 HTTPS 证书、微信订阅消息模板、WAF 规则与备份定时任务、小程序真机复验。

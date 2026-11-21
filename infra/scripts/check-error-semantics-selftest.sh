@@ -19,10 +19,20 @@
 #   端点覆盖、契约镜像、响应结构这些校验器全都查不出这一层
 #   （它们看的是**路径与结构**，不是**失败时返回什么**）。
 #
-# 三个用例覆盖三条判定路径：
-#   error-semantics-conflict-mapping-removed → R3：冲突处置被改回 500
-#   error-semantics-new-unique-column         → R1：新增唯一列没登记
-#   error-semantics-doc-row-removed            → R4：口径改了但文档没改
+# 用例覆盖各条判定路径：
+#   error-semantics-conflict-mapping-removed      → R3：冲突处置被改回 500（管理端）
+#   error-semantics-new-unique-column             → R1：新增唯一列没登记（管理端）
+#   error-semantics-doc-row-removed                → R4：口径改了但文档没改（管理端）
+#   error-semantics-user-conflict-mapping-removed  → R3：用户侧的冲突处置被删掉
+#   error-semantics-user-unique-key-unregistered   → R1：用户侧新增唯一列没登记
+#   error-semantics-composite-unique-key-unregistered
+#                                                 → R1：新增**复合**唯一索引没登记
+#   error-semantics-user-doc-row-removed          → R4：用户侧的口径改了但文档没改
+#
+# 第九轮新增的四个用例针对**用户侧**：这一轮把唯一键登记表扩到了用户侧
+# （连接申请 / 联系方式授权 / 活动报名 / 资源附件 / 认证附件 / openid / unionid /
+# 会话 refreshToken / 幂等键 ……），不验证这些注入的话，
+# 「扩面」这一层同样可能是恒过的。
 #
 # 流程：
 #   0. 正向基线：干净副本上必须 0 不一致、退出码 0；
@@ -154,6 +164,14 @@ run_case "error-semantics-conflict-mapping-removed" "MISSING_CONFLICT_MAPPING"
 run_case "error-semantics-new-unique-column" "UNIQUE_COLUMN_NOT_REVIEWED"
 # 代码改了、API-SPEC 的口径没改
 run_case "error-semantics-doc-row-removed" "ERROR_SEMANTICS_UNDOCUMENTED"
+# 用户侧：报名撞唯一键的处置被删掉（同样的缺陷，用户侧此前没人核过）
+run_case "error-semantics-user-conflict-mapping-removed" "MISSING_CONFLICT_MAPPING"
+# 用户侧：users 上新增唯一列却没人登记
+run_case "error-semantics-user-unique-key-unregistered" "UNIQUE_COLUMN_NOT_REVIEWED"
+# 用户侧：新增复合唯一索引却没人登记
+run_case "error-semantics-composite-unique-key-unregistered" "UNIQUE_COLUMN_NOT_REVIEWED"
+# 用户侧：口径改了但 API-SPEC 没改
+run_case "error-semantics-user-doc-row-removed" "ERROR_SEMANTICS_UNDOCUMENTED"
 
 # --- 2. 清理 ---------------------------------------------------------------
 log "[2/2] 清理临时副本……"
@@ -164,5 +182,5 @@ if [ "$FAILED" -ne 0 ]; then
   die "错误语义对账校验器反向验证失败 ❌"
 fi
 
-log "=== 反向验证通过 ✅（3 类「错误语义失配」缺陷全部被抓出，校验器非恒过）==="
+log "=== 反向验证通过 ✅（7 类「错误语义失配」缺陷全部被抓出，校验器非恒过）==="
 log "错误语义对账校验器反向验证通过 ✅"

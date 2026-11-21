@@ -42,6 +42,10 @@
  *   error-semantics-conflict-mapping-removed → 错误语义对账（唯一键冲突被改回 500）
  *   error-semantics-new-unique-column     → 错误语义对账（新增唯一列却没登记失败语义）
  *   error-semantics-doc-row-removed        → 错误语义对账（口径改了但文档没改）
+ *   error-semantics-user-conflict-mapping-removed      → 用户侧：报名撞键的处置被删掉
+ *   error-semantics-user-unique-key-unregistered       → 用户侧：新增唯一列却没登记
+ *   error-semantics-composite-unique-key-unregistered  → 用户侧：新增**复合**唯一索引却没登记
+ *   error-semantics-user-doc-row-removed              → 用户侧：口径改了但文档没改
  */
 
 import fs from 'node:fs';
@@ -625,6 +629,66 @@ export class InjectedSafeUpsertService {
       line.includes('`POST /admin/articles/categories`') && line.includes('409'),
     );
     if (index < 0) throw new Error('注入失败：API-SPEC 里找不到分类 slug 冲突那一行');
+    lines.splice(index, 1);
+    writeText(file, lines.join('\n'));
+  },
+
+  /*
+   * 错误语义对账（用户侧）：把「活动报名撞唯一键 → 409」的处置删掉 ——
+   * 撞键会重新冒泡成 500（用户侧与管理端是同一类缺陷）。
+   * 期望：MISSING_CONFLICT_MAPPING 点名 event_registrations。
+   */
+  'error-semantics-user-conflict-mapping-removed'() {
+    const file = path.join(copyRoot, 'apps/api/src/modules/events/events.service.ts');
+    replaceOnce(
+      file,
+      /        if \(isDuplicateKeyError\(error\)\) \{\n          throw new ConflictException\('报名信息冲突，请重试'\);\n        \}\n/,
+      '        if (isDuplicateKeyError(error)) {\n          throw error;\n        }\n',
+    );
+  },
+
+  /*
+   * 错误语义对账（用户侧）：给 `users` 加一个**没人登记过**的唯一列 ——
+   * 「撞了返回什么」没人想过，正是缺陷 #190 的土壤（用户侧同样适用）。
+   * 期望：UNIQUE_COLUMN_NOT_REVIEWED 点名 users.nickname。
+   */
+  'error-semantics-user-unique-key-unregistered'() {
+    const file = path.join(copyRoot, 'apps/api/src/database/entities/user.entity.ts');
+    replaceOnce(
+      file,
+      /@Column\(\{ name: 'nickname', type: 'varchar', length: 64, nullable: false \}\)/,
+      "@Column({ name: 'nickname', type: 'varchar', length: 64, nullable: false, unique: true })",
+    );
+  },
+
+  /*
+   * 错误语义对账（用户侧）：给 `contact_share_grants` 加一个**复合**唯一索引 ——
+   * 复合唯一键（类级 `@Index(..., { unique: true })`）此前不在对账范围内，
+   * 用户侧几乎所有唯一键都是这种形态。
+   * 期望：UNIQUE_COLUMN_NOT_REVIEWED 点名 contact_share_grants.pair_id,user_id 之外的列。
+   */
+  'error-semantics-composite-unique-key-unregistered'() {
+    const file = path.join(copyRoot, 'apps/api/src/database/entities/connection.entity.ts');
+    replaceOnce(
+      file,
+      /@Index\('uk_contact_grant', \['pairId', 'userId'\], \{ unique: true \}\)/,
+      "@Index('uk_contact_grant', ['pairId', 'userId'], { unique: true })\n"
+        + "@Index('uk_contact_grant_allow', ['pairId', 'allow'], { unique: true })",
+    );
+  },
+
+  /*
+   * 错误语义对账（用户侧）：把 API-SPEC 里「活动重复报名 → 409」那一行删掉 ——
+   * 代码改了、文档没改，等于对外契约悄悄变了。
+   * 期望：ERROR_SEMANTICS_UNDOCUMENTED 点名 POST /events/:id/registrations。
+   */
+  'error-semantics-user-doc-row-removed'() {
+    const file = path.join(copyRoot, 'docs/API-SPEC.md');
+    const lines = readText(file).split('\n');
+    const index = lines.findIndex((line) =>
+      line.includes('`POST /events/:id/registrations`') && line.includes('409'),
+    );
+    if (index < 0) throw new Error('注入失败：API-SPEC 里找不到活动重复报名那一行');
     lines.splice(index, 1);
     writeText(file, lines.join('\n'));
   },

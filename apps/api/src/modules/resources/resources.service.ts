@@ -9,6 +9,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, DataSource, EntityManager, In, Repository } from 'typeorm';
 import { paginate } from '../../common/dto/pagination.dto';
 import { groupBy } from '../../common/utils/group-by';
+import { isDuplicateKeyError } from '../../common/utils/duplicate-key';
 import { toBodyExcerpt } from '../../common/utils/excerpt';
 import type { PageResult } from '../../common/dto/pagination.dto';
 import {
@@ -261,9 +262,17 @@ export class ResourcesService {
       : this.attachments;
     await attachments.delete({ postId });
     if (!mediaIds.length) return;
-    await attachments.save(
-      mediaIds.map((mediaId) => attachments.create({ postId, mediaId })),
-    );
+    try {
+      await attachments.save(
+        mediaIds.map((mediaId) => attachments.create({ postId, mediaId })),
+      );
+    } catch (error) {
+      // ⚠️ `resource_post_attachments` 有唯一索引 `uk_resource_post_attachment (post_id, media_id)`：
+      //   同一份附件被挂两次时撞唯一键 —— 这是**冲突**，必须落到 409，
+      //   绝不能冒泡成 500（客户端会把它当成「服务端故障」）。
+      if (!isDuplicateKeyError(error)) throw error;
+      throw new ConflictException('附件重复，请检查后再提交');
+    }
   }
 
   async submit(id: number, authorId: number): Promise<ResourceView> {

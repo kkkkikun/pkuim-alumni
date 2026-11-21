@@ -272,6 +272,42 @@
   对账口径与守护脚本见 `infra/scripts/check-error-semantics.mjs`，
   用例见 `apps/api/test/integration/admin-write-error-semantics.e2e-spec.ts`。
 
+### 用户侧写操作的错误语义（第九轮）
+
+用户侧（校友本人）的写端点此前**没有**逐条核过「撞唯一键时返回什么」——
+这一轮把口径补齐，与管理端**同一套**：`400` 参数 / `404` 不存在 / `409` 冲突，
+**数据库异常不得直接抛成 500**（那会被客户端当成「服务端故障」）。
+
+| 情形 | HTTP | 业务 `code` |
+|---|---|---|
+| `POST /auth/mock/login`、`POST /auth/wechat/login` 同一 `openid` 并发首登（重试后仍冲突） | **409** | `CONFLICT` |
+| `POST /auth/mock/login`、`POST /auth/wechat/login` 同一 `unionid` 已绑定另一个账号 | **409** | `CONFLICT` |
+| `POST /auth/refresh` 会话令牌哈希撞键（重签后仍冲突） | **409** | `CONFLICT` |
+| `PATCH /me/profile`、`PATCH /me/privacy` 并发建档 → **幂等**读回既有档案；读不回才算冲突 | **200 / 409** | 幂等 / `CONFLICT` |
+| `PUT /me/contacts`、`PATCH /me/contacts` 并发建联系方式行 → **幂等**读回既有行；读不回才算冲突 | **200 / 409** | 幂等 / `CONFLICT` |
+| `POST /connections/requests` 同一对用户的 pending 申请已存在 → **幂等**返回既有申请（`idempotent:true`） | **200** | 幂等 |
+| `POST /connections/requests` 撞唯一键且读不到既有申请（真冲突） | **409** | `CONFLICT` |
+| `POST /connections/requests/:id/accept` 并发接受同一份申请 | **200** | 幂等（读回既有连接关系） |
+| `PUT /connections/:id/contact-grant` 并发授权同一对连接 → **幂等**更新既有授权行 | **200** | 幂等 |
+| `PUT /connections/:id/contact-grant` 撞唯一键且读不到既有授权行（真冲突） | **409** | `CONFLICT` |
+| `POST /events/:id/registrations` 同一活动重复报名（唯一索引冲突） | **409** | `CONFLICT` |
+| `POST /resources`、`PATCH /resources/:id` 同一份附件挂两次（唯一索引冲突） | **409** | `CONFLICT` |
+| `POST /alumni/verification`、`PUT /alumni/verification/:id/resubmit` 同一份证明材料挂两次（唯一索引冲突） | **409** | `CONFLICT` |
+| `POST /connections/requests`、`POST /resources` 等带 `Idempotency-Key` 的写请求，同一个键被并发占用 | **409** | `IDEMPOTENCY_CONFLICT` |
+
+- **幂等优先于报错**：同一个动作重复提交**不是错误** ——
+  连接申请返回既有申请（`idempotent:true`）、接受申请读回既有连接关系、
+  联系方式授权更新既有授权行。
+  只有「连既有行都读不到」时才是**真冲突**，此时才给 409。
+- ⚠️ **唯一键冲突必须是 409，不能是 500**（与缺陷 #190 同一口径）：
+  用户侧此前把 `ER_DUP_ENTRY` 直接冒泡成 500，用户看到的是「服务器内部错误」，
+  而真实原因只是「你已经报名过了」「这个微信账号已绑定另一个账号」。
+- **登记与对账**：唯一键登记表（`infra/scripts/check-error-semantics.mjs` 里的
+  `UNIQUE_KEY_REGISTRY`）是「已对账」的唯一事实来源 ——
+  脚本会扫**全部实体文件**，把每个唯一键（单列唯一、复合唯一、主键自然键）
+  都算出来，登记表里少一条就报错；每条还必须写清「撞键时返回什么、在哪处置」。
+- 用例见 `apps/api/test/integration/user-write-error-semantics.e2e-spec.ts`。
+
 ## 12. 系统 `/system`
 
 | 方法 | 路径 | 说明 |

@@ -423,46 +423,56 @@ node infra/scripts/miniprogram-compile-check.mjs apps/miniprogram
    即「校验器恒过」这一层从未被自动验证过。
    新增的错误语义校验器 `check-error-semantics.mjs` 同样带反向验证
    （`check-error-semantics-selftest.sh`，3 类缺陷注入 + 元自检）。
-10. **备份必须真的能恢复**：`backup-restore-drill.sh` 把恢复演练变成常规检查 ——
+   **第九轮起**：错误语义校验器扩到**用户侧**写端点 ——
+   唯一键登记表从 3 条扩到 **21 条**（扫**全部实体文件**：单列唯一 / 复合唯一 / 主键自然键），
+   判定必须落到「**捕获重复键的那一段 catch 块**」本身（否则同一个方法里别的冲突分支
+   会让校验器恒过），并且**幂等也是一等口径**（重复提交不是错误）；
+   反向验证从 3 类扩到 **7 类**缺陷注入。
+10. **多实例的「撤权立刻生效」可以自己演练**：`infra/scripts/invalidation-bus-drill.mjs`
+    起**两个 API 进程 + 一个 Redis**（外加一个总线整条关闭的**对照实例**），
+    验证「实例 A 撤权 → 实例 B 的缓存立刻失效」在**跨进程**下真的成立
+    （本机实测 **7~8 ms** 内已 403，对照实例仍 200）。
+    这一条此前只能靠部署环境人工核对。
+11. **备份必须真的能恢复**：`backup-restore-drill.sh` 把恢复演练变成常规检查 ——
    全部表逐表行数 + 列结构/外键/索引/迁移指纹比对，演练库自动清理，线上库全程只读。
-11. **契约是唯一事实来源，且集合级比对只做一处**：`check-contract-routes.mjs` 负责
+12. **契约是唯一事实来源，且集合级比对只做一处**：`check-contract-routes.mjs` 负责
     「契约 ApiPaths ↔ 服务端路由」双向比对（error 级，排除基础设施路径）；
     `check-client-paths.mjs` 专注镜像一致性与客户端真实调用点。两处不重复实现。
-12. **幂等键按用户隔离**：幂等 scope 含用户维度，匿名请求不启用幂等 ——
+13. **幂等键按用户隔离**：幂等 scope 含用户维度，匿名请求不启用幂等 ——
     否则相同幂等键会把**他人的响应回放**给请求方（曾泄露联系方式明文与访问令牌）。
-13. **数据必须自洽**：`infra/scripts/check-data-integrity.sh` 把设计约束变成 32 项可执行检查
+14. **数据必须自洽**：`infra/scripts/check-data-integrity.sh` 把设计约束变成 32 项可执行检查
     （字典外键、联系方式只以密文存储、认证状态机与流程记录一致、唯一性、外键存在性）。
     数据库层的数据不满足设计约束时，回归会直接失败 —— 种子数据也必须自洽。
-14. **管理端路由统一在 `/admin` 命名空间**：公开只读接口（`GET /articles/categories` 等）
+15. **管理端路由统一在 `/admin` 命名空间**：公开只读接口（`GET /articles/categories` 等）
     与管理端写接口不得共用同一路径前缀；契约里管理端路径一律写在 `ApiPaths` 的
     Admin 区段。一致性校验只能保证「没有漂移」，**路径语义正确性要单独兜底**。
-15. **私有资源必须校验归属**：文件、联系方式等私密数据，读取地址与写入入口都要比对归属；
+16. **私有资源必须校验归属**：文件、联系方式等私密数据，读取地址与写入入口都要比对归属；
     越权一律返回 **404**（不泄露资源是否存在）。端点覆盖必须闭合到 100% ——
     「从来没被调用过」的接口最容易藏着真实缺陷（私有文件横向越权就是这么发现的）。
-16. **路径对不等于结构对**：契约声明了返回类型，服务端就**必须**按该类型返回 ——
+17. **路径对不等于结构对**：契约声明了返回类型，服务端就**必须**按该类型返回 ——
     分页一律 `{ items, meta }`，字段一个都不能少；客户端在传的筛选项，
     服务端必须**真正支持**（否则筛选框只是摆设）。
     `infra/scripts/check-response-shape.mjs` 拿客户端声明的泛型返回类型当标准，
     真实调用服务端逐字段核对，已接入回归链第 12 步。
-17. **「不抛异常」不等于「没问题」**：字段缺失、筛选失效这类缺陷不会报错，
+18. **「不抛异常」不等于「没问题」**：字段缺失、筛选失效这类缺陷不会报错，
     页面照常渲染，只是列是空的。因此除了自动校验，还要有**只读的真实浏览器冒烟**
     （`infra/scripts/admin-ui-smoke.mjs`）。
-18. **客户端发了的，服务端必须真的接住**：查询参数没在 DTO 里声明会被剥掉，
+19. **客户端发了的，服务端必须真的接住**：查询参数没在 DTO 里声明会被剥掉，
     请求体字段没在 schema 里会被 `whitelist` 剥掉 —— 两种都**静默丢弃**，
     前者让筛选框变成摆设，后者让数据「保存成功却没存进去」。
     `infra/scripts/check-request-contract.mjs` 把「客户端发了什么」与
     「服务端接了什么」逐个对账，已接入回归链第 13 步。
-19. **契约的镜像必须同步**：小程序无法在运行时引用 `@nmg/contracts`，
+20. **契约的镜像必须同步**：小程序无法在运行时引用 `@nmg/contracts`，
     只能手工镜像一份类型；镜像一旦滞后就会静默分叉
     （小程序编译照过、运行时字段 undefined）。
     `infra/scripts/check-contract-mirror.mjs` 逐类型比对，漂移即失败。
-20. **角色权限矩阵只有一份事实**：后台「角色 × 权限矩阵」页面把角色与权限的
+21. **角色权限矩阵只有一份事实**：后台「角色 × 权限矩阵」页面把角色与权限的
     对应关系**硬编码**在前端，而服务端真正生效的是 `role_permissions` 表 ——
     两边不同步，管理员看到的矩阵就是错的。
     `infra/scripts/check-rbac-matrix.mjs` 对账
     契约 ⟷ 种子 ⟷ 前端矩阵 ⟷ 服务端端点实际要求。
 
-21. **服务端承诺的参数必须真的用上**：DTO 里声明了筛选条件、Swagger 如实对外公布，
+22. **服务端承诺的参数必须真的用上**：DTO 里声明了筛选条件、Swagger 如实对外公布，
     但 handler 只透传了一部分 → 其余参数被**静默丢弃**：请求照发、状态码 200、
     结果不受筛选影响，筛选框看起来能用、实际是摆设。
     响应结构校验（看返回了什么）与请求契约对账（看客户端发了什么）**都查不出这一类**，
@@ -470,12 +480,12 @@ node infra/scripts/miniprogram-compile-check.mjs apps/miniprogram
     静态追踪 `query.<prop>` / 整体透传到 service 的链路，已接入回归链第 14 步。
     同时：**公开路径空间只放公开接口** —— 管理端能力收敛在 `/admin` 命名空间
     （需求基线 §4.3），管理端校友列表统一走 `GET /admin/alumni`。
-22. **重建容器后必须 reload nginx**：nginx 的 `upstream` 在加载配置时一次性把容器名
+23. **重建容器后必须 reload nginx**：nginx 的 `upstream` 在加载配置时一次性把容器名
     解析成 IP 并缓存；api / admin-web 容器重建后 IP 会变，不 reload 就会出现
     **502**（而 api 直连是好的，排查时极易误判成「服务挂了」）。
     `infra/scripts/deploy.sh` 已内置这一步；手工 `docker compose up -d` 重建时
     必须补一次 `docker compose exec -T nginx nginx -s reload`。
-23. **声明出来的字段必须真的被用上**（查询参数与请求体字段同等对待）：
+24. **声明出来的字段必须真的被用上**（查询参数与请求体字段同等对待）：
     DTO 声明了、Swagger 公布了、客户端照发，服务端却没接 ——
     请求照发、状态码 200、结果不受影响（筛选框是摆设）或数据没存进去
     （用户以为保存成功）。`infra/scripts/check-swagger-param-usage.mjs`
@@ -488,7 +498,7 @@ node infra/scripts/miniprogram-compile-check.mjs apps/miniprogram
       静默强转成**空数组**（= 清空数据），比 500 更糟；
     - 附件 / 媒体类字段落库前必须校验**归属**（必须是本人上传），
       否则就是跨用户私有文件泄露的口子。
-24. **请求体必须用 DTO，且不能依赖隐式类型转换**：
+25. **请求体必须用 DTO，且不能依赖隐式类型转换**：
     - `Record<string, unknown>` 或普通 `interface` 作为请求体 → 运行时 metatype 是
       `Object`，**ValidationPipe 会完全跳过校验**（脏数据入库、非法值变 500）；
       一律用带 `class-validator` 装饰器的 **DTO 类**，字段与契约一一对应；
@@ -503,11 +513,11 @@ node infra/scripts/miniprogram-compile-check.mjs apps/miniprogram
     - 契约与实现冲突时**以实现为准修正契约**：契约里留着服务端从不接受的字段
       （如 `publishedAt` —— 发布时间已改为服务端按 `status` 推导），
       客户端照契约填了会被 whitelist 剥掉，接口照样 200 但「看起来设了、其实没生效」。
-25. **管理端的写操作必须留下审计痕迹**：让管理员填「原因」就必须真的落库 ——
+26. **管理端的写操作必须留下审计痕迹**：让管理员填「原因」就必须真的落库 ——
     静默丢弃等于让管理员白填，且事后无从追溯。
     账号状态变更写 `user.status.change`（带 `from / to / reason`），
     管理员新建 / 改角色写 `admin.user.create` / `admin.user.update`。
-26. **校验器本身也会有盲点，必须能反向验证**：
+27. **校验器本身也会有盲点，必须能反向验证**：
     `check-swagger-param-usage.mjs` 一度把
     `this.setUserStatus(actor, id, body)`（**控制器自己的私有方法**）
     追丢，把合规实现误报成缺陷；解析器还会在遇到多行泛型返回类型
@@ -516,7 +526,7 @@ node infra/scripts/miniprogram-compile-check.mjs apps/miniprogram
     （私有方法里删掉字段必须被抓出），自测用例 2 类 → 3 类；
     判定规则改为聚合 **used > unknown > unused** ——
     只要还有一条路径「判不了」，就不能断言「没用」。
-27. **校验器的「提示」也可能是假的，判定条件要逐条自查**：
+28. **校验器的「提示」也可能是假的，判定条件要逐条自查**：
     响应结构校验器的「元素结构从未被校验」提示（缺陷 #76 加的）
     曾把判定条件写反 —— `if (!value.length) return;`，
     于是**数组非空时反而登记盲点**，而真正全空的情况永远不报：
@@ -529,12 +539,12 @@ node infra/scripts/miniprogram-compile-check.mjs apps/miniprogram
     - 线上业务库没有的数据（没人上传附件、没人报名活动），
       元素结构就永远校验不到 —— 用**合成夹具**把这类结构补上，
       并接进回归链，让它们每轮都被核对。
-28. **探针不要用 mock 登录建新用户**：mock 登录会**忽略传入的 openid**，
+29. **探针不要用 mock 登录建新用户**：mock 登录会**忽略传入的 openid**，
     随机生成一个并**新建用户** —— 一次探针就把业务库 `users` 计数 +1，
     破坏「业务库不被污染」的不变量（本轮实测踩过一次，已清理恢复）。
     正确做法：复用**已存在**的种子账号换令牌
     （回归链用的是 `mock_k6_alumni_001`），需要新数据就在**测试库**里造。
-29. **「写了 DTO」不等于「会被校验」**：Nest 的 `ValidationPipe` 只校验
+30. **「写了 DTO」不等于「会被校验」**：Nest 的 `ValidationPipe` 只校验
     **运行时 metatype 是「带 class-validator 装饰器的类」**的请求体。
     写成 `Record<string, unknown>` / 普通 `interface` / 内联对象字面量 / `any`
     时，运行时 metatype 是 `Object` → **整个请求体被静默跳过**：
@@ -543,7 +553,7 @@ node infra/scripts/miniprogram-compile-check.mjs apps/miniprogram
     媒体登记 #88、活动报名 #89 仍漏在网外），
     现在由 `infra/scripts/check-request-dto.mjs` 自动对账
     （回归链第 15 步，自带 4 类注入用例的反向验证）。
-30. **TS 的类型标注在运行时没有约束力**：写
+31. **TS 的类型标注在运行时没有约束力**：写
     `status?: 'pending' | 'approved'` 只是给编辑器看的，
     运行时它就是任意字符串 —— 请求体校验、查询参数校验**都不会**因此生效。
     状态类字段（status / action / type / stage / visibility / source / level /
@@ -558,7 +568,7 @@ node infra/scripts/miniprogram-compile-check.mjs apps/miniprogram
     ⚠️ `@Query()` 同理：写成交叉类型
     （`PaginationQueryDto & { keyword?: string }`）会让 metatype 退化成 `Object`
     → 参数不校验也不转换（`page` 变 NaN → 列表接口 500）。
-31. **队列任务的 `jobId` 是去重键，不是标签**：BullMQ 对**相同 `jobId`** 的 `add`
+32. **队列任务的 `jobId` 是去重键，不是标签**：BullMQ 对**相同 `jobId`** 的 `add`
     会**直接忽略**（第二次 `add` 什么都没发生，不报错、不计数）。
     如果 `jobId` 只由业务 ID 组成（`outbox-${id}`），那么「失败 → 重投」就会
     被去重**吞掉** —— 该通知**永远**投不出去，而系统看起来一切正常。
@@ -573,7 +583,7 @@ node infra/scripts/miniprogram-compile-check.mjs apps/miniprogram
     现在由回归链**第 17 步**「Worker 投递链路自检」在容器内用
     **测试库 + 测试 Redis + 独立队列**真实跑一遍，并内置**反向验证**
     （复刻修复前的实现跑同一场景，确认旧实现确实会静默失败）。
-32. **注释声称的事务边界，必须与代码一致**：Outbox 模式的全部价值在于
+33. **注释声称的事务边界，必须与代码一致**：Outbox 模式的全部价值在于
     「业务写入与 outbox 事件**同事务**」——
     `docs/top.md` §597、`docs/CONCURRENCY-DESIGN.md` §67、`docs/ARCHITECTURE.md` §58
     三处都这么要求。修复前 `NotificationService.push()` 的注释写着
@@ -591,7 +601,7 @@ node infra/scripts/miniprogram-compile-check.mjs apps/miniprogram
     同样地，「失败必须留痕」也要落到字段上：
     `notification_deliveries` 的 `status='failed'` / `attempts` / `last_error`
     三个字段修复前**从未被写过**，失败被彻底吞掉。
-33. **幂等键必须能被释放，也必须有有效期**：幂等键的用途是「让重试安全」，
+34. **幂等键必须能被释放，也必须有有效期**：幂等键的用途是「让重试安全」，
     但一个只覆盖「成功之后」的测试会让你以为它已经做到了：
     - **失败之后**：拦截器先占位（`in_progress`），只在成功时才改成 `completed`。
       handler 一旦抛错（参数校验失败、乐观锁冲突、名额已满……），
@@ -606,7 +616,7 @@ node infra/scripts/miniprogram-compile-check.mjs apps/miniprogram
     - **错误码**：`ErrorCode.IDEMPOTENCY_CONFLICT` 在契约里写着，
       实现却抛普通 `ConflictException` → 过滤器映射成通用 `CONFLICT`
       → 这个错误码**从未被返回过**，客户端按契约判断永远匹配不上。
-34. **可读 ≠ 可写：签名地址要按「能力」分别授权**。
+35. **可读 ≠ 可写：签名地址要按「能力」分别授权**。
     同一个「取地址」接口可能返回两种**能力完全不同**的地址：
     - `intent=download` → MinIO 预签名 GET 地址 —— **读**；
     - `intent=upload` → `POST /uploads/:id/content?token=…` —— **写**（能覆盖那个对象）。
@@ -621,7 +631,7 @@ node infra/scripts/miniprogram-compile-check.mjs apps/miniprogram
     - 修这类缺陷时，**对照用例必须同时写**：
       「public 资产**下载**地址仍应对所有人开放」——
       否则很容易把公开能力一起关掉，变成另一个缺陷。
-35. **能被搜到的字段，必须是看得到的字段**。
+36. **能被搜到的字段，必须是看得到的字段**。
     隐私开关最容易只在**一半**的路径上生效：
     响应组装时按开关裁剪（读侧 ✓），检索条件里却直接 `LIKE` 匹配同一列（检索侧 ✗）——
     用户明明关了「公开毕业院系」，别人照样能在通讯录里搜到他，
@@ -632,7 +642,7 @@ node infra/scripts/miniprogram-compile-check.mjs apps/miniprogram
     - 开关覆盖不到的字段，要么补上开关（如 `showDirection` 此前**没有任何入口能改**），
       要么就别让它出现在响应里 —— 契约的 `DirectoryEntry` 里根本没有 `intro`，
       拿它当检索键等于一个「简介内容存在性」的预言机。
-36. **密钥不能进 Docker 构建上下文**。没有 `.dockerignore` 时，
+37. **密钥不能进 Docker 构建上下文**。没有 `.dockerignore` 时，
     `docker build` 会把**整个仓库**发给 Docker 守护进程 ——
     包括 `.env.prod`（数据库口令 / `JWT_SECRET` / 对象存储凭据）、`.git`，
     以及本机 `node_modules`（pnpm 符号链接，拷进镜像会变成指向宿主机的悬空软链）。
@@ -641,7 +651,7 @@ node infra/scripts/miniprogram-compile-check.mjs apps/miniprogram
     另一条同样要记住：**`.dockerignore` 变了，BuildKit 的 `COPY` 层缓存就会失效**，
     `pnpm install` 需要重新访问 npm registry —— 也就是说**构建依赖 registry 可达**，
     依赖缓存只加速、不保证离线可构建。
-37. **契约里的错误码必须真的能被返回**。契约的 `ErrorCode` 是客户端判断的唯一事实来源，
+38. **契约里的错误码必须真的能被返回**。契约的 `ErrorCode` 是客户端判断的唯一事实来源，
     但只要服务端**从不返回**某个码，它就是**死码** ——
     客户端按契约写的 `code === 'XXX'` 判断**永远走不到**，而且**没有任何报错**：
     - `VERIFICATION_REQUIRED`：未认证用户与无权限用户拿到**同一个** `FORBIDDEN`
@@ -654,7 +664,7 @@ node infra/scripts/miniprogram-compile-check.mjs apps/miniprogram
     现在由回归链**第 18 步**「错误码对账」守住：
     契约里的每一项都必须在服务端源码里找得到引用，否则报 `DEAD_ERROR_CODE`；
     反过来服务端会返回而契约里没有的码，报 `CONTRACT_MISSING_CODE`。
-38. **管理端的写路径同样要有事务、正确的状态码与不变量**。
+39. **管理端的写路径同样要有事务、正确的状态码与不变量**。
     管理后台「管理员账号」是这个仓库里最容易被忽略的写路径 ——
     它的每个端点都很短，于是谁也不会想到「短代码也会出事」：
     - **登录名重复**原本以 **500** 抛给前端 —— 唯一索引冲突是**客户端可修正**的输入问题，
@@ -673,7 +683,7 @@ node infra/scripts/miniprogram-compile-check.mjs apps/miniprogram
     现在由 `admin-account-management.e2e-spec.ts`（12 例，含 6 条对照用例防误伤）
     与「注入故障 → 断言整体回滚」的原子性用例守住。
 
-39. **枚举校验必须知道「字段对应的是哪张表」**。
+40. **枚举校验必须知道「字段对应的是哪张表」**。
     只要求「DTO 的取值被**某个**数据库 ENUM 包含」是不够的 ——
     `['active','disabled','locked']` 恰好被 `users.status` 那个 ENUM 包含，
     于是一个**只存在于 `admin_users`** 的非法取值也能蒙混过关
@@ -682,7 +692,7 @@ node infra/scripts/miniprogram-compile-check.mjs apps/miniprogram
     取值必须被**该列**的 ENUM 包含；契约侧还要求**该列的每个取值都被声明**，
     并支持解析**具名类型别名**（`UserStatus` 这类别名此前完全没被解析过）。
 
-40. **多步写必须同事务：故障注入是这类缺陷唯一的自动防线**。
+41. **多步写必须同事务：故障注入是这类缺陷唯一的自动防线**。
     「一个业务动作由多次写组成」在代码里看不出破绽 ——
     认证补交材料（改状态 → 挂材料 → 改用户阶段）、个人资料保存（资料 → 联系方式）、
     管理端改账号（资料 → 角色 → 审计日志）、通知投递（业务 → 通知），
@@ -697,7 +707,7 @@ node infra/scripts/miniprogram-compile-check.mjs apps/miniprogram
     同理，**计数这类与业务数据无关的字段不能整行写回** ——
     「读出整行 → 计数 +1 → 整行 save」会让一次浏览把并发中的管理端修改覆盖回旧值。
 
-41. **计数类不变量：条件更新必须看影响行数**。
+42. **计数类不变量：条件更新必须看影响行数**。
     「用条件更新做状态迁移」只做了一半——**更新条件对了，但没人看它影响了多少行**。
     活动取消报名就是典型：
     `UPDATE … WHERE status='registered'` 若影响 **0 行**（说明这条报名**已被别人取消**），
@@ -708,7 +718,7 @@ node infra/scripts/miniprogram-compile-check.mjs apps/miniprogram
     并把这类不变量写进数据完整性校验器（业务库只读、每日可跑），
     让它变成**永久约束**而不是一次性的用例。
 
-42. **默认值不等于正确：HTTP 状态码也是要审的**。
+43. **默认值不等于正确：HTTP 状态码也是要审的**。
     Nest 对 `POST` 的默认是 **201 Created**，而 201 的含义是
     「本次请求**创建了**新资源」且**应当**带 `Location` 头。
     仓库里有一批 POST 端点**根本不创建任何资源**（标记已读、全部已读、
@@ -722,7 +732,7 @@ node infra/scripts/miniprogram-compile-check.mjs apps/miniprogram
     规矩：**写操作返回什么状态码，要按「它到底做了什么」来定**，
     并且「兼容别名」必须与主路径**逐字节一致**。
 
-43. **改了服务端的语义，就得回头扫既有测试的断言**。
+44. **改了服务端的语义，就得回头扫既有测试的断言**。
     #126 把 7 个端点从 201 改成 200 之后，`notifications.e2e-spec.ts`
     里的断言**当场就失效了**，但没人会想到去翻那个文件 ——
     改服务端的语义，**测试文件通常不在改动清单里**。
@@ -735,7 +745,7 @@ node infra/scripts/miniprogram-compile-check.mjs apps/miniprogram
     判定要**分方向**：服务端 200 而测试断言 201 → **失败**（语义变了、测试没跟上）；
     服务端 201 而测试断言 200 → 只**提示**（常见于「幂等回放返回 200」）。
 
-44. **「单独跑绿、整条链跑红」通常不是业务逻辑，是隔离性**。
+45. **「单独跑绿、整条链跑红」通常不是业务逻辑，是隔离性**。
     回归链偶发报 `Table definition has changed` 与
     `Deadlock found when trying to get lock`，单独跑那个套件却是绿的。
     机制是**一个连接带着未提交事务回到池里**：
@@ -750,7 +760,7 @@ node infra/scripts/miniprogram-compile-check.mjs apps/miniprogram
     注意：让污染**无处藏身** ≠ 已修好泄漏点 ——
     两者都要如实说。
 
-45. **校验必须先于写入，多步写必须同事务 —— 这两条要一起看**。
+46. **校验必须先于写入，多步写必须同事务 —— 这两条要一起看**。
     资源「修改」这条链同时踩了两个坑：
     「附件归属校验」排在**内容写入之后**（#131），
     「内容写入」与「附件整体替换」**没有事务**（#132）。
@@ -765,7 +775,7 @@ node infra/scripts/miniprogram-compile-check.mjs apps/miniprogram
     故障注入打在原型上会命中**所有**仓储，
     不按实体类型精确拦截，用例就会「假通过」。
 
-46. **审计日志不是「顺便记一下」，它和业务写同生共死**。
+47. **审计日志不是「顺便记一下」，它和业务写同生共死**。
     管理端 11 个写接口都是两步：改业务数据 → 写 `admin_action_logs`。
     修复前两步**各自提交** ——
     审计日志写失败时，业务改动**已经落地**，接口却返回 500，
@@ -779,7 +789,7 @@ node infra/scripts/miniprogram-compile-check.mjs apps/miniprogram
     传了就不是逃逸（否则规则会误报到卡住回归链的程度）；
     而「真逃逸」（不传 manager 的仓储写入）必须**仍然**被抓到，两头都要断言。
 
-47. **校验器自己也会腐朽 —— 注入点必须与代码形状解耦**。
+48. **校验器自己也会腐朽 —— 注入点必须与代码形状解耦**。
     一次重构把「注入用的目标代码」改了写法，
     回归链第 19 步的**反向验证当场挂掉**（注入失配）——
     这提醒我们：反向验证不只是「证明规则不恒过」，
@@ -794,7 +804,7 @@ node infra/scripts/miniprogram-compile-check.mjs apps/miniprogram
         反过来，它若绕过 manager 写入，那次写**不在事务里**，必须点名。
     一句话：**规则和注入点都要按「语义」写，而不是按「当前代码长什么样」写**。
 
-48. **「先查后插」在单线程下永远是对的 —— 只有并发才会撞唯一键**。
+49. **「先查后插」在单线程下永远是对的 —— 只有并发才会撞唯一键**。
     这是本阶段挖出的缺陷 #137：`先 findOne 读，读不到就 INSERT`，
     单线程下「只发生一次写」没问题，**并发**下两个请求都读不到既有行 →
     都去 INSERT → 后到的撞唯一键 → 500。
@@ -805,7 +815,7 @@ node infra/scripts/miniprogram-compile-check.mjs apps/miniprogram
     （都到达 → 都**读完** → 才放行去写）才能让冲突必现。
     这类缺陷单线程用例覆盖不到 → 新增**第 13 层校验**静态兜底。
 
-49. **夹具用 DDL 重置，会把「靠巧合通过的断言」藏起来**。
+50. **夹具用 DDL 重置，会把「靠巧合通过的断言」藏起来**。
     老夹具用 `TRUNCATE` 清库，它**复位了每张表的自增计数器** →
     于是「通知 id」恰好等于「联系申请 id」，
     `expect(outbox.aggregate_id).toBe(String(request.id))` 这条断言
@@ -816,7 +826,7 @@ node infra/scripts/miniprogram-compile-check.mjs apps/miniprogram
     而新写的用例要**自己把两个计数器拉开距离**
     （插一条 id=900000 的占位通知），否则换回 TRUNCATE 就又变成假通过。
 
-50. **DDL 慢到能拖垮整条回归链**。
+51. **DDL 慢到能拖垮整条回归链**。
     这台服务器上 DDL 延迟在 2~30 秒/条剧烈波动
     （`TRUNCATE` 30s、`ALTER COMMENT` 9.4s、`RENAME TABLE` 15s），
     一次重置 25 张表可能要好几分钟。
@@ -824,7 +834,7 @@ node infra/scripts/miniprogram-compile-check.mjs apps/miniprogram
     既免疫 DDL 慢，也不再让其它事务的读视图失效。
     代价是**自增计数器不再复位** —— 副作用要显式记账，别装作没有。
 
-51. **幂等键必须落到「这一次具体的操作」，而不是「这一类接口」**。
+52. **幂等键必须落到「这一次具体的操作」，而不是「这一类接口」**。
     拦截器把 scope 写成 `METHOD:${request.route.path}` —— `route.path` 是**路由模板**
     （`/connections/:id/contact-grant`），于是「同一把钥匙开 17 号和 18 号连接」
     落进**同一个 scope**：第二个请求被判成**回放**，返回 17 号的响应，
@@ -834,7 +844,7 @@ node infra/scripts/miniprogram-compile-check.mjs apps/miniprogram
     顺带一条容易漏的：**scope 列长度要跟着改** —— 实际路径比模板长，
     长路由 + BIGINT id 会超过 `VARCHAR(64)` → `Data too long` → 500。
 
-52. **每次请求都换一把新的幂等键 = 没有幂等**。
+53. **每次请求都换一把新的幂等键 = 没有幂等**。
     管理后台的 axios 拦截器、小程序的请求层都在**每次发请求时现生成**随机钥匙，
     于是「首次其实写成功了、只是响应丢了」的重试被服务端当成**新请求** →
     **重复创建**；服务端那套「同键同体回放」一次都没被真正用到。
@@ -843,7 +853,7 @@ node infra/scripts/miniprogram-compile-check.mjs apps/miniprogram
     **但仍有缺口**：用户**手动重试**是两次独立动作，
     要去重必须由 UI 层「一个动作一把钥匙」—— 这次如实记为设计缺口，没有假装修好。
 
-53. **「本地和测试环境都正常」不等于「结构是一致的」**。
+54. **「本地和测试环境都正常」不等于「结构是一致的」**。
     回归链第 1 步**重建**测试库、第 2 步**跑迁移** → 测试环境**天然不可能漂移**；
     真正会漂移的只有**业务库**，而它恰恰是**最晚**被验证的那一个。
     本轮就撞上了：deploy 的流程是「同步 → 构建 → `up -d` → 健康检查」，
@@ -853,7 +863,7 @@ node infra/scripts/miniprogram-compile-check.mjs apps/miniprogram
     失败就**中止部署**；再加一层对账「代码清单 ⟷ 库里已应用」，
     缺一条就**当场失败**，而不是等到用户踩到。
 
-54. **同一份清单不能抄两遍**。
+55. **同一份清单不能抄两遍**。
     `migrations/index.ts`（应用用）与 `data-source.ts` 里的数组
     （**`migration:run` CLI 用的就是这份**）曾各抄一份类名 ——
     漏加一个，那条迁移就**永远不会被应用**，而且**没有任何报错**
@@ -861,7 +871,7 @@ node infra/scripts/miniprogram-compile-check.mjs apps/miniprogram
     现在 `data-source.ts` 直接 `import { migrations } from './migrations'`，
     清单**只有一份**；再加一条规则「目录里的每个迁移文件都必须登记进清单」防它回退。
 
-55. **「上传成功」不等于「包是好的」**。
+56. **「上传成功」不等于「包是好的」**。
     `ci.preview` / `ci.upload` 会**先联网取项目属性** —— 没有真实 AppID 与上传密钥时，
     它在**编译完成前就失败**。于是「编译这一步有没有问题」从来没人看见过：
     我们一度把「假密钥下只报 empty content」记成了「工程编译成功」，
@@ -869,7 +879,7 @@ node infra/scripts/miniprogram-compile-check.mjs apps/miniprogram
     处置：另做一份**不联网**的离线编译自检（给 `utils/sign` 与 `utils/request` 本地打桩），
     并把「源模块 1:1 入包」「产物无残留 TS 语法」当成硬断言。
 
-56. **编译器的「优化」可能比 bug 更危险**。
+57. **编译器的「优化」可能比 bug 更危险**。
     `project.config.json` 里 `ignoreUploadUnusedFiles: true`（工具的默认选项）会让微信编译器
     剪掉「看起来没被引用」的文件 —— 而它**剪错了**：被剪掉的 11 个模块**全是必需的**
     （`services/index.js` 是**所有页面** `require` 的桶文件，`config/index.js` 被请求层引用）。
@@ -878,20 +888,20 @@ node infra/scripts/miniprogram-compile-check.mjs apps/miniprogram
     对照实验：剪枝开 → 产物 70 个 .js（缺 11）；剪枝关 → 81 个（与源文件 1:1）。
     教训：**交付物要当面对账，不能相信命令的退出码**。
 
-57. **拿不准的东西不能进交付物**。
+58. **拿不准的东西不能进交付物**。
     演示数据原本用 `import data from './data.json'`。
     微信小程序运行时**是否支持 require JSON 模块**我无法先试一次再决定（没有开发者工具/真机），
     于是改成**编译期内联**的 TS 模块（JSON 是对象字面量的子集）→ 运行时零风险；
     并加一条规则「源码里不得出现运行时 JSON 模块引用」。
     实现要点：**先剥注释再判定** —— 第一版把注释里写的 `require('*.json')` 当成了真引用。
 
-58. **「只有网络失败才回退」是一条必须守住的边界**。
+59. **「只有网络失败才回退」是一条必须守住的边界**。
     小程序在 API 不可达时回退到离线演示数据，但**只有网络层失败**才回退：
     HTTP 4xx/5xx 是服务端**真实的业务响应**，用假数据盖住它 =
     把真实缺陷藏起来。这类「回退边界」很容易在后续改动里被无意放宽，
     所以它被写成校验器的一条硬规则（`DEMO_FALLBACK_UNSAFE`）。
 
-59. **守护进程要连子进程一起收**。
+60. **守护进程要连子进程一起收**。
     隧道守护收到 TERM 后只杀父 bash、不杀 ssh 子进程 → 远端监听端口**一直被占**；
     更坑的是：子进程被杀后 `while true` 又把它拉起来 → 端口永远腾不出来。
     处置：trap 里**收尾并退出循环**（`on_stop() { cleanup; exit 0; }`），

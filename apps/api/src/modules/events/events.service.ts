@@ -5,9 +5,10 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Brackets, DataSource, EntityManager, In, QueryFailedError, Repository } from 'typeorm';
+import { Brackets, DataSource, EntityManager, In, Repository } from 'typeorm';
 import { paginate } from '../../common/dto/pagination.dto';
 import type { PageResult } from '../../common/dto/pagination.dto';
+import { isDuplicateKeyError } from '../../common/utils/duplicate-key';
 import { Event, EventRegistration } from '../../database/entities/event.entity';
 import { User } from '../../database/entities/user.entity';
 import { NotificationService } from '../notifications/notification.service';
@@ -142,7 +143,11 @@ export class EventsService {
         await this.notifyRegistered(manager, eventId, userId, registration.id);
         return { idempotent: false, registration, event: null };
       } catch (error) {
-        if (error instanceof QueryFailedError) {
+        // ⚠️ `event_registrations` 有唯一索引 `uk_event_registration (event_id, user_id)`：
+        //   并发报名（同一用户同一活动）时两个请求都会「没找到报名记录」→ 都去 INSERT →
+        //   后到的撞唯一键。这个撞键是**业务冲突**，必须落到 409，
+        //   绝不能冒泡成 500（那会被客户端当成「服务端故障」）。
+        if (isDuplicateKeyError(error)) {
           throw new ConflictException('报名信息冲突，请重试');
         }
         throw error;

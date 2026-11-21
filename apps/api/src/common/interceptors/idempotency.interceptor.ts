@@ -163,7 +163,11 @@ export class IdempotencyInterceptor implements NestInterceptor {
     } catch (error) {
       if (!(error instanceof QueryFailedError)) throw error;
       let existing = await repo.findOne({ where: { scope, idemKey } });
-      if (!existing) throw error;
+      if (!existing) {
+        // ⚠️ 撞了 `uk_idempotency (scope, idem_key)` 却读不到既有记录：
+        //   这是**冲突**，不是「服务端故障」—— 不得把数据库异常原样抛出去（会变成 500）。
+        throw this.idempotencyConflict('幂等键冲突，请重试');
+      }
 
       // ⚠️ 已过有效期（缺陷 #102）：`expires_at` 修复前**只写不读**，
       //    于是「24 小时有效期」形同虚设 —— 过期后仍然回放旧响应，
@@ -185,7 +189,10 @@ export class IdempotencyInterceptor implements NestInterceptor {
           if (!(retryError instanceof QueryFailedError)) throw retryError;
           // 并发：另一个请求刚好抢到 → 按它的状态判定
           existing = await repo.findOne({ where: { scope, idemKey } });
-          if (!existing) throw retryError;
+          if (!existing) {
+            // 同上：读不到既有记录就是**冲突**，不得抛成 500
+            throw this.idempotencyConflict('幂等键冲突，请重试');
+          }
         }
       }
 
