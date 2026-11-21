@@ -39,6 +39,9 @@
  *   concurrent-upsert-unprotected → 并发撞唯一键（先查后插且没有唯一键兜底）
  *   concurrent-upsert-safe-cross-table → 并发撞唯一键（读 A 插 B —— **不得**误报）
  *   swagger-param-multiline-decorator → 声明参数消费（多行装饰器不得被当成字段）
+ *   error-semantics-conflict-mapping-removed → 错误语义对账（唯一键冲突被改回 500）
+ *   error-semantics-new-unique-column     → 错误语义对账（新增唯一列却没登记失败语义）
+ *   error-semantics-doc-row-removed        → 错误语义对账（口径改了但文档没改）
  */
 
 import fs from 'node:fs';
@@ -72,6 +75,15 @@ function replaceOnce(file, pattern, replacement) {
     throw new Error(`注入失败：${file} 中找不到目标模式 ${pattern}`);
   }
   writeText(file, src.replace(pattern, replacement));
+}
+
+/** 替换**所有**匹配（用于「把某一类处置整体改掉」这类注入） */
+function replaceAllText(file, pattern, replacement) {
+  const src = readText(file);
+  if (!pattern.test(src)) {
+    throw new Error(`注入失败：${file} 中找不到目标模式 ${pattern}`);
+  }
+  writeText(file, src.replace(new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`), replacement));
 }
 
 const injectors = {
@@ -575,8 +587,49 @@ export class InjectedSafeUpsertService {
     );
   },
 
-  'multi-step-across-methods'() {
+  /*
+   * 错误语义对账（缺陷 #190）：把「捕获唯一键冲突 → 转 409」改成 500 ——
+   * 这正是缺陷 #190 的原形（slug 重复时数据库异常直接冒泡成 500）。
+   * 期望：MISSING_CONFLICT_MAPPING 点名 article_categories.slug。
+   */
+  'error-semantics-conflict-mapping-removed'() {
+    const file = path.join(copyRoot, 'apps/api/src/modules/content/content.service.ts');
+    replaceAllText(file, /new ConflictException\(/g, 'new InternalServerErrorException(');
+  },
 
+  /*
+   * 错误语义对账：给**受审实体**加一个没人登记过的唯一列 ——
+   * 「撞了返回什么」没人想过，正是缺陷 #190 的土壤。
+   * 期望：UNIQUE_COLUMN_NOT_REVIEWED 点名 article_categories.code。
+   */
+  'error-semantics-new-unique-column'() {
+    const file = path.join(copyRoot, 'apps/api/src/database/entities/content.entity.ts');
+    replaceOnce(
+      file,
+      /(\n\s*)@Column\(\{ name: 'slug', type: 'varchar', length: 64, nullable: false, unique: true \}\)/,
+      "$1@Column({ name: 'slug', type: 'varchar', length: 64, nullable: false, unique: true })\n"
+        + "$1/** 自测注入：没人登记过失败语义的唯一列 */\n"
+        + "$1@Column({ name: 'code', type: 'varchar', length: 32, nullable: false, unique: true })",
+    );
+  },
+
+  /*
+   * 错误语义对账：把 API-SPEC 里「分类 slug 重复 → 409」那一行删掉 ——
+   * 代码改了、文档没改，等于对外契约悄悄变了。
+   * 期望：ERROR_SEMANTICS_UNDOCUMENTED 点名 POST /admin/articles/categories。
+   */
+  'error-semantics-doc-row-removed'() {
+    const file = path.join(copyRoot, 'docs/API-SPEC.md');
+    const lines = readText(file).split('\n');
+    const index = lines.findIndex((line) =>
+      line.includes('`POST /admin/articles/categories`') && line.includes('409'),
+    );
+    if (index < 0) throw new Error('注入失败：API-SPEC 里找不到分类 slug 冲突那一行');
+    lines.splice(index, 1);
+    writeText(file, lines.join('\n'));
+  },
+
+  'multi-step-across-methods'() {
     const file = path.join(
       copyRoot,
       'apps/api/src/modules/resources/resources.service.ts',

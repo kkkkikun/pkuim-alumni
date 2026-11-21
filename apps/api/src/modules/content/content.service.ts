@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, DataSource, EntityManager, Repository } from 'typeorm';
 import { paginate } from '../../common/dto/pagination.dto';
@@ -401,16 +401,33 @@ export class ContentService {
    *
    * ⚠️ `manager`：传入事务 manager 时，本次写入与**审计日志**同事务
    *    （缺陷 #134 同款做法：审计写失败时业务写必须一起回滚）。
+   *
+   * ⚠️ **slug 重复必须回 409，不能回 500**（缺陷 #190）：
+   *    `article_categories.slug` 上有唯一索引，重复写入时数据库抛
+   *    `ER_DUP_ENTRY`（1062）。此前这个异常**直接冒泡**成未处理异常 →
+   *    统一异常过滤器把它映射成 `500 INTERNAL_ERROR`。
+   *    管理端是按业务 `code` 分支处理的：500 被当成「服务端故障」，
+   *    管理员会去查服务健康度，而真实原因只是「你填的 slug 重复了」。
+   *    口径见 `docs/API-SPEC.md`「管理端写操作的错误语义」：
+   *    400 参数问题 / 404 对象不存在 / 409 冲突。
+   *    ⚠️ 处置方式是**捕获唯一键冲突并转成 409**，
+   *    不是去掉唯一索引 —— 去掉索引等于允许重名分类，是数据损坏。
    */
   async createCategory(payload: CreateCategoryBodyDto, manager?: EntityManager) {
     const categories = manager ? manager.getRepository(ArticleCategory) : this.categories;
-    const category = await categories.save(
-      categories.create({
-        name: payload.name,
-        slug: payload.slug,
-        sortOrder: payload.sortOrder ?? 0,
-      }),
-    );
+    let category: ArticleCategory;
+    try {
+      category = await categories.save(
+        categories.create({
+          name: payload.name,
+          slug: payload.slug,
+          sortOrder: payload.sortOrder ?? 0,
+        }),
+      );
+    } catch (error) {
+      if (!isDuplicateKeyError(error)) throw error;
+      throw new ConflictException('分类 slug 已存在');
+    }
     // 分类变了 → 分类字典缓存失效（写操作主动失效，不等 TTL）
     this.cache.delete(CacheKeys.categories);
     return {
@@ -422,7 +439,14 @@ export class ContentService {
     };
   }
 
-  /** 修改资讯分类（同上：支持事务 manager）。 */
+  /**
+   * 修改资讯分类（同上：支持事务 manager）。
+   *
+   * ⚠️ 改成别的分类已占用的 slug 时同样是**唯一键冲突** → 409（缺陷 #190）。
+   *    注意这里不能只查「有没有同名分类」再放行 ——
+   *    「查—再写」之间有窗口，并发下仍会撞唯一索引；
+   *    所以真正的兜底是**捕获冲突并转成 409**。
+   */
   async updateCategory(id: number, payload: UpdateCategoryBodyDto, manager?: EntityManager) {
     const categories = manager ? manager.getRepository(ArticleCategory) : this.categories;
     const category = await categories.findOne({ where: { id } });
@@ -430,7 +454,12 @@ export class ContentService {
     if (payload.name !== undefined) category.name = payload.name;
     if (payload.slug !== undefined) category.slug = payload.slug;
     if (payload.sortOrder !== undefined) category.sortOrder = payload.sortOrder;
-    await categories.save(category);
+    try {
+      await categories.save(category);
+    } catch (error) {
+      if (!isDuplicateKeyError(error)) throw error;
+      throw new ConflictException('分类 slug 已存在');
+    }
     // 分类变了 → 分类字典缓存失效
     this.cache.delete(CacheKeys.categories);
     const counts = await this.publishedArticleCounts();

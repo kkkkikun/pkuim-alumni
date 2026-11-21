@@ -231,6 +231,10 @@ jobs:
           node infra/scripts/check-request-dto.mjs
           node infra/scripts/check-concurrent-upsert.mjs
           node infra/scripts/check-test-coverage.mjs
+          # 管理端写操作的**失败语义**对账（第八轮新增）：
+          #   唯一键冲突必须落到 409，不能把数据库异常直接抛成 500
+          #   （缺陷 #190：资讯分类 slug 重复此前返回 500）。
+          node infra/scripts/check-error-semantics.mjs
           # 管理后台与小程序两端的静态一致性
           node infra/scripts/check-admin-web.mjs
           node infra/scripts/check-miniprogram.mjs
@@ -250,12 +254,26 @@ jobs:
       #   ⚠️ 只接**不依赖业务库 / .env.prod** 的那几个：
       #   `check-test-isolation-selftest.sh` 需要 `.env.prod` 与真实数据库，
       #   在 CI 里跑不起来（它自己的基线就过不了），故不接入。
+      #
+      # 第八轮新增：把**前端 / 契约 / RBAC** 这批校验器的反向验证
+      #   从「只在一个合并脚本里、且要起 API」拆成**每个校验器一份**：
+      #   仓库原先只有 `check-frontend-selftest.sh` 一个合并脚本覆盖这 8 个校验器，
+      #   而它**没有接进 CI** —— 那 8 个校验器的反向验证从来没自动跑过。
+      #   拆开之后，这一步（不需要 API）与下一步（需要 API）都能单独跑，
+      #   也便于定位「是哪一个校验器失去了反向验证」。
       - name: Checker reverse verification (selftests)
         run: |
           set -euo pipefail
           bash infra/scripts/check-response-shape-selftest.sh
           bash infra/scripts/check-enum-consistency-selftest.sh
           bash infra/scripts/check-request-dto-selftest.sh
+          # 第八轮：错误语义对账（唯一键冲突 → 409）
+          bash infra/scripts/check-error-semantics-selftest.sh
+          # 第八轮：前端 / 契约 / RBAC 四个**纯静态**校验器的反向验证
+          bash infra/scripts/check-rbac-matrix-selftest.sh
+          bash infra/scripts/check-contract-mirror-selftest.sh
+          bash infra/scripts/check-admin-web-selftest.sh
+          bash infra/scripts/check-miniprogram-selftest.sh
 
       # 依赖**跑着的 API**的那批契约校验（第三轮）。
       #
@@ -313,6 +331,27 @@ jobs:
           node infra/scripts/check-request-contract.mjs --swagger "$SWAGGER"
           # 真实响应体 vs 客户端声明的返回类型（契约与实现对不上的最后一道防线）
           node infra/scripts/check-response-shape.mjs --base "$BASE" --user-token "$USER_TOKEN"
+
+      # 第八轮：依赖**跑着的 API**的那四个校验器的反向验证。
+      #
+      # 为什么放在这一步（而不是静态校验那一步）：
+      #   这四个校验器要拿**服务端真实注册的路由**才能判对错，
+      #   而那份路由只存在于运行中的 API 的 Swagger 文档里。
+      #   仓库原先把它们和另外八个校验器一起塞进 `check-frontend-selftest.sh`，
+      #   而那个合并脚本**没有接进 CI** —— 于是这批校验器的反向验证
+      #   从来没有自动跑过（校验器恒过的话，这一层形同虚设）。
+      #
+      # ⚠️ 必须显式传 `--swagger`：默认地址上的 API 可能是**旧构建**，
+      #    基线会因为「代码里新增了路由、旧 API 还没有」而不一致 ——
+      #    那种不一致会**如实报出来**并让这一步失败（不会假绿）。
+      - name: API-backed checker reverse verification (selftests)
+        run: |
+          set -euo pipefail
+          SWAGGER=http://127.0.0.1:18099/docs-json
+          bash infra/scripts/check-contract-routes-selftest.sh --swagger "$SWAGGER"
+          bash infra/scripts/check-api-spec-doc-selftest.sh --swagger "$SWAGGER"
+          bash infra/scripts/check-client-paths-selftest.sh --swagger "$SWAGGER"
+          bash infra/scripts/check-spec-coverage-selftest.sh --swagger "$SWAGGER"
 
       - name: Stop the API used for contract checks
         if: always()

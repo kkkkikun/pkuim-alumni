@@ -345,6 +345,11 @@ export class AdminUsersController {
    * 适用场景：「先查后插」的并发写（缺陷 #137）——
    * 两个请求同时读到「行不存在」→ 都去 INSERT → 后到的撞唯一键。
    * 重试时是新快照，能看到对方刚提交的行，于是走更新分支。
+   *
+   * ⚠️ 重试**耗尽**后不能把数据库异常直接抛成 500（缺陷 #190 同款口径）：
+   *    连撞 3 次说明此刻有别的事务在抢同一行 —— 这是**业务冲突**，
+   *    不是「服务端故障」。所以最后一次仍撞键时转成 `409 CONFLICT`，
+   *    客户端据此提示「有并发写入，请重试」。
    */
   private async withDuplicateKeyRetry<T>(run: () => Promise<T>): Promise<T> {
     const maxAttempts = 3;
@@ -352,7 +357,10 @@ export class AdminUsersController {
       try {
         return await run();
       } catch (error) {
-        if (!isDuplicateKeyError(error) || attempt === maxAttempts) throw error;
+        if (!isDuplicateKeyError(error)) throw error;
+        if (attempt === maxAttempts) {
+          throw new ConflictException('并发写入冲突，请重试');
+        }
       }
     }
     // 理论上不可达（循环要么 return、要么 throw）
@@ -415,12 +423,15 @@ export class AdminUsersController {
     }
   }
 
-  /** 登录名重复（唯一索引冲突）→ 409，而不是 500（缺陷 #112） */
+  /**
+   * 登录名重复（唯一索引冲突）→ 409，而不是 500（缺陷 #112）
+   *
+   * ⚠️ 用仓库共用的 `isDuplicateKeyError` 判定（缺陷 #190 顺带加固）：
+   *    此前这里只认 `code === 'ER_DUP_ENTRY'` 这一种形态，
+   *    而驱动也可能只给出 `errno === 1062` —— 那种形态此前会漏判成 500。
+   */
   private toDuplicateUsernameError(error: unknown): Error {
-    const code =
-      (error as { code?: string })?.code ??
-      (error as { driverError?: { code?: string } })?.driverError?.code;
-    if (code === 'ER_DUP_ENTRY') {
+    if (isDuplicateKeyError(error)) {
       return new ConflictException('登录名已存在');
     }
     return error instanceof Error ? error : new Error(String(error));

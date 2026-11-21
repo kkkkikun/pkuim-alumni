@@ -92,6 +92,34 @@ done
 - 各实例 `channel` 不一致 → 统一 `RBAC_INVALIDATION_CHANNEL` 与 `NODE_ENV`；
   `subscribed: false` → 查 `lastError`（通常是 Redis 不可达）。
 
+### 2.2 巡检脚本已经会看它了（第八轮新增）
+
+上面那段手工 curl **不必再记**：既有巡检脚本 `infra/scripts/healthcheck.sh`
+已把这一项接进去 —— 多实例部署时「某个实例没订阅上总线」会**出现在巡检输出里**。
+
+```bash
+cd /home/kikun/MyProject/pkuim-alumni
+bash infra/scripts/healthcheck.sh          # 一次巡检（含总线自证）
+bash infra/scripts/healthcheck.sh --wait   # 等全部健康
+```
+
+判定口径：
+
+| 巡检输出 | 含义 | 处置 |
+|---|---|---|
+| `FAIL: <容器> 共享失效总线 —— enabled=1 但 subscribed=0` | **这个实例没订阅上频道** → 该实例的撤权 / 字典失效延迟回落到 **TTL 上界** | 查该实例的 `lastError`（通常是 Redis 不可达）；确认所有实例连**同一个** Redis |
+| `FAIL: 共享失效总线 —— 各实例的频道名不一致` | 事件互相打不到 | 统一 `RBAC_INVALIDATION_CHANNEL` 与 `NODE_ENV` |
+| `OK  : <容器> 共享失效总线 —— subscribed=1 channel=…` | 该实例正常 | — |
+| `OK  : <容器> 共享失效总线 —— 总线已整条关闭（enabled=0，非故障）` | `RBAC_INVALIDATION_ENABLED=false` | 非故障，按需确认是否有意关闭 |
+| `SKIP: 共享失效总线自证 —— 未提供管理员凭据` | 没配管理员凭据，**这一项没查** | 配 `ADMIN_HEALTHCHECK_USERNAME` / `ADMIN_HEALTHCHECK_PASSWORD`（或 `ADMIN_HEALTHCHECK_TOKEN`）；否则就一直是「没查」，不是「查过没问题」 |
+| `WARN: <容器> 共享失效总线自证 —— 管理员凭据无效` | 凭据不对，**这一项没查成**（**不是**总线故障） | 核对 `ADMIN_HEALTHCHECK_*` / `ADMIN_BOOTSTRAP_*` |
+
+- 该端点只对管理员开放，所以巡检要管理员凭据：取值顺序
+  `ADMIN_HEALTHCHECK_TOKEN` > `ADMIN_HEALTHCHECK_USERNAME` / `ADMIN_HEALTHCHECK_PASSWORD`
+  > `.env.prod` 里的 `ADMIN_BOOTSTRAP_USERNAME` / `ADMIN_BOOTSTRAP_PASSWORD`。
+- 查询在**容器内部**发起（查本实例，不经 nginx）—— 经 nginx 只会打到
+  负载均衡后的某一个实例，那样就看不出「到底是哪一台没订阅上」。
+
 ---
 
 ## 3. 日志

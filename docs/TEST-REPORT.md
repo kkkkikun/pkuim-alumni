@@ -4899,3 +4899,127 @@ A 组 `RBAC_INVALIDATION_ENABLED=true` → B 组 `=false` → A2 组 `=true`，*
 - 延续的人工项：发布窗口排期（`docs/RELEASE-ORDER.md`）、线上业务库应用两条索引迁移、
   正式密钥轮转与密钥管理服务接入、正式 AppID/AppSecret 与 `AUTH_MODE=wechat` 切换、
   正式域名与 HTTPS 证书、微信订阅消息模板、WAF 规则与备份定时任务、小程序真机复验。
+
+## 15. 第八轮（opt-008）：管理端写操作的错误语义对账 + 校验器反向验证补齐 + 总线自证接进巡检
+
+### 15.1 缺陷 #190：资讯分类 **slug 重复**此前返回 500，现改为 409 CONFLICT
+
+**修复前（同一套用例打在修复前的代码上）**：
+
+```
+✕ 创建分类：slug 重复 → 409 CONFLICT（不得是 5xx）
+✕ slug 冲突时事务整体回滚：不留下多出来的分类、也不留下审计痕迹
+✕ 改分类 slug 为别人已占用的 slug → 409 CONFLICT（不得是 5xx）
+expected 409 "Conflict", got 500 "Internal Server Error"
+Tests:       3 failed, 5 passed, 8 total
+```
+
+**修复后**：**8 / 8 全绿**（`apps/api/test/integration/admin-write-error-semantics.e2e-spec.ts`）：
+
+| 用例 | 断言 |
+|---|---|
+| 创建分类：slug 重复 | **409** + `code = CONFLICT`（且 `status < 500`） |
+| slug 冲突时事务整体回滚 | 分类表**不多出一行**、`admin_action_logs` **不多出一条**（业务写与审计写同事务） |
+| 改分类 slug 为别人已占用的 slug | **409** + `code = CONFLICT`，且原分类的 slug **未被改掉**（回滚） |
+| 改不存在的分类 | **404** + `code = NOT_FOUND`（不是 500、也不是 `200 + code:OK` 的假成功） |
+| 删不存在的分类 | **404** + `code = NOT_FOUND` |
+| 分类 slug 缺参数 | **400** + `code = VALIDATION_ERROR` |
+| 管理员登录名重复 | **409** + `code = CONFLICT`（缺陷 #112 的回归防线） |
+| 系统设置重复写同一个 key | **200**（upsert **不是**冲突，不得被误伤） |
+
+### 15.2 同类唯一键冲突端点的扫描结果
+
+管理端写端点能触发的唯一键共 **3 处**，本轮逐条核过：
+
+| 唯一键 | 端点 | 修复前 | 修复后 |
+|---|---|---|---|
+| `admin_users.username` | `POST /admin/users` | 已是 409，但判定只认 `ER_DUP_ENTRY`（漏判 `errno=1062` 那种形态） | 仍 409，判定换成仓库共用的 `isDuplicateKeyError` |
+| `article_categories.slug` | `POST|PATCH /admin/articles/categories[/:id]` | **500** | **409 `CONFLICT`** |
+| `system_settings.key` | `PUT /admin/settings` | 并发 upsert 重试耗尽 → **500** | 重试耗尽 → **409 `CONFLICT`** |
+
+其余管理端写端点所涉的表（文章 / 公告 / 活动 / 资源 / 审核 / 附件）**没有唯一列**，
+不存在「撞键」的失败形态。
+
+### 15.3 新增校验器 `check-error-semantics.mjs` 及其**反向验证**
+
+校验器做三件事：唯一键**登记表** ↔ 实现 ↔ `docs/API-SPEC.md` 口径的三方对账。
+反向验证（`infra/scripts/check-error-semantics-selftest.sh`，本机实跑）：
+
+| 注入的缺陷 | 判定码 | 结果 |
+|---|---|---|
+| 把「捕获唯一键冲突 → 转 409」改回 500（缺陷 #190 的原形） | `MISSING_CONFLICT_MAPPING` | ✅ 抓到（退出码 1） |
+| 给受审实体加一个**没人登记**的唯一列 | `UNIQUE_COLUMN_NOT_REVIEWED` | ✅ 抓到（退出码 1） |
+| 代码改了、`API-SPEC` 的口径行没改 | `ERROR_SEMANTICS_UNDOCUMENTED` | ✅ 抓到（退出码 1） |
+
+另有**元自检**（对「永远返回 0 的假校验器」必须判失败）—— 通过。
+
+### 15.4 校验器反向验证的**覆盖缺口**与补齐
+
+**发现**：这 8 个校验器此前**没有**各自的 `-selftest.sh`，它们的反向验证全在**一个**合并脚本
+`check-frontend-selftest.sh` 里，而那个脚本**从没进过 CI** ——
+即「校验器恒过」这一层在 CI 里**从未被验证过**（与缺陷 #44 / #45 同一片土壤）。
+
+本轮给这 8 个**各补一份** `-selftest.sh`（沿用仓库模板：基线 + 注入缺陷 + 元自检 + 清理），
+注入用例**全部复用** `selftest-inject.mjs` 里**已有**的用例（不新增注入点），并**接入 CI**：
+
+| 校验器 | 用例 → 判定码 | 自测实跑 |
+|---|---|---|
+| `check-rbac-matrix.mjs` | `rbac-matrix-drift` → `ROLE_MATRIX_DRIFT` | ✅ 退出码 0 |
+| `check-contract-mirror.mjs` | `mirror-type-drift` → `INTERFACE_DRIFT` | ✅ 退出码 0 |
+| `check-admin-web.mjs` | `admin-route-component-missing` → `ROUTE_COMPONENT_MISSING`；`admin-permission-not-contract` → `PERMISSION_NOT_IN_CONTRACT` | ✅ 退出码 0 |
+| `check-miniprogram.mjs` | `mini-page-not-registered` → `PAGE_NOT_REGISTERED`；`mini-handler-missing` → `HANDLER_MISSING`；`mini-component-missing` → `COMPONENT_MISSING` | ✅ 退出码 0 |
+| `check-contract-routes.mjs` | `contract-route-missing` → `CONTRACT_ROUTE_MISSING`；`swagger-extra-route` → `SERVER_ROUTE_NOT_IN_CONTRACT` | ✅ 退出码 0 |
+| `check-api-spec-doc.mjs` | `doc-endpoint-missing` → `DOC_ENDPOINT_MISSING` | ✅ 退出码 0 |
+| `check-client-paths.mjs` | `paths-route-not-found` → `ROUTE_NOT_FOUND`；`mirror-literal-path` → `MIRROR_LITERAL_PATH` | ✅ 退出码 0 |
+| `check-spec-coverage.mjs` | `spec-api-group-missing` → `API_GROUP_NOT_IMPLEMENTED` | ✅ 退出码 0 |
+
+顺带修正一处**归属错误**：`MIRROR_LITERAL_PATH` 由 `check-client-paths.mjs` 产出
+（不是 `check-contract-mirror.mjs` —— 类型镜像校验器不看路径），
+该用例已挪到 `check-client-paths-selftest.sh` 里断言。
+
+### 15.5 总线自证接进运维巡检（`infra/scripts/healthcheck.sh`）
+
+在**容器内部**逐实例查询 `GET /api/v1/admin/ops/invalidation-bus`
+（不经 nginx —— 经 nginx 只打得到负载均衡后的某一台，看不出「是哪一台没订阅上」）。
+实测两档：
+
+| 场景 | 端点返回 | 巡检判定 |
+|---|---|---|
+| 正常实例（Redis 可达） | `{"enabled":true,"channel":"nmg:test:rbac:invalidate","subscribed":true,"published":0,"received":4,"lastError":null,"degraded":false}` | `OK : <容器> 共享失效总线 —— subscribed=1 channel=nmg:test:rbac:invalidate` |
+| Redis 不可达（端口指到 19999） | `{"enabled":true,"channel":"nmg:test:rbac:invalidate","subscribed":false,"published":0,"received":0,"lastError":"connect ECONNREFUSED 127.0.0.1:19999","degraded":true}` | `FAIL : <容器> 共享失效总线 —— enabled=1 但 subscribed=0`（= 撤权延迟回落到 TTL 上界那一档） |
+
+### 15.6 本轮实跑清单
+
+| 项 | 结果 |
+|---|---|
+| `pnpm --filter @nmg/api test:integration` | **51 套件 / 397 例全绿**（上一轮 50 套件 / 389 例；本轮新增 1 套件 / 8 例） |
+| `pnpm typecheck` / `pnpm lint` | 退出码 **0** |
+| 新增的 `admin-write-error-semantics` 套件：修复前 / 修复后 | 修复前 **3 例红**（收到 500）、修复后 **8 例全绿** |
+| `infra/scripts/check-error-semantics.mjs` | 退出码 **0**（3 个唯一键都有 409 处置与文档口径） |
+| `infra/scripts/check-error-semantics-selftest.sh` | 退出码 **0**（3 类缺陷全被抓出 + 元自检通过） |
+| 8 份新 selftest 脚本 | 退出码全为 **0**（见 15.4） |
+| 静态校验器（13 个，见 15.4）+ `check-pending-migrations.sh --static-only` | 全部退出码 **0** |
+| 对着**跑起来的 API** 的契约校验（`check-contract-routes` / `check-client-paths` / `check-api-spec-doc` / `check-spec-coverage`） | 全部退出码 **0**（Swagger 基线取自本轮构建的 API，**88 条路由**） |
+
+### 15.7 待人工项的复核结论（只更新结论，不虚报）
+
+| 项 | 第八轮复核结论 |
+|---|---|
+| #189 游标分页是否已拍板 | **仍无结论** —— 对外契约变更仍需**产品 / 客户**拍板；本轮按约定只记录、不擅改，维持现状 |
+| 多实例部署自证是否已在上线环境做过 | 仓库侧手段已做齐（巡检脚本 + 判定口径 + `docs/SERVER-OPERATIONS.md` 第 2.2 节），但**上线环境是否真跑过一次巡检**仍属部署侧动作 —— **不得写成已完成** |
+| 专用压测窗口是否排期 | **仍未排期**；本轮**未跑**新的延迟对照（第七轮的 A/B/A 已给出「总线开关对读延迟无可测影响」的结论） |
+
+### 15.8 本轮未做完 / 仍需人工
+
+- **上线环境跑一次 `healthcheck.sh`**（人工 / 部署侧）：多实例部署下确认每个实例
+  `subscribed=1`、各实例 `channel` 一致；管理员凭据要配
+  （`ADMIN_HEALTHCHECK_USERNAME` / `ADMIN_HEALTHCHECK_PASSWORD` 或 `ADMIN_HEALTHCHECK_TOKEN`）。
+- **用户侧写端点的错误语义尚未逐条核过**（连接申请 / 活动报名 / 资源附件 / 认证附件 /
+  openid / refreshToken 等唯一键）：本轮的口径与登记表只覆盖**管理端**，
+  扩到用户侧是下一轮（opt-009）的事。
+- **游标分页**（需产品 / 客户拍板）、**`/admin/stats` 的 `connectionTotal` 口径**
+  与连接列表可见开关（需产品确认）：本轮只记录不改。
+- **专用压测窗口**下的缓存延迟对照：仍需人工排期。
+- 延续的人工项：发布窗口排期（`docs/RELEASE-ORDER.md`）、线上业务库应用两条索引迁移、
+  正式密钥轮转与密钥管理服务接入、正式 AppID/AppSecret 与 `AUTH_MODE=wechat` 切换、
+  正式域名与 HTTPS 证书、微信订阅消息模板、WAF 规则与备份定时任务、小程序真机复验。
