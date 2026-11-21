@@ -4,7 +4,13 @@
 #
 #   bash infra/scripts/check-migration-schema-db-selftest.sh
 #
-# 目的：证明 `check-migration-schema-db.mjs` **不是恒过**——
+# ⚠️ 第十五轮起，校验器**合并成一支** `check-db-reality.mjs`
+#    （「库内实况」= 唯一键那一半 + 实体 ↔ 库那一半）。
+#    本脚本守的是其中的**「实体 ↔ 库」那一半**；
+#    唯一键那一半由 `check-unique-index-db-selftest.sh` 守着 ——
+#    两份自测**各自**覆盖自己那半的缺陷类别，都保留。
+#
+# 目的：证明 `check-db-reality.mjs` **不是恒过**——
 #       当「实体声明了、库里其实不存在」的索引 / 外键 / 列定义真的发生时，
 #       它必须报错并返回非 0。
 #
@@ -21,13 +27,15 @@
 #   0. 正向基线：对着**真实测试库**跑，必须 0 不一致、退出码 0；
 #   1. 逐个注入缺陷（在**临时副本**里改实体声明，库不动）：
 #      「库里其实没有那条索引」/「索引的列对不上」/「列的长度对不上」/
-#      「列的可空性对不上」/「库里其实没有那条外键」
+#      「列的可空性对不上」/「库里其实没有那条外键」/
+#      「列的默认值对不上」/「列的无符号性对不上」/「列的枚举取值对不上」
 #      → 断言「退出码非 0」且「输出命中对应的判定码」；
 #   2. 元自检：用「永远返回 0 的假校验器」证明断言函数本身有效；
 #   3. 清理全部临时副本。
 #
 # 安全约束：
 #   - 全程**只读**：只查 information_schema，不建索引、不跑迁移、不写数据；
+#     校验器自身还会把会话设成 `READ ONLY`（三重护栏，见脚本头注释）。
 #   - 缺陷注入只发生在**临时副本**里（改的是副本里的实体声明），
 #     真实工作副本与数据库永远只读。
 #
@@ -42,7 +50,7 @@ set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 
 SCRIPT_DIR="${PROJECT_ROOT}/infra/scripts"
-CHECKER="${SCRIPT_DIR}/check-migration-schema-db.mjs"
+CHECKER="${SCRIPT_DIR}/check-db-reality.mjs"
 INJECTOR="${SCRIPT_DIR}/selftest-inject.mjs"
 FAILED=0
 
@@ -113,7 +121,7 @@ expect_failure() {
 log "[0/2] 正向基线：真实测试库上的库内实况必须与实体声明自洽……"
 BASE_COPY="${TMP_ROOT}/baseline"
 make_copy "$BASE_COPY"
-expect_pass "check-migration-schema-db.mjs" "$BASE_COPY"
+expect_pass "check-db-reality.mjs" "$BASE_COPY"
 
 # --- 1. 注入缺陷并验证 -----------------------------------------------------
 log "[1/2] 逐个注入缺陷并验证校验器……"
@@ -164,6 +172,10 @@ run_case "migration-schema-db-column-length-injected" "DB_COLUMN_DEF_MISMATCH"
 run_case "migration-schema-db-column-nullable-injected" "DB_COLUMN_DEF_MISMATCH"
 # 实体声明了、库里其实没有的外键（引用完整性不再被数据库保证）
 run_case "migration-schema-db-foreign-key-injected" "DB_FOREIGN_KEY_MISSING"
+# 第十五轮新增的三个维度：默认值 / 无符号性 / 枚举取值
+run_case "migration-schema-db-column-default-injected" "DB_COLUMN_DEFAULT_MISMATCH"
+run_case "migration-schema-db-column-unsigned-injected" "DB_COLUMN_UNSIGNED_MISMATCH"
+run_case "migration-schema-db-column-enum-injected" "DB_COLUMN_ENUM_MISMATCH"
 
 # --- 2. 清理 ---------------------------------------------------------------
 log "[2/2] 清理临时副本……"
@@ -174,5 +186,5 @@ if [ "$FAILED" -ne 0 ]; then
   die "库内实况对账校验器反向验证失败 ❌"
 fi
 
-log "=== 反向验证通过 ✅（5 类「静态说有、库里其实没有」的缺陷全部被抓出，校验器非恒过）==="
+log "=== 反向验证通过 ✅（8 类「静态说有、库里其实没有」的缺陷全部被抓出，校验器非恒过）==="
 log "库内实况对账校验器反向验证通过 ✅"

@@ -182,42 +182,33 @@ jobs:
       - name: Integration tests
         run: pnpm --filter @nmg/api test:integration
 
-      # 第十轮：唯一键的**库内实况**对账。
+      # 第十五轮：「**库内实况**」对账（唯一键 + 实体 ↔ 库，合并成一支）。
       #
       # 为什么必须进门禁：
       #   生产库 `synchronize: false`，真正约束数据的是**迁移**，
-      #   而静态对账（`check-error-semantics.mjs` 的 R5）只能证明
-      #   「迁移里**写了**创建那道唯一索引」——
-      #   证明不了「**这个库里真的有**那道索引」。
-      #   这一层的失败是**静默**的：撞键不报错 → 数据库直接写出重复行。
-      #
-      # ⚠️ 只读：全程只查 information_schema，不建索引、不跑迁移、不写数据。
-      #   反向验证（selftest）在**临时副本**里注入缺陷，不碰数据库。
-      - name: Unique key reconciliation against the test database
-        run: |
-          set -euo pipefail
-          node infra/scripts/check-unique-index-db.mjs
-          bash infra/scripts/check-unique-index-db-selftest.sh
-
-      # 第十四轮：「实体 ↔ 迁移」三层对账的**库内实况**（索引 / 外键 / 列定义）。
-      #
-      # 为什么必须进门禁：
-      #   静态对账（`check-error-semantics.mjs` 的 R7 / R8 / R9）能证明
-      #   「迁移里**写了**创建那道索引 / 外键 / 列」——
-      #   但证明不了「**这个库里真的有**」。
-      #   生产库 `synchronize: false`，跑的是迁移；迁移没被应用过、
-      #   库是从旧备份恢复的、有人手工 DROP 过索引 —— 静态脚本一律看不见。
+      #   而静态对账（`check-error-semantics.mjs` 的 R5 / R7 / R8 / R9）只能证明
+      #   「迁移里**写了**创建那道唯一索引 / 外键 / 列」——
+      #   证明不了「**这个库里真的有**」。
+      #   生产库跑的是迁移；迁移没被应用过、库是从旧备份恢复的、
+      #   有人手工 DROP 过索引 —— 静态脚本一律看不见。
       #   这一层的失败是**静默**的：
+      #     - 唯一约束没建 → 撞键不报错 → 数据库直接写出重复行；
       #     - 索引没建 → 按该列的查询退化成全表扫（只是「慢」，没人报警）；
       #     - 外键没建 → 引用完整性不再被数据库保证；
       #     - 列定义对不上 → 超长写入被**静默截断**（数据丢失）。
       #
-      # ⚠️ 只读：全程只查 information_schema，不建索引、不跑迁移、不写数据。
+      # ⚠️ 只读：全程只查 information_schema，不建索引、不跑迁移、不写数据；
+      #   脚本还会把会话设成 `READ ONLY`（写语句会被 MySQL 直接拒收），
+      #   所以在**业务库（生产库）**上跑也是安全的。
       #   反向验证（selftest）在**临时副本**里注入缺陷，真实数据库全程只读。
-      - name: Entity schema reconciliation against the test database
+      #
+      # 第十五轮起合并为一支：此前是「唯一键」与「实体 ↔ 库」两支，
+      # 同一层对账被拆成两半（跑两遍、报两套口径）。
+      - name: Database reality reconciliation against the test database
         run: |
           set -euo pipefail
-          node infra/scripts/check-migration-schema-db.mjs
+          node infra/scripts/check-db-reality.mjs
+          bash infra/scripts/check-unique-index-db-selftest.sh
           bash infra/scripts/check-migration-schema-db-selftest.sh
 
       # 第九轮：把「跨实例撤权立刻生效」接进 CI（**跨进程**那一档）。

@@ -1,35 +1,60 @@
 #!/usr/bin/env node
 /**
- * 「实体 ↔ 迁移」三层对账的**库内实况**（实体 ↔ 真实数据库）。
+ * 「**库内实况**」对账 —— 实体 ↔ 迁移 ↔ **真实数据库**的最后一层。
  *
- * 背景（第十四轮）：
- *   第十二轮把「实体 ↔ 迁移」的对账扩到了完整三层：
- *     - 全部索引（含非唯一 `idx_*`）、外键、全部列的定义；
- *   第十轮补上了「唯一键」的**库内实况**（`check-unique-index-db.mjs`）。
- *   但**索引 / 外键 / 列定义**这三层的库内实况此前**从未被核过** ——
- *   静态对账只能证明「迁移里**写了**创建那道索引」，
- *   证明不了「**这个库里真的有**那道索引 / 那道外键 / 那一列」。
- *   而这一层的失败同样是**静默**的：
- *     - 索引没建 → 按该列的查询退化成全表扫（生产上只是「慢」，没人报警）；
- *     - 外键没建 → 引用完整性不再被数据库保证（可以写入指向不存在行的外键）；
- *     - 列没建 → 读写这一列直接报「未知列」（这个至少会炸出来）。
+ * 背景（第十轮 → 第十五轮）：
+ *   静态对账（`check-error-semantics.mjs` 的 R5 / R7 / R8 / R9）能证明
+ *   「迁移里**写了**创建那道索引 / 外键 / 列」——
+ *   但它证明不了「**这个库里真的有**」。
  *   生产库 `synchronize: false`，跑的是**迁移**：
  *   迁移是否真的被应用过、库是不是从旧备份恢复的、有没有人手工 DROP 过 ——
- *   静态脚本**一律看不见**。
+ *   静态脚本**一律看不见**。而这一层的失败同样是**静默**的：
+ *     - 索引没建 → 按该列的查询退化成全表扫（生产上只是「慢」，没人报警）；
+ *     - 外键没建 → 引用完整性不再被数据库保证（可以写入指向不存在行的外键）；
+ *     - 列定义对不上 → 超长写入被**静默截断**（数据丢失）；
+ *     - 唯一约束没建 → 撞键不报错，数据库**静默写出重复行**。
  *
- * 本脚本做四件事（**只读**，全程只执行 SELECT）：
+ * 第十五轮起，本脚本**把这一层合成一支**：
+ *   此前是 `check-unique-index-db.mjs`（唯一键那一半）与
+ *   `check-migration-schema-db.mjs`（实体 ↔ 库那一半）两支 ——
+ *   同一层对账被拆成两半，跑两遍、报两套口径。
+ *   现在只有**一支** `check-db-reality.mjs`，两半的判定口径写在同一处。
+ *
+ * 本脚本做六件事（**只读**，全程只执行 SELECT / SHOW / SET SESSION）：
  *   1) 从 `information_schema` 读出库里**真实存在**的表 / 索引 / 外键 / 列；
- *   2) 与**实体声明**（`check-error-semantics.mjs` 的 `discoverEntitySchema`，
- *      即第十二轮那份解析）逐条对账；
- *   3) 有出入就报错、退出码非 0；
- *   4) 反向也查一遍：库里多出来的索引 / 列 / 外键（实体没声明的）同样报。
+ *   2) **唯一键**那一半：登记表（`UNIQUE_KEY_REGISTRY`）↔ 迁移 ↔ 库三方对账；
+ *   3) **实体 ↔ 库**那一半：表 / 索引（列集合 + 唯一性）/ 外键（指向）/
+ *      列（类型 / 长度 / 可空性 / **默认值** / **`unsigned`** / **枚举取值**）；
+ *   4) **正反两个方向**都查：库里多出来的索引 / 外键 / 列同样报；
+ *   5) 有出入就报错、退出码非 0；
+ *   6) 顺带把**当前账号的权限**（`SHOW GRANTS`）打印出来 ——
+ *      人工在生产库上跑这一支时，第一眼就能确认「这个账号能不能写库」。
+ *
+ * ⚠️ **只读是怎么保证的**（不是口头承诺，是三重护栏）：
+ *   1) 脚本里所有 SQL 都经过 `runQuery()` —— 它**只放行**
+ *      `SELECT` / `SHOW` / `SET SESSION`，其余一律抛错退出（不会执行）。
+ *   2) 连接建立后**第一件事**就是 `SET SESSION TRANSACTION READ ONLY`，
+ *      并回读 `@@session.transaction_read_only` 确认为 1 ——
+ *      之后这个会话里任何写语句都会被 MySQL 拒绝。
+ *   3) 全程不建索引、不跑迁移、不写数据、不改表。
+ *   ⚠️ 因此在**业务库（生产库）**上跑这一支是**安全**的：
+ *      它只读 `information_schema`，不碰业务表。
  *
  * ⚠️ 口径与局限（写在这里，免得被当成万能护栏）：
- *   - **只读**：不建索引、不跑迁移、不写数据、不改表。
  *   - 对账的**基线**是**实体声明**；实体 ↔ 迁移的静态一致性由
  *     `check-error-semantics.mjs` 负责（它先跑，本脚本后跑）。
- *   - **不判**的项（与静态对账同一口径）：
- *     枚举**取值**、精度、`unsigned`、默认值、`ON DELETE` 行为。
+ *   - **不判**的项：精度（`precision`）、`ON DELETE` 行为。
+ *   - **默认值**：只在实体**显式声明** `default:` 时判定；
+ *     库侧是 `CURRENT_TIMESTAMP(3)` 这类**表达式**时**不判**
+ *     （`@CreateDateColumn` 就是它 —— 实体侧本来就不写 `default`）。
+ *   - **`unsigned`**：只在实体**显式声明** `unsigned:` 时判定，
+ *     且**布尔位**（实体类型是 `tinyint` 的那些开关列）**不判** ——
+ *     无符号对布尔位没有意义（取值只有 0/1）。
+ *     （第十五轮的误报率实测：可判定的 79 列里有 **9** 列是
+ *     「实体写了 `unsigned: true`、迁移与库里却是 `tinyint(1)`」的布尔位 ——
+ *     按现状纳入会产生 9 处常驻误报，故**只对非布尔位的数值列**判定。）
+ *   - **枚举取值**：只在实体**显式声明** `enum:`、且取值**解析得出来**时判定
+ *     （取值写在 `export const X = [...]` 里，解析不出来就**不判**，绝不猜）。
  *   - **「主键等价」不算缺陷**：唯一索引的列就是主键时，主键天然唯一，
  *     不必再建一条同列的唯一索引（重复约束 = 写放大）。
  *   - **MySQL 自动建的「外键支撑索引」不算缺陷**：MySQL 会为没有可用索引的
@@ -41,10 +66,15 @@
  *     无法判定，也不该由这一层来管。
  *
  * 用法：
- *   node infra/scripts/check-migration-schema-db.mjs [--db <库名>] [--json] [--root <repo>]
- *   DATABASE_URL=mysql://user:pass@host:3306/nmg_alumni_test node infra/scripts/check-migration-schema-db.mjs
+ *   # 测试库（CI 里就是这么跑的）
+ *   DATABASE_URL=mysql://user:pass@host:3306/nmg_alumni_test \
+ *     node infra/scripts/check-db-reality.mjs
+ *   # 业务库 / 生产库（只读，安全）
+ *   DATABASE_URL=mysql://user:pass@host:3306/nmg_alumni \
+ *     node infra/scripts/check-db-reality.mjs
+ *   # 其它参数：--db <库名>  --json  --root <repo>
  *
- * 退出码：0 = 库里与实体声明一致；1 = 存在出入；2 = 脚本自身失败（连不上库等）。
+ * 退出码：0 = 库里与实体 / 登记表一致；1 = 存在出入；2 = 脚本自身失败（连不上库等）。
  */
 
 import path from 'node:path';
@@ -69,14 +99,45 @@ function keyOf(columns) {
   return [...columns].sort().join('+');
 }
 
+/* -------------------------- 只读护栏 -------------------------- */
+
 /**
- * 载入「实体解析」—— **从 `--root` 指向的仓库里**载入。
+ * 放行的语句：**只有**读语句与「会话级只读开关」。
+ *
+ * ⚠️ 为什么要有这道护栏：这一支脚本会被人在**生产库**上跑。
+ *   一旦哪天有人往里加了一句 `UPDATE`（或者从别处复制粘贴进来），
+ *   护栏会**当场拦下**并退出码 2 —— 而不是把数据改了。
+ */
+const READ_ONLY_STATEMENT = /^\s*(select|show|set\s+session)\b/i;
+
+/** 明确禁止出现的写关键字（双保险：即使正则被绕过也会被拦下）。 */
+const WRITE_KEYWORD =
+  /\b(insert|update|delete|drop|alter|create|truncate|replace|grant|revoke|call|load\s+data|rename|lock|unlock|outfile|dumpfile)\b/i;
+
+/**
+ * 执行一条**只读**语句；不是读语句就抛错（脚本退出码 2，不会执行）。
+ */
+async function runQuery(client, sql) {
+  if (!READ_ONLY_STATEMENT.test(sql)) {
+    throw new Error(`拒绝执行非只读语句：${sql.slice(0, 120)}`);
+  }
+  if (WRITE_KEYWORD.test(sql)) {
+    throw new Error(`语句里出现了写关键字：${sql.slice(0, 120)}`);
+  }
+  return client.query(sql);
+}
+
+/* -------------------------- 依赖与连接 -------------------------- */
+
+/**
+ * 载入「实体 / 迁移解析」—— **从 `--root` 指向的仓库里**载入。
  *
  * ⚠️ 为什么要动态 import 而不是顶层静态 import：
- *   反向验证（`check-migration-schema-db-selftest.sh`）会在**临时副本**里
- *   注入缺陷（往实体里塞一条库里并不存在的索引），
+ *   反向验证（`check-migration-schema-db-selftest.sh` /
+ *   `check-unique-index-db-selftest.sh`）会在**临时副本**里
+ *   注入缺陷（往实体里塞一条库里并不存在的索引 / 往登记表里塞一条唯一键），
  *   然后用 `--root <副本>` 跑本脚本 ——
- *   静态 import 拿到的永远是**本脚本所在仓库**的实体声明，注入就白注了。
+ *   静态 import 拿到的永远是**本脚本所在仓库**的声明，注入就白注了。
  */
 async function loadCheckerModule() {
   const modulePath = path.join(ROOT, 'infra/scripts/check-error-semantics.mjs');
@@ -110,6 +171,11 @@ function loadMysql() {
 /**
  * 连接参数 —— 与服务端 `apps/api/src/database/data-source.ts` 的解析规则一致
  * （`DATABASE_URL` 优先，其次 DB_HOST / DB_PORT / DB_USER / DB_PASSWORD / DB_NAME）。
+ *
+ * ⚠️ 库名**必须**由环境变量或 `--db` 显式给出（默认值是业务库 `nmg_alumni`，
+ *    与 `docker-compose.prod.yml` 的 `MYSQL_DATABASE` 默认值一致）。
+ *    这一支会被人在**生产库**上跑，所以「连的是哪个库」必须一眼可见 ——
+ *    报告里会把库名与主机一起打出来。
  */
 function resolveConnection() {
   const url = process.env.DATABASE_URL?.trim();
@@ -129,7 +195,7 @@ function resolveConnection() {
     port: Number.parseInt(process.env.DB_PORT ?? '3306', 10),
     user: process.env.DB_USER ?? 'nmg',
     password: process.env.DB_PASSWORD ?? '',
-    database: argValue('--db', process.env.DB_NAME ?? 'nmg_pku_alumni'),
+    database: argValue('--db', process.env.DB_NAME ?? 'nmg_alumni'),
   };
 }
 
@@ -166,10 +232,44 @@ function isStringType(type) {
   return value === 'varchar' || value === 'char' || value === 'text' || value === 'mediumtext';
 }
 
+/**
+ * 库侧的**默认值**是不是「表达式」（`CURRENT_TIMESTAMP(3)` 这类）。
+ *
+ * ⚠️ 表达式**判不了**：库里的形态与 DDL 原文不一定逐字相同
+ *   （`CURRENT_TIMESTAMP(3)` 与 `current_timestamp(3)`）。
+ *   判不了就不判 —— 不猜。
+ */
+function isExpressionDefault(value) {
+  if (value === null || value === undefined) return false;
+  const text = String(value).trim();
+  if (!text) return false;
+  return /current_timestamp|now\s*\(|localtime|uuid\s*\(|^\(/i.test(text);
+}
+
+/** 库侧的默认值归一成字符串（数字与字符串按同一形态比，避免假红）。 */
+function normalizeDbDefault(value) {
+  if (value === null || value === undefined) return null;
+  const text = String(value).trim();
+  if (text === 'NULL') return null;
+  return text;
+}
+
+/** 从 `information_schema.columns.column_type` 里取出枚举取值。 */
+function parseDbEnumValues(columnType) {
+  const matched = /\benum\(([^)]*)\)/i.exec(String(columnType ?? ''));
+  if (!matched) return null;
+  return [...matched[1].matchAll(/'((?:[^']|'')*)'/g)].map((item) => item[1].replace(/''/g, "'"));
+}
+
 /* ------------------------------ 主流程 ------------------------------ */
 
 async function main() {
-  const { discoverEntitySchema } = await loadCheckerModule();
+  const {
+    UNIQUE_KEY_REGISTRY,
+    discoverMigrationSchema,
+    discoverEntitySchema,
+    analyzeDdlColumnDef,
+  } = await loadCheckerModule();
 
   const mysql = loadMysql();
 
@@ -188,16 +288,40 @@ async function main() {
   let columnRows;
   let indexRows;
   let foreignKeyRows;
+  let uniqueRows;
+  let identityRows;
+  let grants = [];
+  let readOnly = false;
+
   try {
-    [columnRows] = await client.query(
+    // --- 只读会话（三重护栏的第 2 条）--------------------------------------
+    await runQuery(client, 'SET SESSION TRANSACTION READ ONLY');
+    await runQuery(client, 'SET SESSION autocommit = 1');
+    const [readOnlyRows] = await runQuery(
+      client,
+      'SELECT @@session.transaction_read_only AS readOnly',
+    );
+    readOnly = Number(readOnlyRows?.[0]?.readOnly) === 1;
+    if (!readOnly) {
+      throw new Error('没能把会话设成只读（@@session.transaction_read_only ≠ 1）—— 拒绝继续');
+    }
+
+    // 当前账号的权限：人工在生产库上跑这一支时，第一眼就能确认
+    // 「这个账号能不能写库」（只读账号跑这一支最理想）。
+    const [grantRows] = await runQuery(client, 'SHOW GRANTS FOR CURRENT_USER()');
+    grants = grantRows.map((row) => Object.values(row)[0]).map(String);
+
+    [columnRows] = await runQuery(
+      client,
       'SELECT table_name AS tableName, column_name AS columnName, data_type AS dataType, ' +
         'character_maximum_length AS charLength, is_nullable AS isNullable, ' +
-        'column_type AS columnType ' +
+        'column_type AS columnType, column_default AS columnDefault ' +
         'FROM information_schema.columns ' +
         'WHERE table_schema = DATABASE() ' +
         'ORDER BY table_name, ordinal_position',
     );
-    [indexRows] = await client.query(
+    [indexRows] = await runQuery(
+      client,
       'SELECT table_name AS tableName, index_name AS indexName, ' +
         'GROUP_CONCAT(column_name ORDER BY seq_in_index) AS columns, ' +
         'MAX(non_unique) AS nonUnique ' +
@@ -206,13 +330,33 @@ async function main() {
         'GROUP BY table_name, index_name ' +
         'ORDER BY table_name, index_name',
     );
-    [foreignKeyRows] = await client.query(
+    [foreignKeyRows] = await runQuery(
+      client,
       'SELECT constraint_name AS constraintName, table_name AS tableName, ' +
         'column_name AS columnName, referenced_table_name AS referencedTable, ' +
         'referenced_column_name AS referencedColumn ' +
         'FROM information_schema.key_column_usage ' +
         'WHERE table_schema = DATABASE() AND referenced_table_name IS NOT NULL ' +
         'ORDER BY table_name, constraint_name',
+    );
+    [uniqueRows] = await runQuery(
+      client,
+      'SELECT table_name AS tableName, index_name AS indexName, ' +
+        'GROUP_CONCAT(column_name ORDER BY seq_in_index) AS columns, ' +
+        'MAX(non_unique) AS nonUnique ' +
+        'FROM information_schema.statistics ' +
+        'WHERE table_schema = DATABASE() AND non_unique = 0 ' +
+        'GROUP BY table_name, index_name ' +
+        'ORDER BY table_name, index_name',
+    );
+    // 自增列（`id ... AUTO_INCREMENT`）—— 单列主键落在它身上时，
+    // 那条主键**不是业务唯一键**（实体里是 `@PrimaryGeneratedColumn`），
+    // 不参与对账，否则每张表都会被误报成「多了一条来源不明的约束」。
+    [identityRows] = await runQuery(
+      client,
+      'SELECT table_name AS tableName, column_name AS columnName ' +
+        'FROM information_schema.columns ' +
+        "WHERE table_schema = DATABASE() AND extra LIKE '%auto_increment%'",
     );
   } finally {
     await client.end();
@@ -229,6 +373,8 @@ async function main() {
       type: String(row.dataType).toLowerCase(),
       length: row.charLength === null ? null : Number(row.charLength),
       nullable: String(row.isNullable).toUpperCase() === 'YES',
+      columnType: String(row.columnType ?? ''),
+      default: normalizeDbDefault(row.columnDefault),
     });
   }
 
@@ -266,10 +412,118 @@ async function main() {
     dbForeignKeyNames.get(table).add(constraint);
   }
 
-  /* ------------------------- 实体声明 ------------------------- */
+  /** 库里真实存在的唯一约束 */
+  const dbUniques = uniqueRows.map((row) => ({
+    table: String(row.tableName).toLowerCase(),
+    name: String(row.indexName),
+    columns: String(row.columns)
+      .split(',')
+      .map((item) => item.trim().toLowerCase())
+      .filter(Boolean),
+    primary: String(row.indexName).toUpperCase() === 'PRIMARY',
+  }));
+
+  const identityColumns = new Set(
+    identityRows.map(
+      (row) =>
+        `${String(row.tableName).toLowerCase()}.${String(row.columnName).toLowerCase()}`,
+    ),
+  );
+
+  /* ------------------------- 实体 / 迁移声明 ------------------------- */
 
   const entitySchema = discoverEntitySchema();
   const entityTables = entitySchema.tables;
+  const migrationSchema = discoverMigrationSchema();
+
+  /** 「表.列」 → 迁移里的列定义解析结果（用于在报错文案里给出「迁移说是什么」） */
+  function migrationColumn(table, column) {
+    const def = migrationSchema.tables.get(table)?.get(column);
+    if (!def) return null;
+    return analyzeDdlColumnDef(def);
+  }
+
+  /* ==================================================================== */
+  /* 第一半：唯一键（登记表 ↔ 迁移 ↔ 库）                                   */
+  /* ==================================================================== */
+
+  const registryKeys = UNIQUE_KEY_REGISTRY.map((entry) => ({
+    table: entry.entity.toLowerCase(),
+    columns: entry.columns.map((column) => column.toLowerCase()),
+    source: `登记表 ${entry.entity}.${entry.columns.join(',')}`,
+  }));
+
+  const migrationKeys = migrationSchema.uniques
+    .filter((item) => !item.identity)
+    .map((item) => ({
+      table: item.table,
+      columns: item.columns,
+      source: `迁移 ${item.source} · ${item.name}`,
+    }));
+
+  /**
+   * 库里有没有「等价」的约束：
+   *   - 同表、同列集合的唯一索引；或
+   *   - 同表、同列集合的主键（复合主键天然唯一 —— 等价形态）。
+   */
+  function findEquivalent(table, columns) {
+    return dbUniques.find(
+      (item) => item.table === table && keyOf(item.columns) === keyOf(columns),
+    );
+  }
+
+  for (const expected of registryKeys) {
+    const found = findEquivalent(expected.table, expected.columns);
+    if (!found) {
+      issues.push({
+        kind: 'DB_UNIQUE_MISSING',
+        where: `${expected.table}.${expected.columns.join(',')}`,
+        detail:
+          `${expected.source} 要求这道唯一约束，但**库里没有** —— ` +
+          '生产库 `synchronize: false`，撞键不会报错，数据库会**静默写出重复行**',
+      });
+      continue;
+    }
+    notes.push({
+      kind: 'DB_UNIQUE_OK',
+      where: `${expected.table}.${expected.columns.join(',')}`,
+      detail: `库里由 \`${found.name}\` 提供唯一性（${found.columns.join(',')}）`,
+    });
+  }
+
+  // --- 反向：库里多出来的唯一约束 ----------------------------------------
+  //   迁移层与登记表都认可、但**实体没声明**的那些，由静态校验器负责；
+  //   这里只报「登记表与迁移都没有」的（来源不明的约束）。
+  for (const item of dbUniques) {
+    const known =
+      registryKeys.some(
+        (expected) =>
+          expected.table === item.table && keyOf(expected.columns) === keyOf(item.columns),
+      ) ||
+      migrationKeys.some(
+        (expected) =>
+          expected.table === item.table && keyOf(expected.columns) === keyOf(item.columns),
+      );
+    if (known) continue;
+    if (item.primary && item.columns.length === 1) {
+      // 单列主键：要么是自增 id（业务唯一键口径外），要么是自然键
+      //   （`system_settings.key` / `private_contacts.user_id` 等）——
+      //   后者都在登记表里，已在上面判过。
+      if (identityColumns.has(`${item.table}.${item.columns[0]}`)) continue;
+    }
+    issues.push({
+      kind: 'DB_UNIQUE_NOT_DECLARED',
+      where: `${item.table}.${item.columns.join(',')}`,
+      detail:
+        `库里有一条唯一约束 \`${item.name}\`（${item.columns.join(',')}），` +
+        '但**登记表与迁移里都没有** —— 来源不明的约束，' +
+        '写入会被它挡下（撞键），而代码没准备这条唯一键的失败语义',
+    });
+  }
+
+  /* ==================================================================== */
+  /* 第二半：实体 ↔ 库（表 / 索引 / 外键 / 列）                             */
+  /* ==================================================================== */
 
   /* ------------------------- 1) 表 ------------------------- */
 
@@ -391,6 +645,13 @@ async function main() {
 
   /* ------------------------- 4) 列 ------------------------- */
 
+  /** 三个新维度的「判了多少 / 跳过多少」计数（写进报告，便于复核口径） */
+  const dimensionStats = {
+    default: { checked: 0, skipped: 0, mismatch: 0 },
+    unsigned: { checked: 0, skipped: 0, mismatch: 0 },
+    enum: { checked: 0, skipped: 0, mismatch: 0 },
+  };
+
   for (const table of entityTables.values()) {
     const columns = dbColumns.get(table.table);
     if (!columns) continue; // 表缺失已单独报过
@@ -445,6 +706,114 @@ async function main() {
         });
         continue;
       }
+
+      /* --- 4.1 默认值 --- */
+      if (column.defaultValue !== null && column.defaultValue !== undefined) {
+        if (isExpressionDefault(found.default)) {
+          // 库侧是表达式 → 判不了，不判（不猜）。
+          dimensionStats.default.skipped += 1;
+        } else {
+          dimensionStats.default.checked += 1;
+          const entityDefault = String(column.defaultValue);
+          const dbDefault = found.default === null ? null : String(found.default);
+          const same =
+            dbDefault !== null && normalizeNumeric(entityDefault) === normalizeNumeric(dbDefault);
+          if (!same) {
+            dimensionStats.default.mismatch += 1;
+            const migration = migrationColumn(table.table, column.column);
+            issues.push({
+              kind: 'DB_COLUMN_DEFAULT_MISMATCH',
+              where: `${table.table}.${column.column}`,
+              detail:
+                `实体声明 \`${column.column}\` 的默认值是 ${entityDefault}，` +
+                `库里却是 ${dbDefault === null ? '**没有默认值**' : `\`${dbDefault}\``}` +
+                (migration?.defaultValue
+                  ? `，迁移里写的是 \`${migration.defaultValue}\``
+                  : '') +
+                ' —— 实体与库对「这一列没传值时填什么」的理解不一致：' +
+                '走实体的写入会带上默认值，走库默认值的写入（原生 SQL / 报表）会带上另一个',
+            });
+          }
+        }
+      } else {
+        dimensionStats.default.skipped += 1;
+      }
+
+      /* --- 4.2 unsigned --- */
+      if (column.unsigned !== null && column.unsigned !== undefined) {
+        const entityType = normalizeType(column.type);
+        if (entityType === 'tinyint' || entityType === 'boolean') {
+          // ⚠️ 布尔位（实体类型是 `tinyint` / `boolean` 的开关列）：无符号对它没有意义
+          //   （取值只有 0/1）。第十五轮的误报率实测：可判定的 79 列里有 9 列
+          //   属于这一类（实体写了 `unsigned: true`，迁移与库里是 `tinyint(1)`）——
+          //   纳入判定会产生 9 处常驻误报，故**不判**（记进 KNOWN-ISSUES）。
+          dimensionStats.unsigned.skipped += 1;
+        } else {
+          dimensionStats.unsigned.checked += 1;
+          const dbUnsigned = /unsigned/i.test(found.columnType);
+          if (dbUnsigned !== column.unsigned) {
+            dimensionStats.unsigned.mismatch += 1;
+            const migration = migrationColumn(table.table, column.column);
+            issues.push({
+              kind: 'DB_COLUMN_UNSIGNED_MISMATCH',
+              where: `${table.table}.${column.column}`,
+              detail:
+                `实体声明 \`${column.column}\` 是${column.unsigned ? '**无符号**' : '**有符号**'}，` +
+                `库里却是${dbUnsigned ? '**无符号**' : '**有符号**'}（${found.columnType}）` +
+                (migration ? `，迁移里写的是${migration.unsigned ? '无符号' : '有符号'}` : '') +
+                ' —— 有符号性与实体不一致：' +
+                '**外键两侧的有符号性必须一致**（MySQL 要求外键列与被引用列类型完全相同），' +
+                '不一致时那一列连外键都建不出来',
+            });
+          }
+        }
+      } else {
+        dimensionStats.unsigned.skipped += 1;
+      }
+
+      /* --- 4.3 枚举取值 --- */
+      if (column.enumValues !== null && column.enumValues !== undefined) {
+        const dbValues = parseDbEnumValues(found.columnType);
+        if (!dbValues) {
+          dimensionStats.enum.checked += 1;
+          dimensionStats.enum.mismatch += 1;
+          issues.push({
+            kind: 'DB_COLUMN_ENUM_MISMATCH',
+            where: `${table.table}.${column.column}`,
+            detail:
+              `实体声明 \`${column.column}\` 是枚举（取值：${column.enumValues.join(',')}），` +
+              `库里却是 ${found.columnType} —— 不是枚举列：` +
+              '实体能写进去的取值，库那一列可能直接拒收（严格模式报 1265）',
+          });
+        } else {
+          dimensionStats.enum.checked += 1;
+          const entityValues = [...column.enumValues].sort().join('|');
+          const dbValuesSorted = [...dbValues].sort().join('|');
+          if (entityValues !== dbValuesSorted) {
+            dimensionStats.enum.mismatch += 1;
+            const migration = migrationColumn(table.table, column.column);
+            const missing = column.enumValues.filter((item) => !dbValues.includes(item));
+            const extra = dbValues.filter((item) => !column.enumValues.includes(item));
+            issues.push({
+              kind: 'DB_COLUMN_ENUM_MISMATCH',
+              where: `${table.table}.${column.column}`,
+              detail:
+                `实体声明 \`${column.column}\` 的枚举取值是（${column.enumValues.join(',')}），` +
+                `库里却是（${dbValues.join(',')}）` +
+                (migration?.enumValues
+                  ? `，迁移里写的是（${migration.enumValues.join(',')}）`
+                  : '') +
+                (missing.length ? ` —— 实体允许但**库里不允许**的取值：${missing.join(',')}` : '') +
+                (extra.length ? ` —— 库里允许但**实体不允许**的取值：${extra.join(',')}` : '') +
+                ' —— 枚举取值不一致：写入会被数据库拒收（严格模式报 1265），' +
+                '而实体的类型检查放过去了',
+            });
+          }
+        }
+      } else {
+        dimensionStats.enum.skipped += 1;
+      }
+
       notes.push({
         kind: 'DB_COLUMN_OK',
         where: `${table.table}.${column.column}`,
@@ -560,6 +929,8 @@ async function main() {
     database: connection.database,
     host: connection.host,
     port: connection.port,
+    readOnlySession: readOnly,
+    grants,
     entityTables: entityTables.size,
     entityIndexes: entityIndexCount,
     entityForeignKeys: entityForeignKeyCount,
@@ -567,6 +938,10 @@ async function main() {
     databaseTables: dbColumns.size,
     databaseIndexes: dbIndexCount,
     databaseForeignKeys: dbForeignKeyCount,
+    registryUniqueKeys: registryKeys.length,
+    migrationUniqueConstraints: migrationKeys.length,
+    databaseUniqueConstraints: dbUniques.length,
+    dimensions: dimensionStats,
     issues: issues.length,
     notes: notes.length,
     detail: issues,
@@ -585,10 +960,15 @@ async function main() {
     }
     if (issues.length === 0) {
       process.stdout.write(
-        `✅ 库内实况对账通过（${connection.database} @ ${connection.host}:${connection.port}）：` +
+        `✅ 库内实况对账通过（${connection.database} @ ${connection.host}:${connection.port}，` +
+          `只读会话=${readOnly ? '是' : '否'}）：` +
           `${report.entityTables} 张表 / ${report.entityIndexes} 条实体索引 / ` +
           `${report.entityForeignKeys} 条实体外键 / ${report.entityColumns} 列` +
-          '在库里**逐条真实存在**（唯一键那一层由 check-unique-index-db.mjs 守着）\n',
+          '在库里**逐条真实存在**；' +
+          `${report.registryUniqueKeys} 个登记唯一键也全部真实存在；` +
+          `新增维度：默认值判了 ${dimensionStats.default.checked} 列、` +
+          `unsigned 判了 ${dimensionStats.unsigned.checked} 列、` +
+          `枚举取值判了 ${dimensionStats.enum.checked} 列\n`,
       );
     } else {
       for (const issue of issues) {
@@ -599,6 +979,18 @@ async function main() {
   }
 
   process.exit(issues.length > 0 ? 1 : 0);
+}
+
+/**
+ * 把默认值归一成「可比较」的形态：数字按数字比，其余按字符串比。
+ *
+ * ⚠️ 为什么需要：实体写 `default: 0`，库里回来的是字符串 `'0'`；
+ *   不归一就会把 `'0'` 与 `0` 判成不一致（那是假红）。
+ */
+function normalizeNumeric(value) {
+  const text = String(value).trim();
+  if (/^-?\d+(\.\d+)?$/.test(text)) return String(Number(text));
+  return text;
 }
 
 main().catch((error) => {

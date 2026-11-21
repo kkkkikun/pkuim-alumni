@@ -5643,3 +5643,146 @@ Swagger（`http://127.0.0.1:18100/docs-json`）。）
 - **专用压测窗口**排期、线上业务库应用两条索引迁移、发布窗口排期、
   正式密钥轮转、`AUTH_MODE=wechat` 切换、域名与 HTTPS、WAF 与备份定时任务、
   小程序真机复验：延续的人工项。
+
+## 21. 第十五轮（opt-015）：库内实况对账**合并 + 扩面**、管理端 404 分界的**正向**用例、复核第十四轮
+
+本轮是「扩面 + 复核」轮：**对外行为一个字没改**。
+
+### 21.1 库内实况对账：**两支合并成一支**，并扩到三个新维度
+
+此前「库内实况」这一层被拆成**两支**脚本（`check-unique-index-db.mjs` 核唯一键、
+`check-migration-schema-db.mjs` 核实体 ↔ 库的表 / 索引 / 外键 / 列）——
+同一层对账跑两遍、报两套口径。第十五轮**合并成一支**
+`infra/scripts/check-db-reality.mjs`（两半的判定口径写在同一处），
+两份**自测各自保留**（`check-unique-index-db-selftest.sh` 守唯一键那一半、
+`check-migration-schema-db-selftest.sh` 守实体 ↔ 库那一半），并都已接进 CI。
+
+**新纳入的三个维度 —— 先量误报率，再决定纳不纳**（口径**只收紧、不放宽**，
+只报**能由迁移、实体与库内实况直接判定**的分歧）：
+
+| 维度 | 可判定的列数 | 实测不一致 | 判定条件 | 结论 |
+|---|---|---|---|---|
+| **默认值** | 47 | **0** | 实体**显式声明** `default:` 且库侧是**字面量**（`CURRENT_TIMESTAMP(3)` 这类表达式**不判**） | ✅ 纳入 |
+| **枚举取值** | 21 | **0** | 实体**显式声明** `enum:` 且取值**解析得出来**（写在 `export const X = [...]` 里；解析不出来就**不判**，绝不猜） | ✅ 纳入 |
+| **`unsigned`** | 79 | **9** | 实体**显式声明** `unsigned:`，且该列**不是布尔位**（实体类型是 `tinyint` 的开关列） | ⚠️ **只对非布尔位的数值列**判定（实测 **70** 列、**0** 处不一致） |
+
+⚠️ **那 9 处为什么不判**：它们全是**布尔位**（`alumni_profiles.verified` /
+`show_in_directory` / `show_college` / `show_industry` / `show_region` /
+`show_direction` / `accept_contact_requests` / `allow_contact_share` /
+`contact_share_grants.allow`）——
+实体写了 `unsigned: true`，而迁移与库里是 `tinyint(1)`（**无符号**对布尔位没有意义，
+取值只有 0/1）。按现状纳入会产生 **9 处常驻误报**（可判定集的 11.4%），
+所以**排除布尔位**、只对非布尔位的数值列判定。
+这 9 处**只记录、不擅改**（改实体或加迁移都是改表结构，需单独排期）→
+`docs/KNOWN-ISSUES.md`。
+
+新增判定码：`DB_COLUMN_DEFAULT_MISMATCH` / `DB_COLUMN_UNSIGNED_MISMATCH` /
+`DB_COLUMN_ENUM_MISMATCH`。
+
+### 21.2 在**业务库（生产库）**上跑是安全的 —— 三重只读护栏（实测）
+
+「只读」不是口头承诺，脚本自己保证（三重护栏）：
+
+1. 所有 SQL 都经过 `runQuery()` —— **只放行** `SELECT` / `SHOW` / `SET SESSION`，
+   出现写关键字（`insert` / `update` / `delete` / `drop` / `alter` / …）
+   **当场拒绝**并以退出码 2 结束（不会执行）；
+2. 连接建立后第一件事就是 `SET SESSION TRANSACTION READ ONLY`，
+   并回读 `@@session.transaction_read_only` 确认为 **1**，否则拒绝继续；
+3. 全程不建索引、不跑迁移、不写数据、不改表。
+
+**实测（MySQL 8.4）**：在只读会话里执行 `UPDATE` / `INSERT` / `DROP INDEX`
+全部被 MySQL 拒绝（`ER_CANT_EXECUTE_IN_READ_ONLY_TRANSACTION`），
+且**没有任何一行数据被改动**。脚本还会把 `SHOW GRANTS` 的结果打出来 ——
+人工在生产库上跑时第一眼就能确认「这个账号能不能写库」。
+
+连接参数走环境变量（`DATABASE_URL`，或 `DB_HOST` / `DB_PORT` / `DB_USER` /
+`DB_PASSWORD` / `DB_NAME`），换库名即可切库：
+
+```bash
+DATABASE_URL=mysql://user:pass@host:3306/nmg_alumni node infra/scripts/check-db-reality.mjs
+```
+
+### 21.3 业务库 `nmg_alumni` 上的实跑：**如实报出 5 处缺失索引**
+
+对**业务库** `nmg_alumni`（只读）跑合并后的脚本，退出码 **1**，
+**5 处 `DB_INDEX_MISSING`**：
+
+| 缺失的索引 | 表 |
+|---|---|
+| `idx_alumni_profiles_graduation_year` | `alumni_profiles` |
+| `idx_articles_category` | `articles` |
+| `idx_notices_published` | `notices` |
+| `idx_event_registration_user` | `event_registrations` |
+| `idx_notifications_user_id` | `notifications` |
+
+这 **5 条正是**「第三轮的两条索引迁移」（`AddQueryIndexesAndProtectAuditLogs1730000005000`
+与 `AddRemainingQueryIndexes1730000006000`）**该建的索引** ——
+即仓库早已记录的「线上业务库尚未应用那两条迁移」这条人工项，
+现在有了**直接、可复现的证据**（同一脚本在**测试库**上是 0 处出入）。
+处置：迁移仍**属部署侧人工动作**（见 `docs/KNOWN-ISSUES.md`），
+本轮**没有**对业务库做任何写操作。
+
+### 21.4 管理端 404 分界的**正向**用例：20 个端点逐条「资源存在 → 不得 404」
+
+第十四轮补的是「资源**不存在** → 404」那一半；「资源**存在**时**不会** 404」
+此前只有**一条**反向验证（活动）。第十五轮补齐另一半：
+
+新增 `apps/api/test/integration/admin-not-found-boundary-positive.e2e-spec.ts`
+（**21 例**：20 条端点逐条 + 1 条逐条对齐），对登记在册的 **20 个**管理端端点：
+**先把对象真的造出来**（**走真实 API**，造出来的对象必然满足业务不变量），
+再去请求它，断言响应是 **2xx**（不得是 404、不得带 `NOT_FOUND` 错误码）。
+
+⚠️ **误报风险**（造出来的对象若不满足业务不变量，端点本就该 404）：
+本套件一律**走真实 API 建对象**，不直接插库 ——
+
+- 资源用**发布接口**建（`POST /resources`，建出来就是 `pending`；
+  审核端点要求状态 ∈ (pending, published, rejected)）；
+- 认证申请用**提交接口**建（`POST /alumni/verification`，建出来就是 `pending`；
+  审核端点要求状态 ∈ (pending, resubmitted, needs_more_material)）；
+- 附件用**登记接口**建（`POST /uploads/records`）并**真的挂上去**
+  （审核端点要求附件**属于**该对象）；
+- 校友用 **Mock 登录**建（登录会顺带建出 `alumni_profiles` 资料行）。
+
+**实测：20 个端点全部可以安全造数据**，逐条都有正向用例，
+**没有**需要写明原因而放弃的端点；
+（将来若有端点确实造不出满足不变量的对象，
+应在该套件的 `NOT_COVERED` 表里**写明原因**，
+最后那条「逐条对齐」用例会保证「已覆盖 + 写明原因未覆盖 = 登记在册的 20 条」。）
+
+另有一道兜底：正向用例覆盖的端点与 `check-read-visibility.mjs` 的登记表
+（`adminRegistry`）必须**逐条一致** —— 少一条 / 多一条当场红。
+
+### 21.5 复核第十四轮产出（逐条实跑，全部绿）
+
+| 校验器 / 自测 | 结果 |
+| --- | --- |
+| `bash infra/scripts/check-error-semantics-selftest.sh` | 退出码 **0** —— **17 类**「错误语义失配」缺陷全部被抓出 |
+| `bash infra/scripts/check-read-visibility-selftest.sh` | 退出码 **0** —— **12 类**「可见性口径失配」缺陷全部被抓出 |
+| `bash infra/scripts/check-migration-schema-db-selftest.sh` | 退出码 **0** —— **8 类**缺陷全部被抓出（第十四轮 5 类 + 本轮新增 3 类） |
+| `bash infra/scripts/check-unique-index-db-selftest.sh` | 退出码 **0** —— 「库里没有那道唯一约束」被抓住 |
+| `node infra/scripts/check-db-reality.mjs`（测试库） | 退出码 **0** —— 32 张表 / 40 条实体索引 / 46 条实体外键 / 271 列 + 21 个登记唯一键**逐条对齐**；新增维度：默认值判了 **47** 列、`unsigned` 判了 **70** 列、枚举取值判了 **21** 列 |
+
+### 21.6 回归
+
+| 项 | 结果 |
+| --- | --- |
+| `pnpm typecheck` / `pnpm lint` | 退出码 **0** |
+| `apps/api` 集成测试（新增套件在内） | 退出码 **0** —— **56 套件 / 482 例全绿**（新增套件 1 个 / 21 例；上一轮为 55 套件 / 461 例） |
+| `node infra/scripts/check-db-reality.mjs`（测试库） | 退出码 **0** |
+| 两支库内对账自测 | 退出码 **0** |
+
+### 21.7 本轮未做完 / 仍需人工
+
+- **#197 / #198**（公开活动详情的可见性与 `myRegistration`）、**#194 / #195**
+  （认证申请并发提交、连接解除后重建）、**#189**（游标分页）、
+  **`/admin/stats` 的 `connectionTotal` 口径**、**连接列表是否受对方可见开关约束**：
+  延续项，仍需产品 / 客户拍板 —— 本轮**一个字没改对外行为**。
+- **#200**：`GET /admin/events/:id/registrations` 在活动不存在时返回 200 + 空名单 ——
+  仍需**产品**拍板；本轮继续把现状**钉在用例里**（口径一旦被改，用例会红）。
+- **上线环境**跑一次合并后的 `node infra/scripts/check-db-reality.mjs`
+  （**只读**，在业务库上跑也安全）、`bash infra/scripts/healthcheck.sh`、
+  `node infra/scripts/invalidation-bus-drill.mjs`：部署侧动作。
+- **线上业务库应用那两条索引迁移**（21.3 节已给出可复现的证据）：部署侧人工动作。
+- **那 9 处布尔位的 `unsigned` 差异**：只记录、不擅改（改表结构需单独排期）。
+- **专用压测窗口**排期、发布窗口排期、正式密钥轮转、`AUTH_MODE=wechat` 切换、
+  域名与 HTTPS、WAF 与备份定时任务、小程序真机复验：延续的人工项。

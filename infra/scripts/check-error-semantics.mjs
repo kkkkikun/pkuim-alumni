@@ -623,11 +623,29 @@ function analyzeDdlColumnDef(def) {
     if (lengthMatch) length = Number(lengthMatch[1]);
   }
   const notNull = /\bNOT\s+NULL\b/i.test(text);
+  // ⚠️ `DEFAULT` 的取值有三种形态，**不能一律当字面量**：
+  //    - 字面量：DEFAULT 0 / DEFAULT 'draft'
+  //    - 表达式：DEFAULT CURRENT_TIMESTAMP(3)（`@CreateDateColumn` 就是它）
+  //    - 函数：DEFAULT (uuid())
+  //    表达式与函数**判不了**（库里的形态与 DDL 原文不一定逐字相同），
+  //    所以单独标出来 —— 对账时**跳过**，不报。
+  const defaultMatch = /\bDEFAULT\s+('(?:[^']|'')*'|[A-Za-z_][\w$]*(?:\s*\([^)]*\))?)/i.exec(text);
+  const defaultRaw = defaultMatch ? defaultMatch[1] : null;
+  const defaultIsExpression = Boolean(
+    defaultRaw && !/^'/.test(defaultRaw) && /[A-Za-z_]/.test(defaultRaw),
+  );
+  const enumMatch = /\bENUM\s*\(([^)]*)\)/i.exec(text);
   return {
     type,
     length,
     nullable: notNull ? false : true,
     autoIncrement: /\bAUTO_INCREMENT\b/i.test(text),
+    unsigned: /\bUNSIGNED\b/i.test(text),
+    defaultValue: defaultIsExpression ? null : normalizeDefaultValue(defaultRaw),
+    defaultIsExpression,
+    enumValues: enumMatch
+      ? [...enumMatch[1].matchAll(/'((?:[^']|'')*)'/g)].map((item) => item[1].replace(/''/g, "'"))
+      : null,
   };
 }
 
@@ -1003,22 +1021,105 @@ function classDecorators(src, className) {
 }
 
 /**
- * 解析实体里一列的**声明**（类型 / 长度 / 可空性）。
+ * 解析实体文件里导出的**常量数组**（枚举取值的来源）。
+ *
+ * ⚠️ 为什么需要它：实体的枚举列写的是 `enum: [...NOTIFICATION_TYPES]`，
+ *    取值本身定义在**同一个文件**里的
+ *    `export const NOTIFICATION_TYPES = [...] as const;`。
+ *    不把常量解析出来，就拿不到「实体声称的枚举取值」——
+ *    那一维度（枚举取值）就会因为「读不出来」而**永远判不了**。
+ *
+ * @returns {Map<string, string[]>} 常量名 → 取值数组
+ */
+function parseEntityConstArrays(src) {
+  const map = new Map();
+  const re = /export const ([A-Z0-9_]+)\s*=\s*\[([\s\S]*?)\]\s*as const/g;
+  let match;
+  while ((match = re.exec(src)) !== null) {
+    const values = [...match[2].matchAll(/'([^']*)'|"([^"]*)"/g)].map(
+      (item) => item[1] ?? item[2],
+    );
+    map.set(match[1], values);
+  }
+  return map;
+}
+
+/**
+ * 把实体里声明的**默认值**归一成字符串。
+ *
+ * ⚠️ 为什么归一：实体里写的是**字面量**（`default: 0` / `default: 'draft'`），
+ *    库里 `information_schema.columns.column_default` 回来的也是字符串
+ *    （`'0'` / `'draft'`）—— 两边要按**同一个形态**比，否则
+ *    `0` 与 `'0'` 会被判成「不一致」（那是假红，不是缺陷）。
+ * ⚠️ **非字面量**（`default: () => 'x'` 这类表达式）**判不了** → 返回 `null`
+ *    （= 不判定）：库里那一列的默认值是**算出来的**，
+ *    拿源码里的表达式去比数据库里的结果，比出来的必然是假红。
+ * @returns {string|null} 归一后的默认值；实体没声明或不是字面量就是 `null`
+ */
+function normalizeDefaultValue(raw) {
+  if (raw === null || raw === undefined) return null;
+  const text = String(raw).trim();
+  if (!text) return null;
+  if (text === 'true') return '1';
+  if (text === 'false') return '0';
+  // 表达式（函数 / 箭头函数 / 括号）：**不判定**
+  if (/[()=>]/.test(text)) return null;
+  return text.replace(/^['"]|['"]$/g, '');
+}
+
+/**
+ * 解析实体里一列的**声明**（类型 / 长度 / 可空性 / 无符号 / 默认值 / 枚举取值）。
  *
  * ⚠️ `nullable` 的默认值是 **false**（TypeORM 的约定）：
  *    实体没写 `nullable` 就是「NOT NULL」。
  *    这条与迁移里的 DDL 对账时必须一致 ——
  *    实体说 NOT NULL、库里允许 NULL 的话，那一列**不会**参与唯一约束的碰撞
  *    （MySQL 的唯一索引允许多个 NULL），防线比声明的弱。
+ *
+ * ⚠️ `unsigned` / `default` / `enum` 三项**只在实体显式声明时**才有值
+ *    （`null` = 没声明 = **不判定**）：
+ *    「实体没写」不等于「实体说有符号 / 没有默认值 / 取值任意」——
+ *    那是推断，不是声明。按「只报能直接判定的分歧」的口径，
+ *    没声明就**不报**。
+ *    （`default` 尤其要这样：`@CreateDateColumn` 在迁移里是
+ *    `DEFAULT CURRENT_TIMESTAMP(3)`，实体侧**不写** `default` ——
+ *    拿「实体没声明」去判「库里有默认值」会把每一张表的时间列都报成缺陷。）
+ *
+ * @param {string} args  装饰器参数原文
+ * @param {Map<string,string[]>|null} consts  同一文件里导出的常量数组（解析枚举取值用）
  */
-function analyzeEntityColumnArgs(args) {
+function analyzeEntityColumnArgs(args, consts = null) {
   const typeMatch = /type:\s*'([^']+)'/.exec(args);
   const lengthMatch = /length:\s*(\d+)/.exec(args);
   const nullableMatch = /nullable:\s*(true|false)/.exec(args);
+  const unsignedMatch = /unsigned:\s*(true|false)/.exec(args);
+  const defaultMatch = /default:\s*([^,\n}]+)/.exec(args);
+  const enumMatch = /enum:\s*\[([^\]]*)\]/.exec(args);
+
+  // 枚举取值：`enum: ['a', 'b']`（内联）或 `enum: [...SOME_CONST]`（引用常量）
+  let enumValues = null;
+  if (enumMatch) {
+    const inner = enumMatch[1].trim();
+    if (inner.startsWith('...')) {
+      const constName = inner.replace(/^\.\.\./, '').trim();
+      const resolved = consts?.get(constName) ?? null;
+      // ⚠️ 常量解析不出来（引用了别的文件 / 动态生成）→ 记 `null`（**不判定**），
+      //    绝不猜 —— 猜错就会凭空报出假缺口。
+      enumValues = resolved ? [...resolved] : null;
+    } else if (inner) {
+      enumValues = [...inner.matchAll(/'([^']*)'|"([^"]*)"/g)].map((item) => item[1] ?? item[2]);
+    } else {
+      enumValues = [];
+    }
+  }
+
   return {
     type: typeMatch ? typeMatch[1].toLowerCase() : null,
     length: lengthMatch ? Number(lengthMatch[1]) : null,
     nullable: nullableMatch ? nullableMatch[1] === 'true' : false,
+    unsigned: unsignedMatch ? unsignedMatch[1] === 'true' : null,
+    defaultValue: normalizeDefaultValue(defaultMatch ? defaultMatch[1] : null),
+    enumValues,
   };
 }
 
@@ -1318,6 +1419,9 @@ function discoverEntitySchema() {
   /** 表 → 声明 */
   const tables = new Map();
   for (const item of classes) {
+    // ⚠️ 枚举取值写在**常量**里（`enum: [...NOTIFICATION_TYPES]`），
+    //    常量与实体在**同一个文件**里 —— 先把该文件的常量数组解析出来。
+    const constArrays = parseEntityConstArrays(item.src);
     const block = classBlock(item.src, item.className);
     if (!block) continue;
     /** 列名 → 声明 */
@@ -1342,7 +1446,7 @@ function discoverEntitySchema() {
       if (columnDecorator) {
         const nameMatch = /name:\s*'([^']+)'/.exec(columnDecorator.args);
         columnName = (nameMatch ? nameMatch[1] : property.prop).toLowerCase();
-        const analyzed = analyzeEntityColumnArgs(columnDecorator.args);
+        const analyzed = analyzeEntityColumnArgs(columnDecorator.args, constArrays);
         columnDef = {
           column: columnName,
           prop: property.prop,
@@ -1351,6 +1455,13 @@ function discoverEntitySchema() {
           length: analyzed.length,
           // ⚠️ TypeORM 的 `nullable` 默认是 **false**（NOT NULL）
           nullable: analyzed.nullable,
+          // 第十五轮起多带三项：**无符号 / 默认值 / 枚举取值**。
+          // 三项都只在实体**显式声明**时才有值（否则是 `null` = 不判定）——
+          // 库内实况对账（`check-db-reality.mjs`）据此判定，
+          // 静态对账的既有判定条件**一个字没改**。
+          unsigned: analyzed.unsigned,
+          defaultValue: analyzed.defaultValue,
+          enumValues: analyzed.enumValues,
           unique: /unique:\s*true/.test(columnDecorator.args),
           primary:
             columnDecorator.name === 'PrimaryColumn' ||
@@ -2367,7 +2478,7 @@ function main() {
 /* ------------------------------ 导出 ------------------------------ */
 
 /**
- * 供别的脚本复用（`check-unique-index-db.mjs` 要拿**同一份**登记表与
+ * 供别的脚本复用（`check-db-reality.mjs` 要拿**同一份**登记表与
  * **同一套**迁移解析 —— 两边各算各的就会出现「静态说有、库里没有」的假绿）。
  */
 export {
@@ -2375,6 +2486,9 @@ export {
   discoverUniqueKeys,
   discoverMigrationSchema,
   discoverEntitySchema,
+  analyzeDdlColumnDef,
+  analyzeEntityColumnArgs,
+  parseEntityConstArrays,
 };
 
 /**
