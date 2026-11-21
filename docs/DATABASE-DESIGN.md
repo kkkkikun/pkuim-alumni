@@ -72,7 +72,8 @@
 | created_at / updated_at | | |
 
 索引：`uk_alumni_profiles_user`、`idx_alumni_profiles_region`、`idx_alumni_profiles_industry`、
-`idx_alumni_profiles_directory(show_in_directory, region_code, industry_code)`。
+`idx_alumni_profiles_directory(show_in_directory, region_code, industry_code)`、
+`idx_alumni_profiles_graduation_year(graduation_year)`（通讯录按毕业年份筛选，迁移 `AddQueryIndexesAndProtectAuditLogs1730000005000`）。
 
 ### private_contacts
 | 列 | 类型 | 说明 |
@@ -105,6 +106,11 @@
 ### verification_attachments
 `id, application_id FK→verification_applications, media_id FK→media_assets, created_at`；
 唯一索引 `uk_verification_attachment(application_id, media_id)`。
+
+### verification_reviews
+`id, application_id FK→verification_applications, admin_id FK→admin_users, action, note,
+snapshot_version INT, created_at` —— **只追加，不覆盖**。
+索引 `idx_verification_reviews_app(application_id, created_at)`（按申请查审核历史）。
 
 ## 2. 字典
 
@@ -180,25 +186,30 @@ created_at, updated_at`
 `id, event_id FK→events, user_id FK→users, status ENUM('registered','cancelled','attended'),
 note VARCHAR(500), created_at, updated_at`
 唯一索引 `uk_event_registration(event_id, user_id)` —— 取消后复用同一行（status 改回 registered）。
+索引 `idx_event_registration_user(user_id, id)`（「我的活动」按 user_id 排序分页，迁移 `AddRemainingQueryIndexes1730000006000`）。
 
 ## 6. 内容
 
 - **articles**：`id, category_id FK→article_categories NULL, title VARCHAR(160), summary VARCHAR(255),
   body MEDIUMTEXT, cover_media_id, status ENUM('draft','published','offline'), published_at, view_count INT,
-  created_by FK→admin_users, version, created_at, updated_at`；索引 `idx_articles_published(status, published_at)`。
+  created_by FK→admin_users, version, created_at, updated_at`；
+  索引 `idx_articles_published(status, published_at)`、`idx_articles_category(category_id, published_at)`（按分类筛选 + 按发布时间倒序）。
 - **article_categories**：`id, name, slug UNIQUE, sort_order, created_at`；
   唯一索引 `uk_article_categories_slug(slug)`。
 - **notices**：`id, title VARCHAR(160), body MEDIUMTEXT, status ENUM('draft','published','offline'),
-  published_at, view_count, created_by FK→admin_users, version, created_at, updated_at`。
+  published_at, view_count, created_by FK→admin_users, version, created_at, updated_at`；
+  索引 `idx_notices_published(status, published_at)`。
 
 ## 7. 通知
 
 - **notifications**：`id, user_id FK→users, type ENUM('verification_submitted','verification_decision',
   'connection_request','connection_decision','resource_review','event_registration','event_changed','system'),
   title VARCHAR(160), body VARCHAR(1000), payload JSON, read_at DATETIME(3) NULL, expires_at DATETIME(3) NULL,
-  created_at`；索引 `idx_notifications_user(user_id, read_at, created_at)`。
+  created_at`；索引 `idx_notifications_user(user_id, read_at, created_at)`、
+  `idx_notifications_user_id(user_id, id)`（「我的通知」按 id 倒序分页，迁移 `AddQueryIndexesAndProtectAuditLogs1730000005000`）。
 - **notification_deliveries**：`id, notification_id FK→notifications, channel ENUM('inapp','wechat'),
-  status ENUM('pending','sent','failed'), attempts INT, last_error VARCHAR(500), sent_at, created_at`。
+  status ENUM('pending','sent','failed'), attempts INT, last_error VARCHAR(500), sent_at, created_at`；
+  索引 `idx_notification_deliveries_notification(notification_id, status)`（按通知查投递记录）。
 - **outbox_events**：`id, aggregate_type VARCHAR(64), aggregate_id VARCHAR(64), event_type VARCHAR(64),
   payload JSON, status ENUM('pending','processing','done','failed'), attempts INT,
   available_at DATETIME(3) NOT NULL, processed_at DATETIME(3) NULL, created_at`；
@@ -216,7 +227,7 @@ note VARCHAR(500), created_at, updated_at`
 - **admin_user_roles**：`admin_user_id FK, role_id FK` 复合主键。
 - **role_permissions**：`role_id FK, permission_id FK` 复合主键。
 - **admin_action_logs**：`id, admin_id FK→admin_users, action VARCHAR(64), target_type VARCHAR(32),
-  target_id VARCHAR(64), detail JSON, ip VARCHAR(45), created_at`；索引 `(admin_id, created_at)`。
+  target_id VARCHAR(64), detail JSON, ip VARCHAR(45), created_at`；索引 `idx_admin_action_logs_admin(admin_id, created_at)`。
 
 初始角色与权限（Seed 写入）：
 
@@ -281,6 +292,7 @@ note VARCHAR(500), created_at, updated_at`
 | 实体 ↔ 迁移（静态） | `node infra/scripts/check-error-semantics.mjs` | 扫全量实体抽出唯一键，再扫迁移抽出**真正创建**的唯一约束（`uk_*` 与复合主键），缺一个即报错；唯一键列的**长度 / 可空性**也要一致 |
 | 迁移 ↔ 库（实况） | `node infra/scripts/check-unique-index-db.mjs` | 只读 `information_schema.statistics`：登记表要求的每一道唯一约束**在库里必须真的存在** |
 | 登记表 ↔ 实现 | `check-error-semantics.mjs` | 少登记一条唯一键 → 报错；「撞键时返回什么、在哪处置」必须写清并能在代码里找到 |
+| **本文件 ↔ 迁移（索引清单）** | `check-error-semantics.mjs`（第十一轮新增） | 本文件里写出的**每一个** `uk_*` / `idx_*` 索引名，迁移里必须**真的创建**它（否则报 `DOC_INDEX_NOT_IN_MIGRATION`）；迁移里创建的每一个索引，本文件的清单里也必须**写明**（否则报 `MIGRATION_INDEX_NOT_IN_DOC`）。实测：42 ↔ 42 逐条对齐 |
 
 两条**已知的等价形态**（不算不一致）：
 
