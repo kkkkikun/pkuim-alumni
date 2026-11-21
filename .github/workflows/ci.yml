@@ -182,6 +182,23 @@ jobs:
       - name: Integration tests
         run: pnpm --filter @nmg/api test:integration
 
+      # 第十轮：唯一键的**库内实况**对账。
+      #
+      # 为什么必须进门禁：
+      #   生产库 `synchronize: false`，真正约束数据的是**迁移**，
+      #   而静态对账（`check-error-semantics.mjs` 的 R5）只能证明
+      #   「迁移里**写了**创建那道唯一索引」——
+      #   证明不了「**这个库里真的有**那道索引」。
+      #   这一层的失败是**静默**的：撞键不报错 → 数据库直接写出重复行。
+      #
+      # ⚠️ 只读：全程只查 information_schema，不建索引、不跑迁移、不写数据。
+      #   反向验证（selftest）在**临时副本**里注入缺陷，不碰数据库。
+      - name: Unique key reconciliation against the test database
+        run: |
+          set -euo pipefail
+          node infra/scripts/check-unique-index-db.mjs
+          bash infra/scripts/check-unique-index-db-selftest.sh
+
       # 第九轮：把「跨实例撤权立刻生效」接进 CI（**跨进程**那一档）。
       #
       # 为什么必须进门禁：

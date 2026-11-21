@@ -5127,3 +5127,141 @@ Swagger（`http://127.0.0.1:18100/docs-json`）。）
 - 延续的人工项：发布窗口排期（`docs/RELEASE-ORDER.md`）、线上业务库应用两条索引迁移、
   正式密钥轮转与密钥管理服务接入、正式 AppID/AppSecret 与 `AUTH_MODE=wechat` 切换、
   正式域名与 HTTPS 证书、微信订阅消息模板、WAF 规则与备份定时任务、小程序真机复验。
+
+## 17. 第十轮（opt-010）：唯一键登记表 ↔ 实体 ↔ 迁移 三方对账 + 复核第九轮 + 读端点可见性抽查
+
+### 17.1 三方对账（本轮新增的一层）
+
+生产库 `synchronize: false`，真正约束数据的是
+`apps/api/src/database/migrations/*`。此前 `check-error-semantics.mjs`
+只对账「实体 ↔ 登记表」与「登记表 ↔ 实现」，**迁移这一层从未被核过** ——
+「实体里有、迁移里没建」= 生产库**没有那道防线**（撞键不报错 →
+静默写出重复行 → 代码里那段「捕获重复键 → 409」永不触发）。
+
+本轮把迁移里**真正创建的**唯一约束（`uk_*` 唯一索引、复合主键、
+`ADD CONSTRAINT ... UNIQUE`）抽出来，与实体声明、登记表三方对账：
+
+| 项 | 实测 |
+|---|---|
+| 实体里声明的唯一键 | **21** 条（与登记表一一对应） |
+| 迁移层抽出的唯一约束 | **47** 条（含各表的自增主键） |
+| 三方对账结果 | **21 / 21 全部有对应的库级约束**，0 处「实体有、迁移没有」 |
+| 其中由**唯一索引**提供 | 15 条（`uk_*`） |
+| 其中由**主键**等价提供 | 6 条（`admin_user_roles` / `role_permissions` / `private_contacts` / `system_settings` / `regions` / `industries`） |
+| 对账结论 | **不需要新增 `AddMissingUniqueIndexes*` 迁移** —— 缺口为 0；给已有主键再补一条同列唯一索引属于重复约束（写放大），与仓库「没有实测数字的索引不写进生产库」的口径相悖 |
+
+逐条判断（不搞一刀切）：
+
+| 情形 | 判断 | 理由 |
+|---|---|---|
+| 19 条有同名唯一索引 | **无需改动** | 索引名与列集合都与实体一致 |
+| 2 条关联表只有复合主键（`admin_user_roles` / `role_permissions`） | **不补迁移** | 复合主键**天然唯一**，与唯一索引等价；再建一条同列唯一索引 = 重复约束 + 写放大。对账按**列集合**判定，主键形态记为「等价」 |
+| `idempotency_records.scope`（实体 64 / 迁移 255） | **改实体**（已改） | 迁移是结构的事实来源（#140 的修复就在迁移里）；实体改回 64 只会让 `synchronize: true` 的环境把列缩回去。见 17.2 |
+
+### 17.2 发现并修复：`idempotency_records.scope` 的实体 ↔ 迁移分叉（缺陷 #196）
+
+- 迁移 `WidenIdempotencyScope1730000004000`（#140 的修复）把 `scope` 放宽到
+  `VARCHAR(255)`，**实体一直没跟着改**（仍写 64）。
+- `scope` 是 `uk_idempotency(scope, idem_key)` 的**首列** ——
+  长度直接决定「两把钥匙会不会被判成同一把」。
+- 生产库不受影响（`synchronize: false`，库里是 255）；
+  但开着 `synchronize: true` 的环境、或跑 `migration:generate` 时会**缩回 64** →
+  #140 原形复发。
+- **处置**：实体改为 `length: 255`（以迁移为准）+ 注释写明与 #140 的关系；
+  `docs/DATABASE-DESIGN.md` 里同样写错的 `VARCHAR(64)` 一并改正。
+- **防线**：R5 规则现在会核唯一键列的**长度 / 可空性**，这类分叉以后当场报错。
+
+### 17.3 库内实况对账（新增 `check-unique-index-db.mjs`，只读）
+
+静态对账只能证明「迁移里**写了**创建那道索引」，证明不了「**这个库里真的有**」。
+新增 `infra/scripts/check-unique-index-db.mjs`：只读
+`information_schema.statistics`，把登记表要求的每一道唯一约束与**真实库**核对。
+
+| 库 | 登记唯一键 | 库里唯一约束 | 结果 |
+|---|---|---|---|
+| `nmg_alumni_test`（测试库，13307） | 21 | 48 | ✅ 21 / 21 **真实存在**，无来源不明的约束 |
+| `nmg_alumni`（**业务库**，13306） | 21 | 48 | ✅ 21 / 21 **真实存在**，无来源不明的约束 |
+
+（48 = 21 条业务唯一键 + 26 张表的自增主键 + TypeORM 自己的 `migrations` 表主键。）
+
+### 17.4 反向验证：7 个用例 → **10 个**（迁移层新增 3 个）
+
+`infra/scripts/check-error-semantics-selftest.sh`（本机实跑）：
+
+| 用例 | 命中 |
+|---|---|
+| error-semantics-conflict-mapping-removed | `MISSING_CONFLICT_MAPPING` |
+| error-semantics-new-unique-column | `UNIQUE_COLUMN_NOT_REVIEWED` |
+| error-semantics-doc-row-removed | `ERROR_SEMANTICS_UNDOCUMENTED` |
+| error-semantics-user-conflict-mapping-removed | `MISSING_CONFLICT_MAPPING` |
+| error-semantics-user-unique-key-unregistered | `UNIQUE_COLUMN_NOT_REVIEWED` |
+| error-semantics-composite-unique-key-unregistered | `UNIQUE_COLUMN_NOT_REVIEWED` |
+| error-semantics-user-doc-row-removed | `ERROR_SEMANTICS_UNDOCUMENTED` |
+| **error-semantics-migration-unique-missing**（本轮新增） | `MIGRATION_UNIQUE_MISSING` |
+| **error-semantics-migration-unique-columns-changed**（本轮新增） | `MIGRATION_UNIQUE_COLUMN_MISMATCH` |
+| **error-semantics-migration-unique-not-declared**（本轮新增） | `MIGRATION_UNIQUE_NOT_DECLARED` |
+
+基线（干净副本）退出码 **0**；10 个退化形态**全部被抓出**、退出码非 0；
+元自检（对「永远返回 0 的假校验器」）通过。
+
+新增 `infra/scripts/check-unique-index-db-selftest.sh`（库内对账的反向验证）：
+基线退出码 0；注入「登记表要求、库里其实没有」的唯一键后
+→ 命中 `DB_UNIQUE_MISSING`、退出码 1；元自检通过。
+（注入只发生在**临时副本**里，全程**不写库**。）
+
+### 17.5 复核第九轮产出（逐条对账）
+
+- **7 个旧注入用例逐条复跑**：基线绿 + 退化形态全被抓出 + 退出码 0（见 17.4）。
+- **15 例用户侧用例 + 8 例管理端用例**（`user-write-error-semantics.e2e-spec.ts`
+  与 `admin-write-error-semantics.e2e-spec.ts`）：本机对**真实 MySQL 8.4** 实跑，
+  **23 / 23 全绿**（幂等 4 + 冲突 8 + 404 3 = 用户侧 15；管理端 8）。
+- **登记表 ↔ 实体实现仍一致**：21 条登记项与 21 个实体唯一键一一对应，
+  少登记 / 多登记都会被当场报错（R1 / R2）。
+- **全量集成测试**（本机真实 MySQL 8.4 / Redis / MinIO）：
+  `pnpm --filter @nmg/api test:integration` → **52 套件 / 412 例全绿**
+  （上一轮 51 套件 / 397 例；本轮未新增用例 —— 本轮的防线是**静态校验器 + 反向验证**）。
+- **类型与风格**：`pnpm typecheck` / `pnpm lint` 退出码 **0**。
+- **CI 里其余 18 个静态校验器**逐个实跑：全部退出码 **0**
+  （含 `check-pending-migrations.sh --static-only`：清单 7 个迁移 ↔ 目录 7 个文件）。
+- **其余 6 份纯静态自测脚本**（`check-enum-consistency` / `check-request-dto` /
+  `check-rbac-matrix` / `check-contract-mirror` / `check-admin-web` /
+  `check-miniprogram`）逐个实跑：全部退出码 **0**。
+
+### 17.6 读端点「不可见 → 404 还是 403」抽查（可选项）
+
+对照「已知设计取舍」第 2 条（不通过状态码泄露存在性）抽查**公开读端点**：
+
+| 端点 | 不可见时的行为 | 与口径一致 |
+|---|---|---|
+| `GET /alumni/:id`（通讯录） | **404** | ✅ |
+| `GET /articles/:id` | **404**（未发布） | ✅ |
+| `GET /notices/:id` | **404**（未发布） | ✅ |
+| `GET /resources/:id` | **404**（未发布、非作者非管理员） | ✅ |
+| `GET /events/:id` | **200（不过滤）** | ❌ → **#197** |
+
+另外发现 `GET /events/:id` **从不填 `myRegistration`**（公开端点没有身份可填，
+而 API-SPEC 与小程序都按它渲染「已报名 / 未报名」）→ **#198**。
+两处都属**对外契约变更**，本轮**只记录、不擅改**（需产品 / 客户确认）。
+
+### 17.7 文档同步（本轮修正的陈旧 / 矛盾表述）
+
+| 位置 | 原文 | 改为 |
+|---|---|---|
+| `docs/DATABASE-DESIGN.md` | `uk_verification_attachment(app_id, media_id)` | `(application_id, media_id)`（列名与实体 / 迁移一致） |
+| `docs/DATABASE-DESIGN.md` | `idempotency_records` 的 `scope VARCHAR(64)` | `VARCHAR(255)`（与迁移 #140 一致） |
+| `docs/DATABASE-DESIGN.md` | 「重复报名 → 唯一索引冲突 → 幂等返回既有报名记录（不报错）」 | 「撞唯一索引 → **409 `CONFLICT`**；顺序重复提交命中既有行 → 幂等」（与已上线的 API-SPEC 口径一致） |
+| `docs/DATABASE-DESIGN.md` | `resource_post_attachments` / `article_categories` / `admin_users` / `roles` / `permissions` 的唯一索引**没写名字** | 补上索引名（`uk_*`），与迁移一致 |
+| `docs/DATABASE-DESIGN.md` | —— | 新增第 12 节「唯一键的口径与对账（第十轮）」 |
+
+### 17.8 本轮未做完 / 仍需人工
+
+- **#197 / #198**（公开活动详情的可见性与 `myRegistration`）：属**对外契约变更**，
+  需产品 / 客户确认后再改（本轮只记录）。
+- **#194 / #195**（认证申请并发提交、连接解除后重建）：延续项，需产品 / 架构确认。
+- **游标分页（#189）**、**`/admin/stats` 的 `connectionTotal` 口径**：延续项。
+- **上线环境**跑一次 `node infra/scripts/check-unique-index-db.mjs`
+  （对着业务库只读核对）与 `bash infra/scripts/healthcheck.sh`、
+  `node infra/scripts/invalidation-bus-drill.mjs`：部署侧动作。
+- **线上业务库应用**两条索引迁移（#5000 / #6000）、发布窗口排期、
+  正式密钥轮转、`AUTH_MODE=wechat` 切换、域名与 HTTPS、WAF 与备份定时任务、
+  小程序真机复验：延续的人工项。

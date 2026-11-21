@@ -67,7 +67,15 @@ export class IdempotencyRecord {
   @PrimaryGeneratedColumn({ name: 'id', type: 'bigint', unsigned: true })
   id: number;
 
-  @Column({ name: 'scope', type: 'varchar', length: 64, nullable: false })
+  // ⚠️ 长度必须与迁移 `WidenIdempotencyScope1730000004000` 一致（**255**）：
+  //   缺陷 #140 —— scope 是「方法 + 实际路径 + 用户 id」，
+  //   长路径会超过 64 字符，MySQL 直接报 `Data too long` → 幂等请求 500。
+  //   迁移把列放宽到了 255，而**实体一直没跟着改** ——
+  //   于是实体声明（64）与库里真实结构（255）分叉：
+  //   一旦哪个环境开着 `synchronize: true`（或有人跑 `migration:generate`），
+  //   就会把列**缩回** 64 → 缺陷 #140 原形复发。
+  //   第十轮由「实体 ↔ 迁移」对账（`check-error-semantics.mjs` 的 R5）抓出并修正。
+  @Column({ name: 'scope', type: 'varchar', length: 255, nullable: false })
   scope: string;
 
   @Column({ name: 'idem_key', type: 'varchar', length: 128, nullable: false })

@@ -46,6 +46,10 @@
  *   error-semantics-user-unique-key-unregistered       → 用户侧：新增唯一列却没登记
  *   error-semantics-composite-unique-key-unregistered  → 用户侧：新增**复合**唯一索引却没登记
  *   error-semantics-user-doc-row-removed              → 用户侧：口径改了但文档没改
+ *   error-semantics-migration-unique-missing           → 迁移层：唯一索引**没建**（生产库没有那道防线）
+ *   error-semantics-migration-unique-columns-changed   → 迁移层：唯一索引的**列**与实体对不上
+ *   error-semantics-migration-unique-not-declared      → 迁移层：迁移建了实体没声明的唯一约束
+ *   unique-index-db-registry-injected → 库内对账：登记表要求、但**库里其实没有**的唯一键
  */
 
 import fs from 'node:fs';
@@ -691,6 +695,86 @@ export class InjectedSafeUpsertService {
     if (index < 0) throw new Error('注入失败：API-SPEC 里找不到活动重复报名那一行');
     lines.splice(index, 1);
     writeText(file, lines.join('\n'));
+  },
+
+  /*
+   * 错误语义对账（迁移层，第十轮）：把 `uk_event_registration` 的
+   * **唯一**标记去掉 —— 迁移不再创建那道唯一索引。
+   * 后果：生产库 `synchronize: false`，跑的是迁移 →
+   * 生产库**根本没有那道防线**，重复报名会**静默写出两行**，
+   * 而代码里「捕获重复键 → 409」的那一段永远不会触发。
+   * 期望：MIGRATION_UNIQUE_MISSING 点名 event_registrations。
+   */
+  'error-semantics-migration-unique-missing'() {
+    const file = path.join(
+      copyRoot,
+      'apps/api/src/database/migrations/1730000000000-InitSchema.ts',
+    );
+    replaceOnce(
+      file,
+      /(\{\s*\n\s*table: 'event_registrations',\s*\n\s*name: 'uk_event_registration',\s*\n\s*columns: '`event_id`, `user_id`',\s*\n\s*)unique: true,/,
+      '$1// 自测注入：不再创建唯一索引（生产库于是没有那道防线）',
+    );
+  },
+
+  /*
+   * 错误语义对账（迁移层，第十轮）：把 `uk_event_registration` 的列
+   * 从 `(event_id, user_id)` 改成只有 `(event_id)` ——
+   * **覆盖不足**：两把不同的钥匙（不同用户报同一活动）会被判成同一把。
+   * 期望：MIGRATION_UNIQUE_COLUMN_MISMATCH 点名 event_registrations。
+   */
+  'error-semantics-migration-unique-columns-changed'() {
+    const file = path.join(
+      copyRoot,
+      'apps/api/src/database/migrations/1730000000000-InitSchema.ts',
+    );
+    replaceOnce(
+      file,
+      /columns: '`event_id`, `user_id`',\s*\n\s*unique: true,/,
+      "columns: '`event_id`',\n        unique: true,",
+    );
+  },
+
+  /*
+   * 错误语义对账（迁移层，第十轮）：迁移里多建一条**实体没声明**的唯一索引 ——
+   * 库比实体多一道约束，写入会被库挡下，而实体与业务代码没准备这条唯一键。
+   * 期望：MIGRATION_UNIQUE_NOT_DECLARED 点名 articles.title。
+   */
+  'error-semantics-migration-unique-not-declared'() {
+    const file = path.join(
+      copyRoot,
+      'apps/api/src/database/migrations/1730000000000-InitSchema.ts',
+    );
+    replaceOnce(
+      file,
+      /(\{\s*\n\s*table: 'articles',\s*\n\s*name: 'idx_articles_published',\s*\n\s*columns: '`status`, `published_at`',\s*\n\s*\},\s*\n)/,
+      "$1      {\n        table: 'articles',\n        name: 'uk_articles_title',\n        columns: '`title`',\n        unique: true,\n      },\n",
+    );
+  },
+
+  /*
+   * 库内唯一键对账（第十轮）：往**唯一键登记表**里塞一条
+   * 「库里其实并不存在」的唯一键 ——
+   * 模拟「迁移没建 / 迁移没应用 / 索引被人手工删了」这三类情形：
+   * 静态对账看不出来，只有对着**真实库**查才看得见。
+   * 期望：DB_UNIQUE_MISSING 点名 articles.title。
+   */
+  'unique-index-db-registry-injected'() {
+    const file = path.join(copyRoot, 'infra/scripts/check-error-semantics.mjs');
+    replaceOnce(
+      file,
+      /const UNIQUE_KEY_REGISTRY = \[\n/,
+      "const UNIQUE_KEY_REGISTRY = [\n"
+        + "  {\n"
+        + "    side: 'admin',\n"
+        + "    entity: 'articles',\n"
+        + "    entityClass: 'Article',\n"
+        + "    entityFile: 'apps/api/src/database/entities/content.entity.ts',\n"
+        + "    columns: ['title'],\n"
+        + "    disposition: 'SEEDED',\n"
+        + "    note: '自测注入：库里并没有这道唯一约束',\n"
+        + "  },\n",
+    );
   },
 
   'multi-step-across-methods'() {

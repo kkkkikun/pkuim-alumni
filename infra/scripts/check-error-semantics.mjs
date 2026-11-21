@@ -19,7 +19,7 @@
  *   活动报名、资源附件、认证附件、用户 openid / unionid、会话 refreshToken
  *   …… 这些唯一键此前**逐条都没核过**「撞了返回什么」。
  *
- * 本脚本对账四件事：
+ * 本脚本对账五件事：
  *   1) **唯一键登记表是唯一事实来源**（R1 / R2）：
  *      扫**全部实体文件**，把每个唯一键（单列唯一、复合唯一、主键自然键）
  *      都算出来；登记表里**必须**有一条写清「撞键时返回什么、在哪处置」。
@@ -31,8 +31,25 @@
  *   3) **口径写进了文档**（R4）：
  *      每个登记条目对应的端点都必须在 `docs/API-SPEC.md` 的「错误语义」小节里
  *      被点名并给出对应的状态码 —— 代码改了、文档没改，等于对外契约悄悄变了。
- *   4) **反向验证**（`check-error-semantics-selftest.sh`）：
- *      本脚本自己也被反向验证过 —— 三类「语义失配」缺陷都必须被抓出、退出码非 0。
+ *   4) **迁移层真的有那道防线**（R5，第十轮新增）：
+ *      生产库 `synchronize: false`，跑的是 `apps/api/src/database/migrations/*`，
+ *      **真正约束数据的是迁移，不是实体声明**。
+ *      所以把迁移里**真正创建的**唯一索引（`uk_*` 与复合主键）抽出来，
+ *      与实体声明、登记表**三方对账**：
+ *        - 实体/登记表声明了、迁移里**没有** → 报 `MIGRATION_UNIQUE_MISSING`
+ *          （生产库根本没有那道防线：撞键不会报错，会**静默写出重复行**）；
+ *        - 迁移里建了、实体**没声明** → 报 `MIGRATION_UNIQUE_NOT_DECLARED`
+ *          （库比实体多一道约束，写入会被库挡下而代码没准备）；
+ *        - 列集合不一致（少了列 → 覆盖不足；多了列 → 比实体更严） → 报
+ *          `MIGRATION_UNIQUE_COLUMN_MISMATCH`；
+ *        - 唯一键列的**长度 / 可空性**与迁移不一致 → 报
+ *          `MIGRATION_UNIQUE_COLUMN_DEF_MISMATCH`
+ *          （长度被截短会让两把不同的钥匙被判成同一把）。
+ *      ⚠️ 「主键等价」不算缺陷：`admin_user_roles` / `role_permissions` 这类
+ *         关联表由**复合主键**提供唯一性，迁移里不必再建一条同列的唯一索引
+ *         （那是重复约束 + 写放大）。
+ *   5) **反向验证**（`check-error-semantics-selftest.sh`）：
+ *      本脚本自己也被反向验证过 —— 各类「语义失配」缺陷都必须被抓出、退出码非 0。
  *
  * ⚠️ 口径与判定的局限（写在这里，免得被当成万能护栏）：
  *   - 判定是**静态**的：只看源码里有没有「捕获重复键 + 转成可预期错误码」的形态，
@@ -52,6 +69,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
+import { fileURLToPath } from 'node:url';
 
 /* ------------------------------ 参数 ------------------------------ */
 
@@ -60,9 +78,21 @@ function argValue(flag, fallback) {
   const index = args.indexOf(flag);
   return index >= 0 && args[index + 1] ? args[index + 1] : fallback;
 }
-const ROOT = path.resolve(argValue('--root', process.cwd()));
 const AS_JSON = args.includes('--json');
 const LIST_ONLY = args.includes('--list');
+
+/**
+ * 仓库根目录（**惰性**求值）。
+ *
+ * ⚠️ 为什么要惰性：本文件会被别的脚本 `import`（`check-unique-index-db.mjs`
+ *    要拿同一份唯一键登记表与同一套迁移解析），而 `--root` 是从
+ *    `process.argv` 里读的 —— 模块加载时求值会让「导入方自己解析的
+ *    `--root`」失效（导入方与被导入方各算各的根目录）。
+ *    惰性求值之后，两边读到的是**同一个**根目录。
+ */
+function root() {
+  return path.resolve(argValue('--root', process.cwd()));
+}
 
 /* ------------------------------ 处置口径 ------------------------------ */
 
@@ -419,6 +449,359 @@ const UNIQUE_KEY_REGISTRY = [
   },
 ];
 
+/* ------------------------------ 迁移层 ------------------------------ */
+
+/**
+ * 迁移层：**真正被创建**的唯一约束与列定义。
+ *
+ * ⚠️ 为什么必须单独抽一层：
+ *   生产库 `synchronize: false`（`apps/api/src/database/data-source.ts`），
+ *   跑的是 `apps/api/src/database/migrations/*` ——
+ *   **真正约束生产数据的是迁移，不是实体声明**。
+ *   实体里写了 `unique: true`、迁移里没建那道索引 =
+ *   生产库**根本没有那道防线**：撞键不报错，数据库**静默写出重复行**
+ *   （业务代码里那段「捕获重复键 → 409」永远不会触发）。
+ *   这一类缺陷此前**没人核过**。
+ *
+ * 抽出来的形态：
+ *   - `CREATE UNIQUE INDEX uk_x ON t (a, b)`；
+ *   - 建表语句里的 `PRIMARY KEY (a, b)`（复合主键天然唯一）；
+ *   - `ALTER TABLE t ADD CONSTRAINT uk_x UNIQUE (a)`。
+ *
+ * ⚠️ 「自增主键」(`id ... AUTO_INCREMENT` 的单列主键) 不算**业务唯一键** ——
+ *    它在实体里是 `@PrimaryGeneratedColumn`，本就不在登记表口径里，
+ *    否则每张表都会被误报成「迁移里多了一个实体没声明的唯一约束」。
+ */
+
+/** 按分隔符切分，**不**切括号 / 引号内部（`ENUM('a','b')` 里也有逗号）。 */
+function splitTopLevel(text, separator) {
+  const parts = [];
+  let current = '';
+  let depth = 0;
+  let quote = null;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (quote) {
+      current += ch;
+      if (ch === '\\') {
+        current += text[i + 1] ?? '';
+        i += 1;
+        continue;
+      }
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === '`') {
+      quote = ch;
+      current += ch;
+      continue;
+    }
+    if (ch === '(') depth += 1;
+    else if (ch === ')') depth -= 1;
+    if (ch === separator && depth === 0) {
+      parts.push(current);
+      current = '';
+      continue;
+    }
+    current += ch;
+  }
+  parts.push(current);
+  return parts;
+}
+
+/** 取出一段源码里所有**字符串字面量**的内容（`'` / `"` / 反引号都算）。 */
+function extractStringLiterals(text) {
+  const literals = [];
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch !== "'" && ch !== '"' && ch !== '`') {
+      i += 1;
+      continue;
+    }
+    const quote = ch;
+    let value = '';
+    i += 1;
+    while (i < text.length) {
+      const c = text[i];
+      if (c === '\\') {
+        value += c + (text[i + 1] ?? '');
+        i += 2;
+        continue;
+      }
+      if (c === quote) {
+        i += 1;
+        break;
+      }
+      value += c;
+      i += 1;
+    }
+    literals.push(value);
+  }
+  return literals;
+}
+
+/** 取 `(` … `)` 之间的内容（跳过引号里的括号）。 */
+function readParenthesized(text, openIndex) {
+  let depth = 0;
+  let quote = null;
+  for (let i = openIndex; i < text.length; i += 1) {
+    const ch = text[i];
+    if (quote) {
+      if (ch === '\\') {
+        i += 1;
+        continue;
+      }
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === '`') {
+      quote = ch;
+      continue;
+    }
+    if (ch === '(') depth += 1;
+    else if (ch === ')') {
+      depth -= 1;
+      if (depth === 0) return text.slice(openIndex + 1, i);
+    }
+  }
+  return null;
+}
+
+/** 把列清单（`` `a`, `b` `` / `a, b`）解析成小写列名数组。 */
+function parseColumnList(text) {
+  return text
+    .replace(/[()]/g, '')
+    .split(',')
+    .map((item) => item.trim().replace(/`/g, '').toLowerCase())
+    .filter(Boolean);
+}
+
+/**
+ * 解析迁移里一列的**定义**（类型 / 长度 / 可空性）。
+ *
+ * ⚠️ `TEXT` / `BLOB` 这类**不能**直接建索引的类型（MySQL 要求前缀长度），
+ *    与实体声明的 `varchar` 对不上时必须报出来 ——
+ *    否则唯一索引根本建不出来，或者建在了错误的列上。
+ */
+function analyzeDdlColumnDef(def) {
+  const text = def.trim();
+  const typeMatch =
+    /\b(varchar|char|varbinary|binary|text|tinytext|mediumtext|longtext|int|integer|bigint|smallint|tinyint|datetime|date|timestamp|json|decimal|numeric|float|double|blob|bit)\b/i.exec(
+      text,
+    );
+  const type = typeMatch ? typeMatch[1].toLowerCase() : null;
+  let length = null;
+  if (type) {
+    const lengthMatch = new RegExp(`\\b${type}\\s*\\(\\s*(\\d+)`, 'i').exec(text);
+    if (lengthMatch) length = Number(lengthMatch[1]);
+  }
+  const notNull = /\bNOT\s+NULL\b/i.test(text);
+  return {
+    type,
+    length,
+    nullable: notNull ? false : true,
+    autoIncrement: /\bAUTO_INCREMENT\b/i.test(text),
+  };
+}
+
+/**
+ * 把迁移里的 **down()** 方法**摘掉**，只留「会被执行的」语句。
+ *
+ * ⚠️ 为什么必须摘掉 `down()`：
+ *   `down()` 是**回滚**（把列改回窄、把索引删掉）——
+ *   把它也算进「最终结构」就会把结论算反：
+ *   `WidenIdempotencyScope` 的 down() 里有
+ *   `ALTER TABLE idempotency_records MODIFY COLUMN scope VARCHAR(64)`，
+ *   算进去之后 `scope` 的长度会变成 64 —— 而**实际生效**的是 255。
+ *
+ * ⚠️ 为什么不能只取 `up()` 的方法体：
+ *   迁移把建表拆在**私有方法**里（`this.createTables(...)`），
+ *   只看 up() 会把建表语句整段漏掉。
+ */
+function withoutDownMethod(src) {
+  const downIndex = src.indexOf('async down(');
+  if (downIndex < 0) return src;
+  const braceIndex = src.indexOf('{', downIndex);
+  if (braceIndex < 0) return src.slice(0, downIndex);
+  let depth = 0;
+  for (let i = braceIndex; i < src.length; i += 1) {
+    const ch = src[i];
+    if (ch === '{') depth += 1;
+    else if (ch === '}') {
+      depth -= 1;
+      if (depth === 0) return src.slice(0, downIndex) + src.slice(i + 1);
+    }
+  }
+  return src.slice(0, downIndex);
+}
+
+/**
+ * 扫**全部迁移文件**，抽出：
+ *   - 每张表每一列的**最终定义**（后一条迁移的 ALTER 覆盖前一条的 CREATE）；
+ *   - 每一条**真正被创建的**唯一约束。
+ *
+ * 迁移按**文件名**（时间戳前缀）顺序处理 —— 后面的迁移覆盖前面的，
+ * 这与 TypeORM 实际应用的顺序一致。
+ */
+function discoverMigrationSchema() {
+  const dir = path.join(root(), 'apps/api/src/database/migrations');
+  const files = fs.existsSync(dir)
+    ? fs.readdirSync(dir)
+        .filter((name) => name.endsWith('.ts') && name !== 'index.ts')
+        .sort()
+    : [];
+  /** 表名 → (列名 → 列定义原文) */
+  const tables = new Map();
+  /** 真正被创建的唯一约束 */
+  const uniques = [];
+
+  const tableOf = (name) => {
+    if (!tables.has(name)) tables.set(name, new Map());
+    return tables.get(name);
+  };
+
+  for (const name of files) {
+    const src = readTextSafe(path.join(dir, name));
+    if (!src) continue;
+    // ⚠️ 只看**会被执行**的语句：`down()` 是回滚（把列改回窄、把索引删掉），
+    //    把它也算进来会把「最终结构」算反 ——
+    //    例如 `WidenIdempotencyScope` 的 down() 里有
+    //    `MODIFY COLUMN scope VARCHAR(64)`，算进去就成了 64。
+    const body = withoutDownMethod(src);
+
+    // --- 建表：this.createTable(queryRunner, 'table', '列定义...') ---------
+    const callRe = /\bcreateTable\s*\(/g;
+    let match;
+    while ((match = callRe.exec(body)) !== null) {
+      const args = readParenthesized(body, match.index + match[0].length - 1);
+      if (args === null) continue;
+      const literals = extractStringLiterals(args);
+      if (literals.length < 2) continue;
+      const table = literals[0].trim().toLowerCase();
+      const defs = literals.slice(1).join('');
+      const columns = tableOf(table);
+      for (const part of splitTopLevel(defs, ',')) {
+        const trimmed = part.trim();
+        if (!trimmed) continue;
+        if (/^(primary|unique|key|index|constraint|foreign)\b/i.test(trimmed)) continue;
+        const columnMatch = /^`?([A-Za-z_][A-Za-z0-9_]*)`?\s+([\s\S]+)$/.exec(trimmed);
+        if (!columnMatch) continue;
+        columns.set(columnMatch[1].toLowerCase(), columnMatch[2]);
+      }
+      const primaryMatch = /PRIMARY\s+KEY\s*\(([^)]*)\)/i.exec(defs);
+      if (primaryMatch) {
+        uniques.push({
+          table,
+          columns: parseColumnList(primaryMatch[1]),
+          name: 'PRIMARY',
+          kind: 'primary',
+          source: name,
+        });
+      }
+    }
+
+    // --- 索引描述对象：{ table: 't', name: 'uk_x', columns: '`a`', unique: true }
+    const descriptorRe =
+      /\{\s*table:\s*'([A-Za-z0-9_]+)'\s*,\s*name:\s*'([^']+)'\s*,\s*columns:\s*(?:'([^']*)'|\[([^\]]*)\])\s*([^{}]*)\}/g;
+    while ((match = descriptorRe.exec(body)) !== null) {
+      const tail = match[5] ?? '';
+      if (!/unique:\s*true/.test(tail)) continue;
+      const columns = match[3] !== undefined
+        ? parseColumnList(match[3])
+        : splitTopLevel(match[4] ?? '', ',')
+            .map((item) => item.trim().replace(/^['"]|['"]$/g, '').toLowerCase())
+            .filter(Boolean);
+      if (!columns.length) continue;
+      uniques.push({
+        table: match[1].toLowerCase(),
+        columns,
+        name: match[2],
+        kind: 'index',
+        source: name,
+      });
+    }
+
+    // --- 裸 SQL：CREATE UNIQUE INDEX / ADD CONSTRAINT ... UNIQUE ----------
+    const createIndexRe =
+      /CREATE\s+UNIQUE\s+INDEX\s+`?([A-Za-z0-9_]+)`?\s+ON\s+`?([A-Za-z0-9_]+)`?\s*\(([^)]*)\)/gi;
+    while ((match = createIndexRe.exec(body)) !== null) {
+      uniques.push({
+        table: match[2].toLowerCase(),
+        columns: parseColumnList(match[3]),
+        name: match[1],
+        kind: 'index',
+        source: name,
+      });
+    }
+    const constraintRe =
+      /ALTER\s+TABLE\s+`?([A-Za-z0-9_]+)`?\s+ADD\s+(?:CONSTRAINT\s+`?([A-Za-z0-9_]+)`?\s+)?UNIQUE(?:\s+KEY)?\s*\(([^)]*)\)/gi;
+    while ((match = constraintRe.exec(body)) !== null) {
+      uniques.push({
+        table: match[1].toLowerCase(),
+        columns: parseColumnList(match[3]),
+        name: match[2] ?? 'UNIQUE',
+        kind: 'constraint',
+        source: name,
+      });
+    }
+
+    // --- 裸 SQL：CREATE TABLE ... (列定义) --------------------------------
+    const createTableRe = /CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?`?([A-Za-z0-9_]+)`?\s*\(/gi;
+    while ((match = createTableRe.exec(body)) !== null) {
+      const openIndex = body.indexOf('(', match.index + match[0].length - 1);
+      const defs = readParenthesized(body, openIndex);
+      if (defs === null) continue;
+      const table = match[1].toLowerCase();
+      const columns = tableOf(table);
+      for (const part of splitTopLevel(defs, ',')) {
+        const trimmed = part.trim();
+        if (!trimmed) continue;
+        if (/^(primary|unique|key|index|constraint|foreign)\b/i.test(trimmed)) continue;
+        const columnMatch = /^`?([A-Za-z_][A-Za-z0-9_]*)`?\s+([\s\S]+)$/.exec(trimmed);
+        if (!columnMatch) continue;
+        columns.set(columnMatch[1].toLowerCase(), columnMatch[2]);
+      }
+      const primaryMatch = /PRIMARY\s+KEY\s*\(([^)]*)\)/i.exec(defs);
+      if (primaryMatch) {
+        uniques.push({
+          table,
+          columns: parseColumnList(primaryMatch[1]),
+          name: 'PRIMARY',
+          kind: 'primary',
+          source: name,
+        });
+      }
+    }
+
+    // --- ALTER TABLE ... MODIFY/CHANGE/ADD COLUMN -------------------------
+    const alterRe =
+      /ALTER\s+TABLE\s+`?([A-Za-z0-9_]+)`?\s+(MODIFY|CHANGE|ADD)\s+(?:COLUMN\s+)?`?([A-Za-z0-9_]+)`?\s+([^,;]+)/gi;
+    while ((match = alterRe.exec(body)) !== null) {
+      const table = match[1].toLowerCase();
+      const column = match[3].toLowerCase();
+      const definition = match[4].trim().replace(/['"`]+$/, '').trim();
+      // `CHANGE COLUMN old new ...` —— 取**新**列名
+      const renamed = match[2].toUpperCase() === 'CHANGE'
+        ? (/^`?([A-Za-z_][A-Za-z0-9_]*)`?\s+([\s\S]+)$/.exec(definition)?.[2] ?? null)
+        : definition;
+      if (renamed === null) continue;
+      tableOf(table).set(column, renamed);
+    }
+  }
+
+  // 自增主键不是「业务唯一键」 —— 标出来，反向对账时排除。
+  for (const item of uniques) {
+    if (item.kind !== 'primary') continue;
+    const columns = tables.get(item.table);
+    if (!columns) continue;
+    const def = columns.get(item.columns[0]);
+    item.identity = Boolean(def && analyzeDdlColumnDef(def).autoIncrement);
+  }
+
+  return { tables, uniques };
+}
+
 /* ------------------------------ 工具 ------------------------------ */
 
 function readTextSafe(file) {
@@ -482,6 +865,26 @@ function classDecorators(src, className) {
 }
 
 /**
+ * 解析实体里一列的**声明**（类型 / 长度 / 可空性）。
+ *
+ * ⚠️ `nullable` 的默认值是 **false**（TypeORM 的约定）：
+ *    实体没写 `nullable` 就是「NOT NULL」。
+ *    这条与迁移里的 DDL 对账时必须一致 ——
+ *    实体说 NOT NULL、库里允许 NULL 的话，那一列**不会**参与唯一约束的碰撞
+ *    （MySQL 的唯一索引允许多个 NULL），防线比声明的弱。
+ */
+function analyzeEntityColumnArgs(args) {
+  const typeMatch = /type:\s*'([^']+)'/.exec(args);
+  const lengthMatch = /length:\s*(\d+)/.exec(args);
+  const nullableMatch = /nullable:\s*(true|false)/.exec(args);
+  return {
+    type: typeMatch ? typeMatch[1].toLowerCase() : null,
+    length: lengthMatch ? Number(lengthMatch[1]) : null,
+    nullable: nullableMatch ? nullableMatch[1] === 'true' : false,
+  };
+}
+
+/**
  * 取一个类里带唯一约束的**列组合**。
  *
  * 认三种形态：
@@ -491,12 +894,15 @@ function classDecorators(src, className) {
  *   - 类级 `@Index('uk_x', ['a','b'], { unique: true })` —— **复合**唯一索引
  *     （用户侧的连接对、活动报名、附件挂载都是这种）。
  *
- * @returns {string[][] | null} 每个唯一键的列名数组；类不存在时返回 null
+ * @returns {{columns: string[], defs: Record<string, object>}[] | null}
+ *   每个唯一键的列名数组 + 各列的声明（类型 / 长度 / 可空性）；类不存在时返回 null
  */
 function uniqueColumnsOf(src, className) {
   const block = classBlock(src, className);
   if (!block) return null;
   const columns = [];
+  /** 列名 → 声明（关系列没有声明 → 不参与「长度 / 可空性」对账） */
+  const defs = {};
 
   // 属性名 → 数据库列名（复合索引里写的是属性名）
   const propToColumn = new Map();
@@ -508,6 +914,7 @@ function uniqueColumnsOf(src, className) {
     const nameMatch = /name:\s*'([^']+)'/.exec(args);
     if (!nameMatch) continue;
     propToColumn.set(match[3], nameMatch[1]);
+    defs[nameMatch[1]] = analyzeEntityColumnArgs(args);
     if (match[1] === 'Primary') {
       primaryColumns.push(nameMatch[1]);
     } else if (/unique:\s*true/.test(args)) {
@@ -518,6 +925,14 @@ function uniqueColumnsOf(src, className) {
   const joinRe = /@JoinColumn\(\{[^}]*name:\s*'([^']+)'[^}]*\}\)\s*\n\s*([A-Za-z_$][\w$]*)\s*[?!]?:/g;
   while ((match = joinRe.exec(block)) !== null) {
     propToColumn.set(match[2], match[1]);
+    // 关系列的可空性由 @ManyToOne 的选项决定（不在 @JoinColumn 里），
+    // 这里**不猜** —— 标成 relation，对账时跳过它的可空性。
+    // ⚠️ 同一列可能**既**有 @Column 声明**又**有 @JoinColumn
+    //    （关系列通常就是这么写的）：那种情况下 @Column 的声明才是权威的，
+    //    所以只**补**一个 relation 标记，不覆盖已有的类型 / 长度 / 可空性。
+    const existing = defs[match[1]];
+    if (existing) existing.relation = true;
+    else defs[match[1]] = { relation: true };
   }
   if (primaryColumns.length) columns.push(primaryColumns);
 
@@ -541,7 +956,7 @@ function uniqueColumnsOf(src, className) {
     const key = keyOf(item);
     if (seen.has(key)) continue;
     seen.add(key);
-    unique.push(item);
+    unique.push({ columns: item, defs });
   }
   return unique;
 }
@@ -554,14 +969,14 @@ function uniqueColumnsOf(src, className) {
  * （此前只检查登记表里已有的实体 —— 新表上的新唯一键是看不见的）。
  */
 function discoverUniqueKeys() {
-  const dir = path.join(ROOT, 'apps/api/src/database/entities');
+  const dir = path.join(root(), 'apps/api/src/database/entities');
   const files = fs.existsSync(dir)
     ? fs.readdirSync(dir).filter((name) => name.endsWith('.ts')).sort()
     : [];
   const discovered = [];
   for (const name of files) {
     const rel = `apps/api/src/database/entities/${name}`;
-    const src = readTextSafe(path.join(ROOT, rel));
+    const src = readTextSafe(path.join(root(), rel));
     if (!src) continue;
     const classRe = /export class ([A-Za-z_$][\w$]*)/g;
     let match;
@@ -579,8 +994,9 @@ function discoverUniqueKeys() {
           entity,
           entityClass: className,
           entityFile: rel,
-          columns: item,
-          key: keyOf(item),
+          columns: item.columns,
+          defs: item.defs,
+          key: keyOf(item.columns),
         });
       }
     }
@@ -685,7 +1101,7 @@ function findBodyBrace(src, close) {
  * 形态 2 必须一起看：只看调用方会漏判（调用方里根本没有捕获代码）。
  */
 function effectiveBody(guard) {
-  const src = readTextSafe(path.join(ROOT, guard.file));
+  const src = readTextSafe(path.join(root(), guard.file));
   if (!src) return { ok: false, reason: `文件不存在：${guard.file}` };
   const methods = collectMethods(src);
   const target = methods.find((method) => method.name === guard.method);
@@ -744,7 +1160,7 @@ function catchBlocksContaining(text, markers) {
  * 取不到 = 口径没写 = 报错（宁可吵，也不要默默放过）。
  */
 function errorSemanticsSections() {
-  const src = readTextSafe(path.join(ROOT, 'docs/API-SPEC.md'));
+  const src = readTextSafe(path.join(root(), 'docs/API-SPEC.md'));
   if (!src) return [];
   const lines = src.split('\n');
   const sections = [];
@@ -980,9 +1396,150 @@ function main() {
     }
   }
 
+  // --- 4) 迁移层真的有那道防线吗（第十轮新增） ------------------------------
+  //
+  // 生产库 `synchronize: false` —— 真正约束数据的是**迁移**，不是实体声明。
+  // 实体里声明了、迁移里没建 → 生产库**没有那道防线**：
+  // 撞键不会报错，数据库会**静默写出重复行**，
+  // 而业务代码里那段「捕获重复键 → 409」**永远不会触发**。
+  const migrationSchema = discoverMigrationSchema();
+  const migrationUniques = migrationSchema.uniques;
+
+  /** 迁移层里与某张表相关的唯一约束 */
+  const uniquesOfTable = (table) =>
+    migrationUniques.filter((item) => item.table === table.toLowerCase());
+
+  for (const item of discovered) {
+    const table = item.entity.toLowerCase();
+    const wanted = item.columns.map((column) => column.toLowerCase());
+    const candidates = uniquesOfTable(table);
+    const exact = candidates.find((entry) => keyOf(entry.columns) === keyOf(wanted));
+
+    if (!exact) {
+      // 有同表的唯一约束、但列集合对不上 → 分辨是「覆盖不足」还是「更严」
+      const overlapping = candidates.find((entry) =>
+        entry.columns.some((column) => wanted.includes(column)),
+      );
+      if (overlapping) {
+        issues.push({
+          kind: 'MIGRATION_UNIQUE_COLUMN_MISMATCH',
+          where: `${item.entity}.${item.columns.join(',')}`,
+          detail:
+            `实体声明的唯一键是（${wanted.join(',')}），` +
+            `迁移里建的唯一约束 \`${overlapping.name}\` 却是（${overlapping.columns.join(',')}）—— ` +
+            '列集合不一致：少了列就是**覆盖不足**（两把不同的钥匙会被当成同一把），' +
+            '多了列就是**比实体更严**（写入会被库挡下，而实体与代码没准备）。' +
+            '两者都会让「实体 ↔ 迁移」分叉，必须逐条判断是补迁移还是改实体',
+        });
+      } else {
+        issues.push({
+          kind: 'MIGRATION_UNIQUE_MISSING',
+          where: `${item.entity}.${item.columns.join(',')}`,
+          detail:
+            `实体声明了唯一键（${wanted.join(',')}），但迁移里**没有**对应的唯一约束 —— ` +
+            '生产库 `synchronize: false`，跑的是迁移：' +
+            '**生产库根本没有那道防线**，撞键不会报错，会**静默写出重复行**，' +
+            '而代码里「捕获重复键 → 409」的那一段永远不会触发。' +
+            '修法二选一（**必须逐条判断，不能一刀切**）：补一条 TypeORM 迁移' +
+            '（`AddMissingUniqueIndexes*`），或去掉实体里那个唯一声明',
+        });
+      }
+      continue;
+    }
+
+    if (exact.kind === 'primary') {
+      // ⚠️ **主键等价**：主键（自然键主键 / 复合主键都算）天然唯一，
+      //    不必再建一条同列的唯一索引
+      //    （那是重复约束 + 写放大）。这类**不算缺陷**，只记一条提示。
+      notes.push({
+        kind: 'MIGRATION_UNIQUE_BY_PRIMARY_KEY',
+        where: `${item.entity}.${item.columns.join(',')}`,
+        detail:
+          `迁移里由**主键**（PRIMARY KEY (${exact.columns.join(',')})）提供唯一性 —— ` +
+          '等价于这条唯一键，不需要再建一条同列的唯一索引（重复约束 = 写放大）',
+      });
+    } else {
+      notes.push({
+        kind: 'MIGRATION_UNIQUE_OK',
+        where: `${item.entity}.${item.columns.join(',')}`,
+        detail: `迁移 \`${exact.source}\` 里创建了唯一索引 \`${exact.name}\`（${exact.columns.join(',')}）`,
+      });
+    }
+
+    // --- 列定义（长度 / 可空性）也要一致 -----------------------------------
+    const tableColumns = migrationSchema.tables.get(table);
+    if (!tableColumns) continue;
+    for (const column of item.columns) {
+      const entityDef = item.defs?.[column];
+      if (!entityDef || entityDef.relation === true && entityDef.type === undefined) continue;
+      const ddlText = tableColumns.get(column.toLowerCase());
+      if (!ddlText) continue;
+      const ddl = analyzeDdlColumnDef(ddlText);
+      const isStringType = (type) =>
+        Boolean(type) && ['varchar', 'char', 'varbinary', 'binary'].includes(type);
+      if (isStringType(entityDef.type) && isStringType(ddl.type)) {
+        if (
+          entityDef.length !== null &&
+          ddl.length !== null &&
+          entityDef.length !== ddl.length
+        ) {
+          issues.push({
+            kind: 'MIGRATION_UNIQUE_COLUMN_DEF_MISMATCH',
+            where: `${item.entity}.${column}`,
+            detail:
+              `实体声明 \`${column}\` 是 ${entityDef.type}(${entityDef.length})，` +
+              `迁移里却是 ${ddl.type}(${ddl.length}) —— ` +
+              '唯一键的列被**截短**的话，两把本该不同的钥匙会被判成同一把' +
+              '（或反过来：按短列建索引，长值被截断后误判冲突）',
+          });
+        }
+      } else if (isStringType(entityDef.type) !== isStringType(ddl.type)) {
+        issues.push({
+          kind: 'MIGRATION_UNIQUE_COLUMN_DEF_MISMATCH',
+          where: `${item.entity}.${column}`,
+          detail:
+            `实体声明 \`${column}\` 是 ${entityDef.type ?? '(未声明类型)' ?? '未声明类型'}，` +
+            `迁移里却是 ${ddl.type ?? '未声明类型'} —— 类型族不一致，` +
+            '唯一索引可能根本建不出来（TEXT / BLOB 需要前缀长度）',
+        });
+      }
+      if (entityDef.nullable !== ddl.nullable) {
+        issues.push({
+          kind: 'MIGRATION_UNIQUE_COLUMN_DEF_MISMATCH',
+          where: `${item.entity}.${column}`,
+          detail:
+            `实体声明 \`${column}\` ${entityDef.nullable ? '可空' : 'NOT NULL'}，` +
+            `迁移里却是 ${ddl.nullable ? '可空' : 'NOT NULL'} —— ` +
+            '可空列**不参与**唯一约束的碰撞（MySQL 的唯一索引允许多个 NULL），' +
+            '防线比声明的弱',
+        });
+      }
+    }
+  }
+
+  // --- 反向：迁移里建了、实体没声明的唯一约束 ------------------------------
+  for (const entry of migrationUniques) {
+    if (entry.identity) continue; // 自增主键不是业务唯一键
+    const declared = discovered.find(
+      (item) =>
+        item.entity.toLowerCase() === entry.table &&
+        keyOf(item.columns.map((column) => column.toLowerCase())) === keyOf(entry.columns),
+    );
+    if (declared) continue;
+    issues.push({
+      kind: 'MIGRATION_UNIQUE_NOT_DECLARED',
+      where: `${entry.table}.${entry.columns.join(',')}`,
+      detail:
+        `迁移 \`${entry.source}\` 里创建了唯一约束 \`${entry.name}\`（${entry.columns.join(',')}），` +
+        '但**实体里没有对应的唯一声明** —— 库比实体多一道约束：' +
+        '写入会被库挡下（撞键），而实体与业务代码没准备这条唯一键的失败语义',
+    });
+  }
+
   const report = {
     reviewedUniqueKeys: UNIQUE_KEY_REGISTRY.length,
     discoveredUniqueKeys: discovered.length,
+    migrationUniqueConstraints: migrationUniques.length,
     issues: issues.length,
     notes: notes.length,
     detail: issues,
@@ -999,7 +1556,9 @@ function main() {
       process.stdout.write(
         `✅ 写操作的错误语义对账通过：` +
           `${report.discoveredUniqueKeys} 个唯一键全部登记，` +
-          `每个都有可预期的处置与文档口径\n`,
+          `每个都有可预期的处置与文档口径；` +
+          `迁移层也有对应的唯一约束（${report.migrationUniqueConstraints} 条，` +
+          `含自增主键）—— 生产库跑的是迁移，那道防线真实存在\n`,
       );
     } else {
       for (const issue of issues) {
@@ -1012,4 +1571,22 @@ function main() {
   process.exit(issues.length > 0 ? 1 : 0);
 }
 
-main();
+/* ------------------------------ 导出 ------------------------------ */
+
+/**
+ * 供别的脚本复用（`check-unique-index-db.mjs` 要拿**同一份**登记表与
+ * **同一套**迁移解析 —— 两边各算各的就会出现「静态说有、库里没有」的假绿）。
+ */
+export { UNIQUE_KEY_REGISTRY, discoverUniqueKeys, discoverMigrationSchema };
+
+/**
+ * 只有**被直接执行**时才跑主流程。
+ *
+ * ⚠️ 被 `import` 时不能跑：导入方（数据库侧对账脚本）只想拿数据，
+ *    不想被这个脚本的 `process.exit` 打断。
+ */
+const invokedDirectly =
+  Boolean(process.argv[1]) &&
+  path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
+
+if (invokedDirectly) main();
