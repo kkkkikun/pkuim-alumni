@@ -153,6 +153,14 @@ export const ApiPaths = {
   adminPermissions: '/admin/permissions',
   adminActionLogs: '/admin/action-logs',
   adminSettings: '/admin/settings',
+  /**
+   * 只读运维端点：共享失效总线状态（多实例部署自证用）。
+   *
+   * ⚠️ 第七轮新增。它**不改动**任何既有对外契约
+   *    （`/healthz` 与 `/system/health` 的响应形状原样不动），
+   *    另开一个只对管理员开放的只读端点。
+   */
+  adminOpsInvalidationBus: '/admin/ops/invalidation-bus',
 } as const;
 
 /* ------------------------------ 请求体 ------------------------------ */
@@ -397,6 +405,28 @@ export type CategoriesResponse = ArticleCategoryDto[];
 export type MediaAssetResponse = MediaAssetDto;
 export type UploadUrlResponse = { url: string; expiresIn: number };
 export type AdminStatsResponse = AdminStats;
+/**
+ * `GET /admin/ops/invalidation-bus` 的响应：共享失效总线的运行状态。
+ *
+ * ⚠️ 第七轮新增（只读运维端点）。多实例部署时运维用它**自证**
+ *    「跨实例失效链路通不通」：
+ *    - `enabled`：总线是否开启（`RBAC_INVALIDATION_ENABLED=false` 时为 false）；
+ *    - `channel`：**生效频道**（按环境隔离；所有实例必须一致）；
+ *    - `subscribed`：**本实例**是否订阅上了频道；
+ *    - `published` / `received`：本进程累计发布 / 收到的失效事件数；
+ *    - `lastError`：最近一次总线错误（`null` = 没有）；
+ *    - `degraded`：`true` = 总线开着但没订阅上（= 撤权延迟回落到 TTL 上界那一档）。
+ */
+export interface AdminInvalidationBusStatus {
+  enabled: boolean;
+  channel: string;
+  subscribed: boolean;
+  published: number;
+  received: number;
+  lastError: string | null;
+  degraded: boolean;
+}
+export type AdminInvalidationBusStatusResponse = AdminInvalidationBusStatus;
 /**
  * `GET /admin/roles` 返回分页后的角色目录。
  *

@@ -182,6 +182,28 @@ jobs:
       - name: Integration tests
         run: pnpm --filter @nmg/api test:integration
 
+      # 第七轮：把失效总线的**负向验证**接进 CI。
+      #
+      # ⚠️ 为什么必须进门禁：
+      #   「跨实例撤权立刻生效」「Redis 挂了写操作照常成功」这两条承诺，
+      #   此前只有「**人记得**临时改坏实现、手动跑一次用例」守着
+      #   （脚本 `.agent/negative-verification.sh`）。
+      #   于是以后有人把总线改坏了，CI **一声不吭**照样全绿放行 ——
+      #   这正是缺陷 #186 / #187 的同一片土壤。
+      #
+      # 门禁做四件事：基线必须绿 → 三种退化形态（永不订阅 / 永不发布 / 发布时抛错）
+      #   必须被**行为断言**抓到 → 退出时把实现原样还原 →
+      #   变异锚点失效 / **套件没跑起来**（编译错误、beforeAll 抛错）即失败
+      #   （这两条是「门禁恒过」的那道防线，另有一条元自检）。
+      #
+      # ⚠️ 它需要**测试库 + Redis**（就是上面那两个 service），
+      #    所以放在「迁移 + seed」之后、「集成测试」之后单独一步：
+      #    集成测试跑的是**干净代码**，这一步临时改坏的实现会在退出时被还原。
+      - name: Invalidation bus negative verification (selftest)
+        run: |
+          set -euo pipefail
+          bash infra/scripts/check-invalidation-bus-selftest.sh
+
       # 第三轮：把与**安全 / 性能 / 契约**相关的静态校验接入 CI。
       #
       # 为什么现在才接：这些校验器此前只在本机手动跑，

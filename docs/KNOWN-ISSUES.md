@@ -3362,6 +3362,22 @@
 - **需要谁拍板**：**产品 / 客户**（对外契约变更 + 跳页能力的取舍），
   仓库侧在收到确认前维持现状（数字见 `docs/TEST-REPORT.md` 第 12.5 节）。
 
+### 190. 资讯分类 **slug 重复**返回 500（Internal Server Error），而不是 409 CONFLICT（第七轮发现）
+
+- **现象**：`POST /admin/articles/categories` 用**已存在**的 `slug` 再建一个分类时，
+  服务端返回 **500 Internal Server Error**（唯一索引 `uk_article_categories_slug` 冲突
+  被直接抛成未处理异常），而不是管理端账号端点那套「**409 CONFLICT**」的错误语义
+  （`docs/API-SPEC.md` 第 11 节「管理端账号端点的错误语义」）。
+- **为什么本轮不修**：修它要**改一个端点的错误语义**（500 → 409），
+  属于本轮明确划出的边界（「不改业务语义」「对外契约变更先评估再动」）。
+  本轮只把它**记下来**，并在下一轮（opt-008）连同**同类端点的错误语义对账**一起做。
+- **为什么它值得记**：错误码**不可预期**会直接伤到管理端 ——
+  管理端按 `code` 分支处理，500 会被当成「服务端故障」而不是「你填的 slug 重复了」，
+  运维与用户都会拿错信息去排查。
+- **验收口径**：注入冲突数据必须得到 **409 / `CONFLICT`**（而不是 5xx）；
+  且**不得**靠放宽校验（去掉唯一索引）来「解决」它。
+
+
 ## 待验证 / 未完成（不得声称已通过）> 以下均为**缺少外部资质或环境**导致的未验证项，与实现质量无关。
 > 已实测完成的项（冒烟 10/10、集成测试 39/39、k6 分级压测、备份恢复演练、管理后台构建）见 `docs/TEST-REPORT.md`。
 
@@ -3390,7 +3406,7 @@
 | nginx 静态资源安全头的端到端验证 | #178 已在 `infra/nginx/admin-web.conf` 补齐 `location /assets/` 的安全头。**本轮（复核轮）已做「配置侧」端到端验证**：用仓库里的这份 conf + 本轮（复核轮）的构建产物在真实 `nginx:alpine` 里起服务，`curl -I /assets/index-*.js` → **9 个安全响应头全部到位**（`X-Content-Type-Options` / `X-Frame-Options` / `Referrer-Policy` / `Permissions-Policy` / `X-Permitted-Cross-Domain-Policies` / `Cross-Origin-Opener-Policy` / `Content-Security-Policy` / `X-XSS-Protection` / `Strict-Transport-Security`）+ `Cache-Control`。**但演示环境现场仍看不到这组头** —— 那边跑的是 4 天前的旧镜像（**部署未更新**，不是配置缺失） | ⚠️ **仍需人工**：部署到服务器后 `curl -I http://127.0.0.1:18082/assets/xxx.js` 再核对一次现场。证据见 `docs/TEST-REPORT.md` 第 11.7 节 |
 | ~~管理端「分类 CRUD / 系统设置写入」没有审计记录~~ | ✅ **第三轮已解决**：`ContentService` 的这 4 个方法（`createCategory` / `updateCategory` / `deleteCategory` / `upsertSetting`）现在支持传入事务 `EntityManager`，控制器（`admin-users.controller.ts`）用 `dataSource.transaction` 把「业务写 + 审计写入」放进**同一事务**（沿用缺陷 #134 的做法：审计写失败时业务写一起回滚）。审计动作名：`category.create` / `category.update` / `category.delete` / `setting.update`；`setting.update` **不记 `value`**（设置里可能放敏感配置，审计表不该成为泄密面，只记 `key` 与 `description`） | 已完成（第三轮） |
 | 通知深分页索引收益 | `(user_id, id)` 索引已建，但优化器在本次数据集上未自动改选；真实收益取决于数据分布 | ✅ **第五轮已用 `EXPLAIN ANALYZE` 复测**（测试库造 20 万 + 10 万条通知、两次 `ANALYZE TABLE`）：**加索引 / 删索引 / 加回索引，计划与耗时都相同**（54.8 / 53.9 / 53.5 ms，差异在噪声内），且 `FORCE INDEX (user_id, id)` 反而**更慢**（2.87 ms vs 优化器自选 1.32 ms）→ **按「没有实测数字的索引不写进生产库」的既定口径，本轮不加索引、不走 TypeORM migration**。**真正的解法是游标分页（keyset pagination）** —— 深分页耗时由 `OFFSET` 决定（OFFSET 1980 → 54 ms；OFFSET 0 → 0.03 ms），但那会**改对外契约**（`page`/`pageSize` 语义），本轮**不改** | ⚠️ **需产品/客户确认**是否接受契约层面的分页改造；**第六轮已把决策记录写进 #189**（目标、兼容面、风险、验收口径），在此之前维持现状（数字见 `docs/TEST-REPORT.md` 第 12.5 节） |
-| 共享失效总线的**部署侧**要求（第五轮新增） | 总线靠 Redis pub/sub 广播「谁的缓存该作废」——**若多实例各连不同的 Redis，总线就不生效**（各自只订阅自己的），撤权延迟回落到 TTL 上界（≤60 秒）。频道名按环境隔离（`nmg:prod:` / `nmg:dev:` / `nmg:test:`），同一环境各实例必须一致 | ⚠️ **需人工在部署时确认**：所有 API 实例连**同一个** Redis（`docker-compose.prod.yml` 里已是共享的 `redis` 服务）；频道名用默认值即可（`RBAC_INVALIDATION_CHANNEL=nmg:rbac:invalidate`，服务端按 `NODE_ENV` 插入环境段） |
+| 共享失效总线的**部署侧**要求（第五轮新增） | 总线靠 Redis pub/sub 广播「谁的缓存该作废」——**若多实例各连不同的 Redis，总线就不生效**（各自只订阅自己的），撤权延迟回落到 TTL 上界（≤60 秒）。频道名按环境隔离（`nmg:prod:` / `nmg:dev:` / `nmg:test:`），同一环境各实例必须一致 | ⚠️ **需人工在部署时确认**：所有 API 实例连**同一个** Redis（`docker-compose.prod.yml` 里已是共享的 `redis` 服务）；频道名用默认值即可（`RBAC_INVALIDATION_CHANNEL=nmg:rbac:invalidate`，服务端按 `NODE_ENV` 插入环境段）。**第七轮已给出「自证」手段**：部署后逐个实例查只读运维端点 `GET /api/v1/admin/ops/invalidation-bus`（管理员令牌），确认每个实例的 `subscribed` 都是 `true`、各实例 `channel` **一致**；读法见 `docs/SERVER-OPERATIONS.md` 第 2.1 节 |
 | ~~字典 / 分类 / 系统设置的**跨实例**失效没有上总线~~ | ✅ **第六轮已解决**：失效事件按 `kind` 扩展到字典类（`{"kind":"dict","dict":"categories"｜"settings"}`），**复用第五轮的同一条总线、同一个频道、同一套降级路径**（不新起总线、不引入新基础设施）。分类增删改与 `PUT /admin/settings` 在**事务提交后**发布，订阅端清掉本地对应的 `dict:*` 条目。跨实例陈旧上界从「各自的 TTL」变成「总线可用 = **0**；总线不可用 = **≤ TTL**（默认 ≤60 秒、硬上限 ≤300 秒）」。总线**仍然只传失效事件、不传字典内容**（没有分类名、没有设置项的 key / value）。口径见 `docs/SECURITY.md` 第 2.1.6 节，用例见 `apps/api/test/integration/dict-invalidation-bus.e2e-spec.ts` | 已完成（第六轮） |
 | 第三轮新增端点 / 契约变更的**部署顺序** | 第三轮改了对外响应结构（`GET /admin/events/:id/registrations`、`GET /alumni/verification/mine`、`GET /admin/roles|permissions|settings` 改为 `{items, meta}`；新增 `GET /me/summary`；公开列表的 `body` 变为摘要）。**服务端与两端客户端必须一起发布** —— 只升级服务端会让旧客户端取 `.items` 得到 `undefined`，只升级客户端会让新客户端解析旧响应失败 | ⚠️ **需人工安排发布顺序**：建议「先发服务端（响应结构变更）+ 紧接着发两端客户端」的**同一次发布窗口**完成，不要跨版本长时间并存。**第四轮已产出逐端点的核对清单与两个方向的破坏形态：`docs/RELEASE-ORDER.md`**（含发布前 9 项勾选清单、发布后验证命令、回滚说明；其中 `GET /alumni/verification/mine` **两个方向都坏**，唯一可行顺序是「服务端先」，切换后到小程序新版铺开前该状态会一直错，需人工告知）。迁移说明见 `docs/API-SPEC.md` 的「第三轮的契约变更」小节。**本轮（复核轮）实测确认**：演示环境（`127.0.0.1:18080`，对外 `http://8.160.116.34:18080`）的 API **仍是第三轮之前的构建** —— `GET /me/summary` 返回 **404**、`GET /articles` 仍返回**全文 body**、管理后台静态资源缺 CSP / HSTS（跑的是 4 天前的旧镜像）。这与本行的约束**一致**（小程序新版本未过审前不能先切服务端），属**预期状态**而非漏发布；但也意味着**第三轮的契约变更目前确实尚未上线** |
 | 第三轮的两条索引迁移尚未在**业务库**应用 | `AddQueryIndexesAndProtectAuditLogs1730000005000` 与 `AddRemainingQueryIndexes1730000006000` 在本机测试库已应用，但**线上业务库 `nmg_alumni` 尚未应用**（`infra/scripts/check-pending-migrations.sh` 的 R2 检查会报出来） | ⚠️ **需人工在部署窗口执行** `pnpm --filter @nmg/api db:migrate`（或走既有的迁移发布流程）。**第四轮已核对**（见 `docs/TEST-REPORT.md` 第 10.3 节）：两条迁移都已登记进 `migrations/index.ts` 且**排在最后**；`check-pending-migrations.sh` 的 **R1**（清单 ↔ 文件，不连库）已通过；**R2**（清单 ↔ 库）在本机两个库上都如实报出这两条**未应用** —— 与「线上待应用」一致。CI 跑的是 `--static-only`（CI 用的是普通 MySQL **service**、不是 compose 栈，R2 在 CI 里连不上库），**线上库的实际应用仍属人工动作** |

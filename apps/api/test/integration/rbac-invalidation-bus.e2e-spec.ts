@@ -1,6 +1,7 @@
 import request from 'supertest';
 import type { INestApplication } from '@nestjs/common';
 import type { DataSource } from 'typeorm';
+import * as net from 'node:net';
 import Redis from 'ioredis';
 import { BUILT_IN_ROLE_CODES, createTestApp, ensureAdmin, resetDatabase } from '../helpers';
 import { InvalidationBusService } from '../../src/common/services/invalidation-bus.service';
@@ -345,6 +346,190 @@ describe('共享失效总线 · 跨实例撤权', () => {
       expect(afterTtl.status).toBe(403);
     } finally {
       await appC?.close();
+    }
+  });
+
+  it('总线恢复后**自动重新订阅**（不重启进程）', async () => {
+    // ⚠️ 守的是 `docs/SECURITY.md` 第 2.1.5 节「总线恢复后自动重新订阅（不重启进程）」。
+    //    这条此前**没有任何用例守着** ——
+    //    把 `ensureSubscribed()` 里的重试与 `'ready'` 回调删掉，
+    //    整个集成测试套件照样全绿（因为没有用例去「等 Redis 回来」）。
+    const realRedisPort = Number(process.env.REDIS_PORT ?? '6379');
+
+    // 找一个「现在没人监听」的端口：先 listen(0) 拿到端口号，再立刻关掉。
+    const probe = net.createServer();
+    await new Promise<void>((resolve) => probe.listen(0, '127.0.0.1', () => resolve()));
+    const deadPort = (probe.address() as net.AddressInfo).port;
+    await new Promise<void>((resolve) => probe.close(() => resolve()));
+
+    // 起一个**连不上 Redis** 的实例（模拟 Redis 挂了）。
+    process.env.REDIS_PORT = String(deadPort);
+    let appC: INestApplication | undefined;
+    try {
+      const context = await createTestApp();
+      appC = context.app;
+    } finally {
+      const original = originalEnv.REDIS_PORT;
+      if (original === undefined) delete process.env.REDIS_PORT;
+      else process.env.REDIS_PORT = original;
+    }
+
+    try {
+      // Redis 挂着 → 订阅不上，且**记下了错误**（运维能从运维端点看到）。
+      expect(busOf(appC).stats.subscribed).toBe(false);
+      expect(busOf(appC).stats.lastError).toBeTruthy();
+
+      // 「Redis 恢复」：在同一个端口上开一个 TCP 代理，后面转发到真正的 Redis。
+      // ⚠️ 必须记下所有 socket：`server.close()` **不会**关掉已建立的连接，
+      //    回调要等连接全部结束才触发 —— 不主动 destroy 的话这里会**挂住**。
+      const sockets = new Set<net.Socket>();
+      const proxy = net.createServer((client) => {
+        sockets.add(client);
+        const upstream = net.connect(realRedisPort, '127.0.0.1');
+        sockets.add(upstream);
+        client.pipe(upstream);
+        upstream.pipe(client);
+        client.on('close', () => sockets.delete(client));
+        upstream.on('close', () => sockets.delete(upstream));
+        client.on('error', () => upstream.destroy());
+        upstream.on('error', () => client.destroy());
+      });
+      await new Promise<void>((resolve) => proxy.listen(deadPort, '127.0.0.1', () => resolve()));
+
+      try {
+        // **不重启进程**，等它自己重新订阅上（实现里每 5 秒重试一次）。
+        const deadline = Date.now() + 30_000;
+        while (Date.now() < deadline && !busOf(appC).stats.subscribed) {
+          await new Promise((resolve) => setTimeout(resolve, 200));
+        }
+        // eslint-disable-next-line no-console
+        console.log(
+          `[失效总线] 总线恢复后自动重新订阅：subscribed=${busOf(appC).stats.subscribed}`,
+        );
+        expect(busOf(appC).stats.subscribed).toBe(true);
+      } finally {
+        for (const socket of sockets) socket.destroy();
+        await new Promise<void>((resolve) => proxy.close(() => resolve()));
+      }
+    } finally {
+      await appC?.close();
+    }
+  });
+
+  it('开关关闭（`RBAC_INVALIDATION_ENABLED=false`）时总线**整条**关闭，写操作照常成功', async () => {
+    // ⚠️ 守的是 `docs/SECURITY.md` 第 2.1.6 节「关闭开关不变：`RBAC_INVALIDATION_ENABLED=false`
+    //    仍然能**整条**关闭总线（此时撤权延迟回落到 TTL 上界）」。
+    //    这条此前**没有任何用例守着** ——
+    //    把开关读成「总是 true」，整个集成测试套件照样全绿。
+    const actor = `bus_actor_off_${uniq}`;
+    const target = `bus_target_off_${uniq}`;
+    const highRole = `role_bus_off_high_${uniq}`;
+    const lowRole = `role_bus_off_low_${uniq}`;
+
+    await makeAdmin(actor, `role_bus_off_actor_${uniq}`, 'admin:manage');
+    const targetId = await makeAdmin(target, highRole, 'alumni:view');
+    await makeAdmin(target, lowRole, 'resource:review');
+
+    process.env.RBAC_INVALIDATION_ENABLED = 'false';
+    let appD: INestApplication | undefined;
+    try {
+      const context = await createTestApp();
+      appD = context.app;
+    } finally {
+      process.env.RBAC_INVALIDATION_ENABLED = 'true';
+    }
+
+    try {
+      // 总线整条关闭：不订阅、不发布。
+      expect(busOf(appD).stats.enabled).toBe(false);
+      expect(busOf(appD).stats.subscribed).toBe(false);
+
+      // 写操作**照常成功**（关总线不影响业务语义）。
+      const actorToken = await adminLogin(appD, actor);
+      await request(appD.getHttpServer())
+        .patch(`${API}/admin/users/${targetId}`)
+        .set('Authorization', `Bearer ${actorToken}`)
+        .send({ roles: [lowRole] })
+        .expect(200);
+
+      // 一个事件都没发出去（总线是关的）。
+      expect(busOf(appD).stats.published).toBe(0);
+    } finally {
+      await appD?.close();
+    }
+  });
+
+  it('写操作**失败**时不发布失效事件（事件只在事务提交之后才发）', async () => {
+    // ⚠️ 守的是 `docs/SECURITY.md` 第 2.1.5 节「**发布时机**：事务提交**之后**才发布」。
+    //    这条此前**没有任何用例守着** ——
+    //    把 publish 挪到事务**之前**（或事务失败也照样发），套件照样全绿。
+    const actor = `bus_actor_fail_${uniq}`;
+    await makeAdmin(actor, `role_bus_fail_actor_${uniq}`, 'admin:manage');
+    const actorToken = await adminLogin(appA, actor);
+
+    const before = busOf(appA).stats.published;
+
+    // 目标不存在 → 404（事务回滚，什么都不该发）。
+    await request(appA.getHttpServer())
+      .patch(`${API}/admin/users/999999999`)
+      .set('Authorization', `Bearer ${actorToken}`)
+      .send({ status: 'disabled' })
+      .expect(404);
+
+    expect(busOf(appA).stats.published).toBe(before);
+  });
+
+  it('未知 / 畸形的失效事件被**忽略**（`kind` 是白名单）', async () => {
+    // ⚠️ 守的是 `docs/SECURITY.md` 第 2.1.5 节「总线承载的失效事件种类（`kind` 取值，
+    //    **白名单**：不认未知取值）」。
+    //    总线是**共享通道**：一条畸形的或恶意的消息最多让本实例丢掉缓存
+    //    （**不会**放行任何权限）—— 但这条「最多丢掉缓存」此前**没有用例守着**。
+    const target = `bus_target_junk_${uniq}`;
+    const highRole = `role_bus_junk_high_${uniq}`;
+    const lowRole = `role_bus_junk_low_${uniq}`;
+    await makeAdmin(target, highRole, 'alumni:view');
+    await makeAdmin(target, lowRole, 'resource:review');
+
+    // 目标账号先在**实例 B** 上用一次 → B 缓存了他的权限集。
+    const targetToken = await adminLogin(appB, target);
+    await listAlumni(appB, targetToken).expect(200);
+    const receivedBefore = busOf(appB).stats.received;
+
+    // 用一个「裸」的 Redis 连接，往频道里塞**未知**与**畸形**的事件。
+    const injector = new Redis({
+      host: process.env.REDIS_HOST ?? '127.0.0.1',
+      port: Number(process.env.REDIS_PORT ?? 6379),
+      password: process.env.REDIS_PASSWORD || undefined,
+      db: Number(process.env.REDIS_DB ?? 0),
+    });
+    try {
+      await injector.publish(
+        busOf(appB).stats.channel,
+        JSON.stringify({ kind: 'unknown-kind', adminId: 1 }),
+      );
+      await injector.publish(busOf(appB).stats.channel, 'not-json-at-all');
+      await injector.publish(busOf(appB).stats.channel, JSON.stringify({ kind: 'admin' }));
+      await injector.publish(
+        busOf(appB).stats.channel,
+        JSON.stringify({ kind: 'admin', adminId: 'not-a-number' }),
+      );
+      await injector.publish(
+        busOf(appB).stats.channel,
+        JSON.stringify({ kind: 'admin', adminId: -1 }),
+      );
+
+      // 给订阅端一点时间把消息收走。
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+
+      // 一条都**不算数**：白名单外的消息不进计数器。
+      expect(busOf(appB).stats.received - receivedBefore).toBe(0);
+
+      // 更要紧的：这些畸形消息**没有**把目标的缓存清掉 ——
+      // 目标仍然保有降权前的权限（缓存还在）。
+      const stillAllowed = await listAlumni(appB, targetToken);
+      expect(stillAllowed.status).toBe(200);
+    } finally {
+      await injector.quit();
     }
   });
 });

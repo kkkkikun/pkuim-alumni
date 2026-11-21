@@ -461,4 +461,36 @@ describe('共享失效总线 · 字典 / 分类 / 设置的跨实例失效', () 
       await appC?.close();
     }
   });
+
+  it('写操作**失败**时不发布字典失效事件（事件只在事务提交之后才发）', async () => {
+    // ⚠️ 守的是 `docs/SECURITY.md` 第 2.1.5 / 2.1.6 节「**在事务提交之后**才发布」。
+    //    这条此前**没有任何用例守着** ——
+    //    把 publish 挪到事务**之前**，套件照样全绿（事件早到一点，看不出来）。
+    const actor = `dict_actor_fail_${uniq}`;
+    await makeAdmin(actor, `r_dict_fail_${uniq}`, 'admin:manage');
+    await makeAdmin(actor, `r_dict_fail2_${uniq}`, 'content:manage');
+    await makeAdmin(actor, `r_dict_fail3_${uniq}`, 'settings:manage');
+    const actorToken = await adminLogin(appA, actor);
+
+    // 先成功写一次设置项（成功 → 会发一条事件）。
+    const okKey = `dict_fail_ok_${uniq}`;
+    createdSettingKeys.push(okKey);
+    await request(appA.getHttpServer())
+      .put(`${API}/admin/settings`)
+      .set('Authorization', `Bearer ${actorToken}`)
+      .send({ key: okKey, value: 'v1' })
+      .expect(200);
+
+    const before = busOf(appA).stats.published;
+
+    // 写一个**不合法**的设置项（缺 `key`）→ 400，写操作根本没成功。
+    await request(appA.getHttpServer())
+      .put(`${API}/admin/settings`)
+      .set('Authorization', `Bearer ${actorToken}`)
+      .send({ value: '没有 key 的设置项' })
+      .expect(400);
+
+    // 失败的那次**没有**发出失效事件。
+    expect(busOf(appA).stats.published).toBe(before);
+  });
 });

@@ -68,6 +68,30 @@ curl -i http://127.0.0.1:18081/healthz              # 直连 api
 curl -I http://127.0.0.1:18082/                     # 直连 admin-web
 ```
 
+### 2.1 共享失效总线的「自证」（多实例部署）
+
+多实例部署时，「跨实例撤权 / 字典失效**到底生效没有**」用这个**只读**端点确认，
+不必逐个实例翻日志（口径见 `docs/SECURITY.md` 第 2.1.9 节）：
+
+```bash
+# 逐个 API 实例查一次（每个实例的 subscribed 都要为 true）
+for port in 18081 18091 18101; do
+  echo "--- :$port"
+  curl -sS -H "Authorization: Bearer $ADMIN_TOKEN" \
+    "http://127.0.0.1:$port/api/v1/admin/ops/invalidation-bus" | jq .
+done
+```
+
+- ⚠️ 需要**管理员令牌**（`admin:manage` 权限点）：该端点**不对外公开**
+  （频道名与错误信息属于内部信息）；匿名请求 401、普通校友 403。
+- 读法：`enabled` = 总线是否开启；`channel` = **生效频道**
+  （各实例必须一致，否则事件互相打不到）；`subscribed` = **本实例**是否订阅上；
+  `published` / `received` = 本进程累计发布 / 收到的事件数；
+  `lastError` = 最近一次总线错误；`degraded` = 总线开着但没订阅上
+  （= 撤权延迟已回落到 **TTL 上界**，不是 0）。
+- 各实例 `channel` 不一致 → 统一 `RBAC_INVALIDATION_CHANNEL` 与 `NODE_ENV`；
+  `subscribed: false` → 查 `lastError`（通常是 Redis 不可达）。
+
 ---
 
 ## 3. 日志

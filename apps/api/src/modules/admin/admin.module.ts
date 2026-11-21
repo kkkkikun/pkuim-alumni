@@ -26,6 +26,7 @@ import { EventsModule } from '../events/events.module';
 import { ResourcesModule } from '../resources/resources.module';
 import { UploadsModule } from '../uploads/uploads.module';
 import { AdminController } from './admin.controller';
+import { AdminOpsController } from './admin-ops.controller';
 import { AdminUsersController } from './admin-users.controller';
 
 @Module({
@@ -55,6 +56,6 @@ import { AdminUsersController } from './admin-users.controller';
     ContentModule,
     UploadsModule,
   ],
-  controllers: [AdminController, AdminUsersController],
+  controllers: [AdminController, AdminUsersController, AdminOpsController],
 })
 export class AdminModule {}
