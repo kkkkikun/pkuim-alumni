@@ -51,6 +51,11 @@
  *   error-semantics-migration-unique-not-declared      → 迁移层：迁移建了实体没声明的唯一约束
  *   error-semantics-doc-index-not-in-migration         → 文档索引清单：文档写了迁移里没有的索引
  *   error-semantics-migration-index-not-in-doc         → 文档索引清单：迁移建了文档里没写的索引
+ *   error-semantics-entity-index-missing-in-migration   → 实体 ↔ 迁移：**实体有、迁移没有**的索引
+ *   error-semantics-migration-index-not-declared       → 实体 ↔ 迁移：**迁移有、实体没有**的索引
+ *   error-semantics-column-length-mismatch             → 实体 ↔ 迁移：同一列的**长度**不一致
+ *   error-semantics-entity-foreign-key-missing         → 实体 ↔ 迁移：实体声明了、迁移里没有的外键
+ *   error-semantics-foreign-key-target-mismatch        → 实体 ↔ 迁移：外键的**指向**不一致
  *   unique-index-db-registry-injected → 库内对账：登记表要求、但**库里其实没有**的唯一键
  *   read-visibility-filter-removed    → 读端点可见性：**可见性过滤被删掉**（未发布内容凭 id 就能读到）
  *   read-visibility-status-changed    → 读端点可见性：「不可见 → 404」被改成 403（泄露存在性）
@@ -58,6 +63,9 @@
  *   read-visibility-doc-row-removed   → 读端点可见性：API-SPEC 里的可见性口径那一行被删掉
  *   read-visibility-known-issue-removed → 读端点可见性：待拍板条目（#197）被从 KNOWN-ISSUES 删掉
  *   read-visibility-pending-resolved  → 读端点可见性：待拍板端点的行为被改掉（登记表过期）
+ *   read-visibility-auth-403-changed-to-404 → 已登录端点：「无权 → 403」被改成 404
+ *   read-visibility-auth-endpoint-unregistered → 已登录端点：新增端点却**没登记可见性分界**
+ *   read-visibility-auth-doc-row-removed → 已登录端点：API-SPEC 里的那一行被删掉
  */
 
 import fs from 'node:fs';
@@ -923,6 +931,152 @@ export class InjectedSafeUpsertService {
       /if \(!event\) throw new NotFoundException\('活动不存在'\);/,
       "if (!event || event.status !== 'published') throw new NotFoundException('活动不存在');",
     );
+  },
+
+  /*
+   * 迁移层对账（第十二轮，实体 ↔ 迁移扩面）：实体里声明了一个**迁移没有建**的索引 ——
+   * 生产库 `synchronize: false`，跑的是迁移：这条索引在生产库上**根本不存在**，
+   * 按该列的查询会退化成全表扫。
+   * 期望：MIGRATION_INDEX_MISSING 点名 idx_alumni_profiles_injected。
+   */
+  'error-semantics-entity-index-missing-in-migration'() {
+    const file = path.join(copyRoot, 'apps/api/src/database/entities/alumni.entity.ts');
+    replaceOnce(
+      file,
+      /@Index\('idx_alumni_profiles_graduation_year', \['graduationYear'\]\)\n/,
+      "@Index('idx_alumni_profiles_graduation_year', ['graduationYear'])\n" +
+        "// 自测注入：实体声明了一个迁移里没有的索引\n" +
+        "@Index('idx_alumni_profiles_injected', ['college'])\n",
+    );
+  },
+
+  /*
+   * 迁移层对账（第十二轮，实体 ↔ 迁移扩面）：把实体里的**索引声明**删掉 ——
+   * 迁移里那条索引还在（库比实体多一道索引），两边对「这张表有哪些索引」的说法分叉了。
+   * 期望：MIGRATION_INDEX_NOT_DECLARED 点名 idx_alumni_profiles_region。
+   */
+  'error-semantics-migration-index-not-declared'() {
+    const file = path.join(copyRoot, 'apps/api/src/database/entities/alumni.entity.ts');
+    replaceOnce(file, /@Index\('idx_alumni_profiles_region', \['regionCode'\]\)\n/, '');
+  },
+
+  /*
+   * 迁移层对账（第十二轮，列定义）：把实体里一列的**长度**改短 ——
+   * 迁移里仍是 VARCHAR(64)，实体却说 32：按实体写进库的值会被**静默截断**。
+   * 期望：MIGRATION_COLUMN_DEF_MISMATCH 点名 alumni_profiles.display_name。
+   */
+  'error-semantics-column-length-mismatch'() {
+    const file = path.join(copyRoot, 'apps/api/src/database/entities/alumni.entity.ts');
+    replaceOnce(
+      file,
+      /@Column\(\{ name: 'display_name', type: 'varchar', length: 64, nullable: false \}\)/,
+      "@Column({ name: 'display_name', type: 'varchar', length: 32, nullable: false })",
+    );
+  },
+
+  /*
+   * 迁移层对账（第十二轮，外键）：把迁移里的一条**外键**删掉 ——
+   * 生产库上引用完整性不再被数据库保证：可以写入指向不存在行的外键。
+   * 期望：ENTITY_FOREIGN_KEY_MISSING 点名 alumni_profiles.user_id。
+   */
+  'error-semantics-entity-foreign-key-missing'() {
+    const file = path.join(
+      copyRoot,
+      'apps/api/src/database/migrations/1730000000000-InitSchema.ts',
+    );
+    replaceOnce(
+      file,
+      /      \{\n        table: 'alumni_profiles',\n        name: 'fk_alumni_profiles_user',\n        column: 'user_id',\n        refTable: 'users',\n        refColumn: 'id',\n        onDelete: 'CASCADE',\n      \},\n/,
+      '',
+    );
+  },
+
+  /*
+   * 迁移层对账（第十二轮，外键）：把一条外键的**指向**改掉 ——
+   * 实体说的是「指向 users(id)」，迁移建成了「指向 admin_users(id)」：
+   * 两边说的不是一回事（写入会被库挡下，而实体没准备）。
+   * 期望：FOREIGN_KEY_TARGET_MISMATCH 点名 alumni_profiles.user_id。
+   */
+  'error-semantics-foreign-key-target-mismatch'() {
+    const file = path.join(
+      copyRoot,
+      'apps/api/src/database/migrations/1730000000000-InitSchema.ts',
+    );
+    replaceOnce(
+      file,
+      /        name: 'fk_alumni_profiles_user',\n        column: 'user_id',\n        refTable: 'users',/,
+      "        name: 'fk_alumni_profiles_user',\n        column: 'user_id',\n        refTable: 'admin_users',",
+    );
+  },
+
+  /*
+   * 读端点可见性对账（第十二轮，已登录端点）：把「不是关系双方 → 403」改成 **404** ——
+   * 客户端于是分不清「没有这个对象」与「不是你的」，两种引导都错了。
+   * 期望：AUTH_VISIBILITY_STATUS_MISSING 点名 GET /connections/:id。
+   */
+  'read-visibility-auth-403-changed-to-404'() {
+    const file = path.join(
+      copyRoot,
+      'apps/api/src/modules/connections/connections.service.ts',
+    );
+    replaceOnce(
+      file,
+      /throw new ForbiddenException\('无权查看该连接关系'\);/,
+      "throw new NotFoundException('连接关系不存在');",
+    );
+  },
+
+  /*
+   * 读端点可见性对账（第十二轮，已登录端点）：新增一个**已登录端点**，
+   * 它的实现会抛 404，却没人登记可见性分界 ——
+   * 「不可见 → 404 还是无权 → 403」没人想过，上线后只能靠人记得。
+   * 期望：AUTH_VISIBILITY_NOT_REGISTERED 点名 GET /connections/injected-preview。
+   */
+  'read-visibility-auth-endpoint-unregistered'() {
+    const file = path.join(
+      copyRoot,
+      'apps/api/src/modules/connections/connections.controller.ts',
+    );
+    replaceOnce(
+      file,
+      /\n\}\n$/,
+      `
+  @Get('injected-preview')
+  @ApiOperation({ summary: '自测注入：没登记可见性分界的已登录端点' })
+  async injectedPreview(@CurrentUser() user: RequestUser, @Param('id', ParseIntPipe) id: number) {
+    return this.connectionsService.getConnection(id, user.id);
+  }
+}
+`,
+    );
+  },
+
+  /*
+   * 读端点可见性对账（第十二轮，已登录端点）：把 API-SPEC 第 13.2 节里
+   * `GET /connections/:id` 那一行删掉 ——
+   * 403 与 404 的分界只存在于代码里，客户端无从得知该怎么引导用户。
+   * 期望：AUTH_VISIBILITY_UNDOCUMENTED 点名 GET /connections/:id。
+   */
+  'read-visibility-auth-doc-row-removed'() {
+    const file = path.join(copyRoot, 'docs/API-SPEC.md');
+    const lines = readText(file).split('\n');
+    // ⚠️ 必须锁定**可见性口径表**里的那一行（5 列以上）：
+    //    API-SPEC 里还有一张「端点清单」表，它也有「GET | `/connections/:id`」，
+    //    删那一行不算缺陷（只是清单少了一行），删错地方会让注入白注。
+    const index = lines.findIndex((line) => {
+      if (!line.trim().startsWith('|')) return false;
+      const cells = line.split('|').map((cell) => cell.trim());
+      return (
+        cells[1] === 'GET' &&
+        cells[2] === '`/connections/:id`' &&
+        cells.length >= 6 &&
+        cells[3] === '**403**' &&
+        cells[4] === '**404**'
+      );
+    });
+    if (index < 0) throw new Error('注入失败：API-SPEC 里找不到 /connections/:id 的可见性口径那一行');
+    lines.splice(index, 1);
+    writeText(file, lines.join('\n'));
   },
 
   'multi-step-across-methods'() {

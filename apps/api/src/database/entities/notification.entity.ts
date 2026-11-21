@@ -76,6 +76,10 @@ export class Notification {
   createdAt: Date;
 }
 
+// 投递记录按「通知 + 状态」查（重试与对账都按这个组合扫）。
+// ⚠️ 这条索引是**迁移**里真实存在的（`InitSchema`）——
+//    实体侧此前漏了声明，实体 ↔ 迁移的分叉由 `check-error-semantics.mjs` 抓出（第十二轮）。
+@Index('idx_notification_deliveries_notification', ['notificationId', 'status'])
 @Entity({ name: 'notification_deliveries' })
 export class NotificationDelivery {
   @PrimaryGeneratedColumn({ name: 'id', type: 'bigint', unsigned: true })

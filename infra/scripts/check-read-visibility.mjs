@@ -27,6 +27,17 @@
  *      `docs/KNOWN-ISSUES.md` 里；一旦有人把它**悄悄改掉**（实现变了、
  *      登记表没变），必须被抓出来（`READ_VISIBILITY_REGISTRY_STALE`）。
  *
+ * 第十二轮把口径从**公开**读端点扩到**已登录**端点（同一支脚本、同一条口径）：
+ *   R6 **覆盖**：用户侧（`/me`、`/connections`、`/directory`、`/alumni/verification`、
+ *      `/notifications`、`/uploads`、`/resources`）的已登录端点，
+ *      凡是实现里**会抛 403 / 404** 的，都必须登记它的可见性分界 ——
+ *      口径没人想过 = 漏登记 → 报错；
+ *   R7 **落地**：登记项写明的状态码痕迹必须真的出现在实现里
+ *      （「不可见 → 404」「无权 → 403」用反了就是对外契约的错）；
+ *   R8 **文档**：`docs/API-SPEC.md` 第 13.2 节必须**逐条**点名每个已登录端点。
+ *   ⚠️ `/admin/*` 不在本脚本范围内：管理端「权限点不足 → 403」由
+ *      `infra/scripts/check-rbac-matrix.mjs`（端点 ↔ 权限点）对账守着。
+ *
  * ⚠️ 口径与局限（写在这里，免得被当成万能护栏）：
  *   - 判定是**静态**的：看源码里有没有「可见性过滤 + 抛 404」的形态，
  *     不执行代码、不连数据库。真值由集成测试
@@ -310,6 +321,278 @@ const READ_VISIBILITY_REGISTRY = [
   },
 ];
 
+/* --------------------- 已登录端点的可见性口径（第十二轮） --------------------- */
+
+/**
+ * **已登录端点**的可见性口径登记表 —— 「403 与 404 的分界」的唯一事实来源。
+ *
+ * 为什么要把口径扩到**已登录**端点（第十一轮只核了公开那一半）：
+ *   `docs/API-SPEC.md` 第 13 节把两种失败语义分得很清楚：
+ *     - **不可见 → 404**：「这个对象对你不存在」（不泄露存在性）；
+ *     - **无权 → 403**：「对象存在，但你没有权限」。
+ *   公开端点这一半此前已经被自动化守住；**已登录端点这一半**此前只有人工抽查，
+ *   而这一半恰恰是**最容易改坏**的：把「不是你的」从 403 改成 404（或反过来）
+ *   会改变客户端的引导逻辑（去认证页 vs 提示无权限），却没有任何机制会报警。
+ *
+ * 每条必须写清：
+ *   - `impl`：判定发生在哪个文件的哪个方法里；
+ *   - `notFoundMarkers`：**不可见**时抛的异常（`NotFoundException` = 404）；
+ *   - `forbiddenMarkers`：**无权**时抛的异常（`ForbiddenException` = 403）；
+ *   - `controllerMarkers`：控制器上必须有的守卫（如 `@RequireAlumniStage('verified')`）；
+ *   - `docTokens`：文档那一行里必须出现的口径词。
+ *
+ * ⚠️ 范围：**用户侧**的已登录端点（`/me`、`/connections`、`/directory`、
+ *    `/alumni/verification`、`/notifications`、`/uploads`、`/resources`）。
+ *    `/admin/*` **不在本表**——管理端的「权限点不足 → 403」由
+ *    `infra/scripts/check-rbac-matrix.mjs`（端点 ↔ 权限点）对账守着，
+ *    两张表各管一段，不要重复。
+ */
+const AUTHENTICATED_SCOPE_PREFIXES = [
+  '/me',
+  '/connections',
+  '/directory',
+  '/alumni',
+  '/notifications',
+  '/uploads',
+  '/resources',
+];
+
+const AUTHENTICATED_VISIBILITY_REGISTRY = [
+  /* ------------------------------ 我的 ------------------------------ */
+  {
+    method: 'GET',
+    path: '/me',
+    controller: 'apps/api/src/modules/me/me.controller.ts',
+    handler: 'getMe',
+    impl: { file: 'apps/api/src/modules/me/me.service.ts', method: 'getMe' },
+    boundary: '只返回当前登录用户自己的资料；账号不存在 → 404',
+    notFoundMarkers: ['NotFoundException'],
+    forbiddenMarkers: [],
+    docTokens: ['404'],
+  },
+
+  /* ---------------------------- 连接关系 ---------------------------- */
+  {
+    method: 'GET',
+    path: '/connections/:id',
+    controller: 'apps/api/src/modules/connections/connections.controller.ts',
+    handler: 'connectionDetail',
+    impl: { file: 'apps/api/src/modules/connections/connections.service.ts', method: 'getConnection' },
+    boundary: '不是关系双方 → 403；关系不存在**或已解除** → 404',
+    notFoundMarkers: ['NotFoundException'],
+    forbiddenMarkers: ['ForbiddenException'],
+    controllerMarkers: ["@RequireAlumniStage('verified')"],
+    docTokens: ['403', '404'],
+  },
+  {
+    method: 'DELETE',
+    path: '/connections/:id',
+    controller: 'apps/api/src/modules/connections/connections.controller.ts',
+    handler: 'revoke',
+    impl: { file: 'apps/api/src/modules/connections/connections.service.ts', method: 'revokeConnection' },
+    boundary: '不是关系双方 → 403；关系不存在 → 404',
+    notFoundMarkers: ['NotFoundException'],
+    forbiddenMarkers: ['ForbiddenException'],
+    controllerMarkers: ["@RequireAlumniStage('verified')"],
+    docTokens: ['403', '404'],
+  },
+  {
+    method: 'PUT',
+    path: '/connections/:id/contact-grant',
+    controller: 'apps/api/src/modules/connections/connections.controller.ts',
+    handler: 'grant',
+    impl: { file: 'apps/api/src/modules/connections/connections.service.ts', method: 'setContactGrant' },
+    boundary: '不是关系双方 → 403；关系不存在 → 404；关系已解除 → 409',
+    notFoundMarkers: ['NotFoundException'],
+    forbiddenMarkers: ['ForbiddenException'],
+    controllerMarkers: ["@RequireAlumniStage('verified')"],
+    docTokens: ['403', '404'],
+  },
+  {
+    method: 'POST',
+    path: '/connections/requests',
+    controller: 'apps/api/src/modules/connections/connections.controller.ts',
+    handler: 'create',
+    impl: { file: 'apps/api/src/modules/connections/connections.service.ts', method: 'createRequest' },
+    boundary: '对方不存在 → 404；对方未认证 / 不接受联系申请 → 403',
+    notFoundMarkers: ['NotFoundException'],
+    forbiddenMarkers: ['ForbiddenException'],
+    controllerMarkers: ["@RequireAlumniStage('verified')"],
+    docTokens: ['403', '404'],
+  },
+  {
+    method: 'GET',
+    path: '/connections/requests/:id',
+    controller: 'apps/api/src/modules/connections/connections.controller.ts',
+    handler: 'detail',
+    impl: { file: 'apps/api/src/modules/connections/connections.service.ts', method: 'requestDetail' },
+    boundary: '不是申请双方 → 403；申请不存在 → 404',
+    notFoundMarkers: ['NotFoundException'],
+    forbiddenMarkers: ['ForbiddenException'],
+    controllerMarkers: ["@RequireAlumniStage('verified')"],
+    docTokens: ['403', '404'],
+  },
+  {
+    method: 'POST',
+    path: '/connections/requests/:id/accept',
+    controller: 'apps/api/src/modules/connections/connections.controller.ts',
+    handler: 'accept',
+    impl: { file: 'apps/api/src/modules/connections/connections.service.ts', method: 'accept' },
+    boundary: '不是接收方 → 403；申请不存在 → 404',
+    notFoundMarkers: ['NotFoundException'],
+    forbiddenMarkers: ['ForbiddenException'],
+    controllerMarkers: ["@RequireAlumniStage('verified')"],
+    docTokens: ['403', '404'],
+  },
+  {
+    method: 'POST',
+    path: '/connections/requests/:id/reject',
+    controller: 'apps/api/src/modules/connections/connections.controller.ts',
+    handler: 'reject',
+    impl: { file: 'apps/api/src/modules/connections/connections.service.ts', method: 'reject' },
+    boundary: '不是接收方 → 403；申请不存在 → 404',
+    notFoundMarkers: ['NotFoundException'],
+    forbiddenMarkers: ['ForbiddenException'],
+    controllerMarkers: ["@RequireAlumniStage('verified')"],
+    docTokens: ['403', '404'],
+  },
+  {
+    method: 'POST',
+    path: '/connections/requests/:id/cancel',
+    controller: 'apps/api/src/modules/connections/connections.controller.ts',
+    handler: 'cancel',
+    impl: { file: 'apps/api/src/modules/connections/connections.service.ts', method: 'cancel' },
+    boundary: '不是发起方 → 403；申请不存在 → 404',
+    notFoundMarkers: ['NotFoundException'],
+    forbiddenMarkers: ['ForbiddenException'],
+    controllerMarkers: ["@RequireAlumniStage('verified')"],
+    docTokens: ['403', '404'],
+  },
+
+  /* ------------------------------ 通讯录 ------------------------------ */
+  {
+    method: 'GET',
+    path: '/directory/:id',
+    controller: 'apps/api/src/modules/directory/directory.controller.ts',
+    handler: 'detail',
+    impl: { file: 'apps/api/src/modules/directory/directory.service.ts', method: 'detail' },
+    boundary: '未认证 / 账号停用 / 未授权公开 → **404**（不区分原因，不泄露存在性）',
+    notFoundMarkers: ['NotFoundException'],
+    forbiddenMarkers: [],
+    docTokens: ['404'],
+  },
+
+  /* --------------------------- 校友认证 --------------------------- */
+  {
+    method: 'GET',
+    path: '/alumni/verification/:id',
+    controller: 'apps/api/src/modules/alumni/alumni.controller.ts',
+    handler: 'detail',
+    impl: { file: 'apps/api/src/modules/alumni/alumni.service.ts', method: 'detail' },
+    boundary: '不是本人（且不是管理员）→ 403；申请不存在 → 404',
+    notFoundMarkers: ['NotFoundException'],
+    forbiddenMarkers: ['ForbiddenException'],
+    docTokens: ['403', '404'],
+  },
+  {
+    method: 'GET',
+    path: '/alumni/verification/:id/history',
+    controller: 'apps/api/src/modules/alumni/alumni.controller.ts',
+    handler: 'history',
+    impl: { file: 'apps/api/src/modules/alumni/alumni.service.ts', method: 'history' },
+    boundary: '不是本人（且不是管理员）→ 403；申请不存在 → 404',
+    notFoundMarkers: ['NotFoundException'],
+    forbiddenMarkers: ['ForbiddenException'],
+    docTokens: ['403', '404'],
+  },
+  {
+    method: 'PUT',
+    path: '/alumni/verification/:id/resubmit',
+    controller: 'apps/api/src/modules/alumni/alumni.controller.ts',
+    handler: 'resubmit',
+    impl: { file: 'apps/api/src/modules/alumni/alumni.service.ts', method: 'resubmit' },
+    boundary: '不是本人 → 403；申请不存在 → 404；状态不允许 → 409',
+    notFoundMarkers: ['NotFoundException'],
+    forbiddenMarkers: ['ForbiddenException'],
+    docTokens: ['403', '404'],
+  },
+
+  /* ------------------------------ 通知 ------------------------------ */
+  {
+    method: 'GET',
+    path: '/notifications/:id',
+    controller: 'apps/api/src/modules/notifications/notifications.controller.ts',
+    handler: 'detail',
+    impl: { file: 'apps/api/src/modules/notifications/notifications.controller.ts', method: 'detail' },
+    boundary: '不是本人的通知 → **404**（按 `id + userId` 查，查不到即 404）',
+    notFoundMarkers: ['NotFoundException'],
+    forbiddenMarkers: [],
+    docTokens: ['404'],
+  },
+  {
+    method: 'POST',
+    path: '/notifications/:id/read',
+    controller: 'apps/api/src/modules/notifications/notifications.controller.ts',
+    handler: 'markRead',
+    impl: { file: 'apps/api/src/modules/notifications/notification.service.ts', method: 'markRead' },
+    boundary: '不是本人的通知 → **404**（与 `GET /notifications/:id` 一致）',
+    notFoundMarkers: ['NotFoundException'],
+    forbiddenMarkers: [],
+    docTokens: ['404'],
+  },
+
+  /* --------------------------- 资源（发布方） --------------------------- */
+  {
+    method: 'PATCH',
+    path: '/resources/:id',
+    controller: 'apps/api/src/modules/resources/resources.controller.ts',
+    handler: 'update',
+    impl: { file: 'apps/api/src/modules/resources/resources.service.ts', method: 'update' },
+    boundary: '不是作者 → 403；内容不存在 → 404',
+    notFoundMarkers: ['NotFoundException'],
+    forbiddenMarkers: ['ForbiddenException'],
+    controllerMarkers: ["@RequireAlumniStage('verified')"],
+    docTokens: ['403', '404'],
+  },
+  {
+    method: 'POST',
+    path: '/resources/:id/submit',
+    controller: 'apps/api/src/modules/resources/resources.controller.ts',
+    handler: 'submit',
+    impl: { file: 'apps/api/src/modules/resources/resources.service.ts', method: 'submit' },
+    boundary: '不是作者 → 403；内容不存在 → 404',
+    notFoundMarkers: ['NotFoundException'],
+    forbiddenMarkers: ['ForbiddenException'],
+    controllerMarkers: ["@RequireAlumniStage('verified')"],
+    docTokens: ['403', '404'],
+  },
+  {
+    method: 'POST',
+    path: '/resources/:id/withdraw',
+    controller: 'apps/api/src/modules/resources/resources.controller.ts',
+    handler: 'withdraw',
+    impl: { file: 'apps/api/src/modules/resources/resources.service.ts', method: 'withdraw' },
+    boundary: '不是作者 → 403；内容不存在 → 404',
+    notFoundMarkers: ['NotFoundException'],
+    forbiddenMarkers: ['ForbiddenException'],
+    controllerMarkers: ["@RequireAlumniStage('verified')"],
+    docTokens: ['403', '404'],
+  },
+
+  /* ------------------------------ 附件 ------------------------------ */
+  {
+    method: 'GET',
+    path: '/uploads/:id/url',
+    controller: 'apps/api/src/modules/uploads/uploads.controller.ts',
+    handler: 'url',
+    impl: { file: 'apps/api/src/modules/uploads/uploads.service.ts', method: 'urlFor' },
+    boundary: '私有资产且不是上传者 → **404**（不泄露「该文件存在」）',
+    notFoundMarkers: ['NotFoundException'],
+    forbiddenMarkers: [],
+    docTokens: ['404'],
+  },
+];
+
 /* ------------------------------ 工具 ------------------------------ */
 
 function readTextSafe(file) {
@@ -352,20 +635,29 @@ function joinPath(prefix, route) {
 }
 
 /**
- * 找出某个控制器文件里**全部** `@Public()` 的 GET 端点。
+ * 找出某个控制器文件里**全部**端点（`@Get` / `@Post` / `@Patch` / `@Put` / `@Delete`）。
  *
  * ⚠️ `@Public()` 与 `@Get(...)` 的**先后顺序不固定**：
  *    多数控制器是 `@Public()` 在前（`content.controller.ts`），
  *    `alumni.controller.ts` 却是 `@Get(':id')` 在前、`@Public()` 在后 ——
  *    只按一种顺序扫会**漏掉**一半公开读端点，R1 也就成了恒过的。
- *    所以这里把 `@Get(...)` **上下**紧邻的装饰器块**一起**看。
+ *    所以这里把路由装饰器**上下**紧邻的装饰器块**一起**看。
+ *
+ * ⚠️ 处理器**名字**也要一起取出来：第十二轮起要靠它把端点
+ *    解析到「它调用的服务方法」上（判断它到底会不会抛 403 / 404）。
  */
-function findPublicGetEndpoints(src) {
+function findEndpoints(src) {
   const lines = src.split('\n');
+  const classPublic = /@Public\(\)/.test(
+    src.slice(0, src.indexOf('export class') > 0 ? src.indexOf('export class') : src.length),
+  );
   const endpoints = [];
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
-    if (!/^\s*@Get\(/.test(line)) continue;
+    // ⚠️ 路径可以**省略**（`@Get()` = 控制器前缀本身，如 `GET /me`、`GET /connections`）——
+    //    只认带引号的写法会漏掉这些端点，R6 / R1 就成了恒过的。
+    const matched = /^\s*@(Get|Post|Patch|Put|Delete)\(\s*(?:'([^']*)')?\s*\)/.exec(line);
+    if (!matched) continue;
 
     const decorators = [];
     for (let j = index - 1; j >= 0; j -= 1) {
@@ -378,12 +670,36 @@ function findPublicGetEndpoints(src) {
       if (text.startsWith('@')) decorators.push(text);
       else break;
     }
-    if (!decorators.some((item) => item.startsWith('@Public'))) continue;
+    const isPublic = classPublic || decorators.some((item) => item.startsWith('@Public'));
 
-    const matched = /@Get\(\s*'([^']*)'\s*\)/.exec(line);
-    endpoints.push({ route: matched ? matched[1] : '', line: index + 1 });
+    // 处理器名字：路由装饰器之后的第一行「像方法签名」的行
+    let cursor = index + 1;
+    while (cursor < lines.length) {
+      const text = lines[cursor].trim();
+      if (text === '' || text.startsWith('@') || text.startsWith('//') || text.startsWith('*')) {
+        cursor += 1;
+        continue;
+      }
+      break;
+    }
+    const handler = /([A-Za-z_$][\w$]*)\s*\(/.exec(lines[cursor] ?? '');
+
+    endpoints.push({
+      method: matched[1].toUpperCase(),
+      route: matched[2],
+      line: index + 1,
+      isPublic,
+      handler: handler ? handler[1] : null,
+    });
   }
   return endpoints;
+}
+
+/** 只要 `@Public()` 的 GET 端点（第十一轮口径）。 */
+function findPublicGetEndpoints(src) {
+  return findEndpoints(src)
+    .filter((item) => item.isPublic && item.method === 'GET')
+    .map((item) => ({ route: item.route, line: item.line }));
 }
 
 /** 控制器前缀（`@Controller('events')` → `events`；`@Controller()` → 空）。 */
@@ -475,6 +791,66 @@ function effectiveBody(file, methodName) {
     }
   }
   return { ok: true, where: `${file} · ${methodName}`, body };
+}
+
+/**
+ * 列出某个目录下的**服务实现文件**（`.ts`，不含控制器与 DTO）。
+ */
+function listServiceFiles(dir) {
+  const found = [];
+  const walk = (current) => {
+    let entries;
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.name.endsWith('.ts') && !entry.name.endsWith('.controller.ts')) {
+        found.push(path.relative(root(), full).split(path.sep).join('/'));
+      }
+    }
+  };
+  walk(dir);
+  return found.sort();
+}
+
+/**
+ * 端点处理器 + 它调用到的**同模块**服务方法体。
+ *
+ * 用途：判断「这个端点到底会不会抛 403 / 404」——
+ *   控制器只写 `return this.xxxService.doSomething(...)`，
+ *   真正的 `throw new ForbiddenException(...)` 在**服务**里。
+ *   不把服务方法一起看，就会把「会抛 403 的端点」判成「没有可见性分界」，
+ *   R6 就成了恒过的。
+ */
+function endpointImplBodies(controllerFile, handlerName) {
+  const controllerSrc = readTextSafe(path.join(root(), controllerFile));
+  if (!controllerSrc) return { ok: false, reason: `文件不存在：${controllerFile}` };
+  const methods = collectMethods(controllerSrc);
+  const handler = methods.find((method) => method.name === handlerName);
+  if (!handler) return { ok: false, reason: `${controllerFile} 里找不到方法 ${handlerName}` };
+
+  const bodies = [{ where: `${controllerFile} · ${handlerName}`, body: handler.body }];
+  const called = new Set(
+    [...handler.body.matchAll(/this\.[A-Za-z_$][\w$]*\.([A-Za-z_$][\w$]*)\s*\(/g)].map(
+      (match) => match[1],
+    ),
+  );
+  if (!called.size) return { ok: true, bodies };
+
+  const dir = path.dirname(path.join(root(), controllerFile));
+  for (const file of listServiceFiles(dir)) {
+    const src = readTextSafe(path.join(root(), file));
+    if (!src) continue;
+    for (const method of collectMethods(src)) {
+      if (!called.has(method.name)) continue;
+      bodies.push({ where: `${file} · ${method.name}`, body: method.body });
+    }
+  }
+  return { ok: true, bodies };
 }
 
 /**
@@ -741,10 +1117,183 @@ function main() {
     }
   }
 
+  /* --- R6 / R7 / R8：已登录端点的 403 / 404 分界（第十二轮新增） ----------- */
+  //
+  // 公开端点这一半（第十一轮）核的是「不可见 → 404」；
+  // 这一轮把**已登录**端点这一半也核起来：
+  //   R6 **覆盖**：范围内（用户侧）的已登录端点，凡是会抛 403 / 404 的，
+  //      都必须登记它的分界口径 —— 口径没人想过 = 漏登记 → 报错；
+  //   R7 **落地**：登记项写明的状态码痕迹必须真的出现在实现里；
+  //   R8 **文档**：`docs/API-SPEC.md` 第 13.3 节必须逐条点名。
+  const authenticatedRegistryKeys = new Set(
+    AUTHENTICATED_VISIBILITY_REGISTRY.map((entry) => `${entry.method} ${entry.path}`),
+  );
+  const inScope = (pathname) =>
+    AUTHENTICATED_SCOPE_PREFIXES.some(
+      (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
+    );
+
+  const allEndpoints = [];
+  for (const file of listControllerFiles()) {
+    const src = readTextSafe(path.join(root(), file));
+    if (!src) continue;
+    const prefix = controllerPrefix(src);
+    for (const endpoint of findEndpoints(src)) {
+      allEndpoints.push({
+        method: endpoint.method,
+        path: joinPath(prefix, endpoint.route),
+        file,
+        line: endpoint.line,
+        handler: endpoint.handler,
+        isPublic: endpoint.isPublic,
+      });
+    }
+  }
+
+  // R6：范围内、已登录、会抛 403/404 的端点必须登记
+  for (const item of allEndpoints) {
+    if (item.isPublic) continue;
+    if (!inScope(item.path)) continue;
+    const key = `${item.method} ${item.path}`;
+    if (authenticatedRegistryKeys.has(key)) continue;
+    if (!item.handler) continue;
+    const impl = endpointImplBodies(item.file, item.handler);
+    if (!impl.ok) continue; // 解析不了就不判（宁可漏报，也不要误报）
+    const forbidden = impl.bodies.some((item2) => item2.body.includes('ForbiddenException'));
+    const notFound = impl.bodies.some((item2) => item2.body.includes('NotFoundException'));
+    if (!forbidden && !notFound) {
+      notes.push({
+        kind: 'AUTH_VISIBILITY_NO_BOUNDARY',
+        where: key,
+        detail: '该端点只返回当前用户自己的数据，不抛 403 / 404 —— 无可见性分界，无需登记',
+      });
+      continue;
+    }
+    issues.push({
+      kind: 'AUTH_VISIBILITY_NOT_REGISTERED',
+      where: key,
+      detail:
+        `这是一个**已登录端点**（${item.file}:${item.line}），它的实现里` +
+        `${forbidden ? '会抛 403' : ''}${forbidden && notFound ? '、' : ''}${notFound ? '会抛 404' : ''}` +
+        '，但**可见性分界没有登记** —— ' +
+        '「对象存在但不是你的 → 403」与「对象不存在 / 对你不可见 → 404」必须先想清楚再上线',
+    });
+  }
+
+  // R7 / R8：登记项的口径必须落地、必须写进文档
+  for (const entry of AUTHENTICATED_VISIBILITY_REGISTRY) {
+    const key = `${entry.method} ${entry.path}`;
+    const found = allEndpoints.find(
+      (item) => item.method === entry.method && item.path === entry.path && !item.isPublic,
+    );
+    if (!found) {
+      issues.push({
+        kind: 'AUTH_VISIBILITY_ROUTE_MISSING',
+        where: key,
+        detail:
+          `登记表里的已登录端点 ${key} 在代码里**找不到了** —— ` +
+          '要么端点被删 / 改名（登记表该更新），要么它不再需要可见性分界',
+      });
+      continue;
+    }
+    if (entry.controller && found.file !== entry.controller) {
+      issues.push({
+        kind: 'AUTH_VISIBILITY_CONTROLLER_MISMATCH',
+        where: key,
+        detail:
+          `登记表说它在 \`${entry.controller}\`，实际却在 \`${found.file}\`（第 ${found.line} 行）—— ` +
+          '端点被挪了位置，登记表该跟着更新',
+      });
+    }
+
+    const impl = effectiveBody(entry.impl.file, entry.impl.method);
+    if (!impl.ok) {
+      issues.push({
+        kind: 'AUTH_VISIBILITY_IMPL_MISSING',
+        where: key,
+        detail: `${impl.reason} —— 可见性分界无处核对`,
+      });
+      continue;
+    }
+    const missingNotFound = (entry.notFoundMarkers ?? []).filter(
+      (marker) => !impl.body.includes(marker),
+    );
+    if (missingNotFound.length) {
+      issues.push({
+        kind: 'AUTH_VISIBILITY_STATUS_MISSING',
+        where: key,
+        detail:
+          `${impl.where} 里没有 ${missingNotFound.join(' / ')} —— ` +
+          `「不可见」必须落到 **404**（用 403 会泄露「这个对象存在」）。${entry.boundary}`,
+      });
+    }
+    const missingForbidden = (entry.forbiddenMarkers ?? []).filter(
+      (marker) => !impl.body.includes(marker),
+    );
+    if (missingForbidden.length) {
+      issues.push({
+        kind: 'AUTH_VISIBILITY_STATUS_MISSING',
+        where: key,
+        detail:
+          `${impl.where} 里没有 ${missingForbidden.join(' / ')} —— ` +
+          `「已登录但无权」必须落到 **403**（用 404 会把「对象存在」也一起藏掉，` +
+          `客户端就分不清「没有这个对象」和「不是你的」）。${entry.boundary}`,
+      });
+    }
+    if (entry.controllerMarkers?.length) {
+      const controllerSrc = readTextSafe(path.join(root(), entry.controller)) ?? '';
+      const missingGuards = entry.controllerMarkers.filter(
+        (marker) => !controllerSrc.includes(marker),
+      );
+      if (missingGuards.length) {
+        issues.push({
+          kind: 'AUTH_VISIBILITY_GUARD_MISSING',
+          where: key,
+          detail:
+            `\`${entry.controller}\` 上看不到 ${missingGuards.join(' / ')} —— ` +
+            '「未完成校友认证 → 403 `VERIFICATION_REQUIRED`」这条守卫不能被摘掉' +
+            '（摘掉之后未认证用户会用得到未认证才能用的功能）',
+        });
+      }
+    }
+
+    // R8：文档
+    if (docRows) {
+      const rows = docRows.filter((row) => row.method === entry.method && row.path === entry.path);
+      if (!rows.length) {
+        issues.push({
+          kind: 'AUTH_VISIBILITY_UNDOCUMENTED',
+          where: key,
+          detail:
+            `「读端点的可见性口径」小节里没有点名 ${key} —— ` +
+            '对外契约不能只存在于代码里（客户端要靠它分清 403 与 404）',
+        });
+      } else {
+        const union = rows.map((row) => row.text).join('\n');
+        const missingTokens = (entry.docTokens ?? []).filter((token) => !union.includes(token));
+        if (missingTokens.length) {
+          issues.push({
+            kind: 'AUTH_VISIBILITY_UNDOCUMENTED',
+            where: key,
+            detail:
+              `文档里没有写明「${missingTokens.join(' / ')}」：${rows.map((row) => row.trim()).join(' / ')}`,
+          });
+        } else {
+          notes.push({
+            kind: 'AUTH_VISIBILITY_OK',
+            where: key,
+            detail: entry.boundary,
+          });
+        }
+      }
+    }
+  }
+
   const report = {
     publicReadEndpoints: discovered.length,
     registered: READ_VISIBILITY_REGISTRY.length,
     pending: READ_VISIBILITY_REGISTRY.filter((entry) => entry.pending).length,
+    authenticatedRegistered: AUTHENTICATED_VISIBILITY_REGISTRY.length,
     issues: issues.length,
     notes: notes.length,
     detail: issues,
@@ -759,10 +1308,12 @@ function main() {
     }
     if (issues.length === 0) {
       process.stdout.write(
-        `✅ 公开读端点的可见性口径对账通过：` +
+        `✅ 读端点的可见性口径对账通过：` +
           `${report.publicReadEndpoints} 个公开读端点全部登记了可见口径，` +
           `每个都能在实现里看到对应的过滤与状态码，文档也逐条写明` +
-          `（其中 ${report.pending} 个口径**待产品拍板**，已记在 KNOWN-ISSUES）\n`,
+          `（其中 ${report.pending} 个口径**待产品拍板**，已记在 KNOWN-ISSUES）；` +
+          `另有 ${report.authenticatedRegistered} 个**已登录端点**登记了 403 / 404 的分界，` +
+          `实现与文档同样逐条对齐\n`,
       );
     } else {
       for (const issue of issues) {

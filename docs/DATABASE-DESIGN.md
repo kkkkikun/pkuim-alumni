@@ -294,6 +294,23 @@ note VARCHAR(500), created_at, updated_at`
 | 登记表 ↔ 实现 | `check-error-semantics.mjs` | 少登记一条唯一键 → 报错；「撞键时返回什么、在哪处置」必须写清并能在代码里找到 |
 | **本文件 ↔ 迁移（索引清单）** | `check-error-semantics.mjs`（第十一轮新增） | 本文件里写出的**每一个** `uk_*` / `idx_*` 索引名，迁移里必须**真的创建**它（否则报 `DOC_INDEX_NOT_IN_MIGRATION`）；迁移里创建的每一个索引，本文件的清单里也必须**写明**（否则报 `MIGRATION_INDEX_NOT_IN_DOC`）。实测：42 ↔ 42 逐条对齐 |
 
+### 12.1 实体 ↔ 迁移的三层对账（第十二轮新增）
+
+对账不再只到**唯一键**：生产库跑的是迁移，**实体声明了而迁移没建**的东西
+（索引 / 外键 / 列）在生产库上**根本不存在**。`check-error-semantics.mjs`
+现在逐条核三层：
+
+| 层 | 核什么 | 不一致时报什么 |
+|---|---|---|
+| **全部索引**（含非唯一 `idx_*`） | 实体类级 `@Index` ↔ 迁移里创建的索引：名字、所在表、列集合、唯一性 | `MIGRATION_INDEX_MISSING`（实体有迁移没有）/ `MIGRATION_INDEX_NOT_DECLARED`（迁移有实体没有）/ `MIGRATION_INDEX_COLUMN_MISMATCH` / `MIGRATION_INDEX_UNIQUENESS_MISMATCH` / `MIGRATION_INDEX_TABLE_MISMATCH` |
+| **外键** | 实体 `@ManyToOne` / `@OneToOne` + `@JoinColumn` ↔ 迁移的 `FOREIGN KEY`：列、目标表、目标列 | `ENTITY_FOREIGN_KEY_MISSING` / `MIGRATION_FOREIGN_KEY_NOT_DECLARED` / `FOREIGN_KEY_TARGET_MISMATCH` |
+| **全部列** | 每一列的类型 / 长度 / 可空性；以及两边各自多出来的列 | `MIGRATION_COLUMN_DEF_MISMATCH` / `MIGRATION_COLUMN_MISSING` / `MIGRATION_COLUMN_NOT_DECLARED` / `MIGRATION_TABLE_MISSING` |
+
+⚠️ **口径**：只报**能由迁移与实体直接判定**的分歧 ——
+枚举**取值**、精度、`unsigned`、`ON DELETE` 行为、默认值一律**不判**。
+⚠️ **主键等价**仍不算缺陷（唯一索引的列就是主键时，主键天然唯一）。
+实测：32 张表 / 40 条实体索引 / 46 条实体外键 / 271 列**逐条对齐**。
+
 两条**已知的等价形态**（不算不一致）：
 
 - **主键等价于唯一键**（自然键主键与复合主键都算）：`admin_user_roles` / `role_permissions` /
