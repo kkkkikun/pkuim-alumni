@@ -3281,6 +3281,37 @@
   角色编码超过 32 字符会被数据库**直接拒绝**（`Data too long for column 'code'`）；
   写测试角色编码时要注意长度（本轮第一次写这个套件就踩到了）。
 
+### 187. 多实例部署时「撤权跨实例即刻生效」此前**没有实现**（第五轮补上）
+
+- **现象**：第三轮引入的 RBAC 缓存是**进程内**的，「停用 / 降权」的主动失效
+  **只清发起写操作的那一个实例**的缓存 ——
+  多实例部署时，其余实例最多要等 **TTL（≤60 秒）** 才生效
+  （口径写在 `docs/SECURITY.md` 第 2.1.4 节，此前只有「TTL 兜底」这一档）。
+- **为什么重要**：这是仓库自己记录的**最后一个可自行实现的安全缺口**
+  （`docs/SECURITY.md` 第 2.1.4 节曾写「若将来要求撤权跨实例即刻生效，
+  正确的做法是共享失效总线（Redis pub/sub）」；Redis 已在依赖里，不引入新基础设施）。
+- **处置（第五轮）**：新增共享失效总线（Redis pub/sub）：
+  - 口径**先写进文档**（`docs/SECURITY.md` 第 2.1.4 / 2.1.5 节）：
+    撤权延迟分三档 —— 单实例 **0**；多实例 + 总线可用 **0**；
+    多实例 + 总线不可用 **≤ TTL（≤60 秒）**；
+    总线**只传失效事件、不传权限内容**；**未读通知数依旧不缓存**；
+  - 实现：`apps/api/src/common/services/invalidation-bus.service.ts`
+    （发布端在**管理端写操作事务提交后**发布；订阅端在**实例启动时**订阅并清掉本地条目），
+    频道名**走配置**（`RBAC_INVALIDATION_CHANNEL`，默认基准名 `nmg:rbac:invalidate`），
+    **按环境隔离**（生效频道 `nmg:prod:` / `nmg:dev:` / `nmg:test:`），
+    可用 `RBAC_INVALIDATION_ENABLED=false` 关闭；
+  - **降级路径是硬要求**：Redis 不可用 / 订阅断开时，
+    管理端写操作**照常成功**（不抛错、不回滚业务写），撤权延迟回落到 TTL 上界；
+  - 用例：`apps/api/test/integration/rbac-invalidation-bus.e2e-spec.ts`（4 例）
+    —— 同进程**两个应用实例 + 一个 Redis**：实例 A 降权 → 实例 B 的缓存
+    **26~93 ms 内**失效（**不等 TTL**）；总线不可用时写操作仍 200、
+    且 TTL 窗口过后由 200 变 403（**不是永久放行**）；
+    另有一条用例直接监听频道，断言总线上流动的消息**只有**
+    `{"kind":"admin","adminId":N}`，**不含任何权限内容**。
+- **仍未做的（有意为之）**：字典 / 分类 / 系统设置的**跨实例**失效**没有**上总线 ——
+  它们的跨实例陈旧上界仍是各自的 TTL（≤300 秒），属数据新鲜度问题而非安全语义，
+  已记入下方待办表。
+
 ## 待验证 / 未完成（不得声称已通过）> 以下均为**缺少外部资质或环境**导致的未验证项，与实现质量无关。
 > 已实测完成的项（冒烟 10/10、集成测试 39/39、k6 分级压测、备份恢复演练、管理后台构建）见 `docs/TEST-REPORT.md`。
 
@@ -3301,14 +3332,16 @@
 | ~~管理后台 UI 库按需引入（首屏减负）~~ | ✅ **第三轮已解决**：`main.ts` 从 `app.use(TDesign)`（全量注册）改为 `installTDesign(app)`（`apps/admin-web/src/plugins/tdesign.ts`），只注册**模板里真正用到的 19 个组件**，且每个组件从**深路径**（`tdesign-vue-next/es/<组件>`）引入；`vite.config.ts` 里对根入口的 `manualChunks` 也一并去掉（根入口会把整个库拉进来）。**首屏实际下载量 2,011,294 B → 1,208,675 B（gzip 466,698 B → 307,167 B，-39.9%）**，`dist` 总量 2,120,742 B → 1,318,074 B（-37.8%）。真实数字与测量方法见 `docs/TEST-REPORT.md` 第 9 节 | 已完成（第三轮） |
 | ~~三个无上限列表端点~~ | ✅ **第三轮已解决**（契约变更轮）：三个端点全部改为 `{items, meta}` + `page`/`pageSize`：`GET /admin/events/:id/registrations`、`GET /alumni/verification/mine`、`GET /admin/roles|permissions|settings`。契约同步改了 `packages/contracts/src/api.ts`（并补上 `AdminRoleDto` / `AdminPermissionDto` 两个此前写窄了的目录条目类型）与 `docs/API-SPEC.md`（新增「第三轮的契约变更」迁移说明表）；两端客户端（管理后台 `EventListView.vue` 报名抽屉接 `PagerBar`、`RolesView.vue` / `AdminUsersView.vue` / `SettingsView.vue`；小程序 `services/me.ts`）与集成测试同步更新 | 已完成（第三轮） |
 | ~~列表接口把 MEDIUMTEXT 正文整列返回~~ | ✅ **第三轮已解决**（契约变更轮）：三个**公开**列表端点（`GET /articles`、`GET /notices`、`GET /resources`）的 `body` 只返回**前 200 字摘要**（`apps/api/src/common/utils/excerpt.ts`），完整正文走详情接口。**管理端列表保持全文** —— 后台编辑弹窗直接回填列表行里的正文，截断会让管理员保存时**静默截断正文**（数据损坏，不是性能优化）；这一点在契约与 API-SPEC 里都写明了 | 已完成（第三轮） |
-| ~~管理员每请求重算 RBAC（4 条 SQL）~~ | ✅ **第三轮已解决**：先在 `docs/SECURITY.md` 第 2.1 节**写明口径**（TTL ≤ 60 秒**硬上限**、降权 / 停用时**主动失效**、多实例部署下未被失效的实例最多等 TTL、缓存只存「有哪些权限点」而**不**缓存「这个请求是否被允许」），再实现 `TtlCacheService`（`apps/api/src/common/services/ttl-cache.service.ts`）+ `AuthService.resolveAdminIdentity`。管理端写端点（停用 / 改角色）在事务提交后**主动失效**该管理员的缓存条目 —— 本进程内撤权延迟为 **0**，TTL 只是多实例部署的兜底 | 已完成（第三轮）；**仍需人工**：多实例部署若要求「撤权跨实例即刻生效」，需引入共享失效总线（Redis pub/sub），本轮**未做**；**本轮（复核轮）仍未做**，已作为**下一轮（opt-005，即第五轮）**的具体目标（Redis 已在依赖里，仓库侧可实现；Redis 不可用时必须**降级**而不是让写操作失败） |
+| ~~管理员每请求重算 RBAC（4 条 SQL）~~ | ✅ **第三轮已解决**：先在 `docs/SECURITY.md` 第 2.1 节**写明口径**（TTL ≤ 60 秒**硬上限**、降权 / 停用时**主动失效**、多实例部署下未被失效的实例最多等 TTL、缓存只存「有哪些权限点」而**不**缓存「这个请求是否被允许」），再实现 `TtlCacheService`（`apps/api/src/common/services/ttl-cache.service.ts`）+ `AuthService.resolveAdminIdentity`。管理端写端点（停用 / 改角色）在事务提交后**主动失效**该管理员的缓存条目 —— 本进程内撤权延迟为 **0**，TTL 只是多实例部署的兜底 | ✅ **第五轮补齐跨实例那一档**：共享失效总线（Redis pub/sub）已实现（`apps/api/src/common/services/invalidation-bus.service.ts`），多实例部署时撤权延迟也是 **0**；总线不可用时回落到 TTL 上界（≤60 秒），**写操作照常成功**。口径见 `docs/SECURITY.md` 第 2.1.4 / 2.1.5 节，用例见 `apps/api/test/integration/rbac-invalidation-bus.e2e-spec.ts` |
 | ~~字典 / 聚合接口无缓存~~ | ✅ **第三轮已解决**：`GET /system/regions`、`/system/industries`、`/system/settings` 与 `GET /articles/categories` 走进程内 TTL 缓存（字典 / 分类 / 系统设置），写操作（分类增删改、设置写入）**主动失效**对应条目。**未读通知数绝不缓存**（`GET /me/summary` 每次实时 COUNT）—— 缓存它会让红点长期不消。口径见 `docs/SECURITY.md` 第 2.1 节 | 已完成（第三轮） |
 | ~~`view_count` 每次浏览都写一次库~~ | ✅ **第三轮已解决**：浏览改为在 **Redis** 里 `HINCRBY` 计数（`ViewCounterService`），累计 20 次或到 60 秒周期才把增量**一次性**写回数据库（仍只动 `view_count` 一列，`updated_at = updated_at`）。`viewCount` 的一致性口径由「即时一致」改为**最终一致**（详情接口返回「库里的基线值 + 未落库增量」，用户看到的数字当场就是对的，但库里的行可能滞后一个刷回周期）—— 口径写在 `docs/SECURITY.md` 第 2.2 节与 `docs/API-SPEC.md`。Redis 不可用时**降级为直接写库**（与改动前一致，计数不丢） | 已完成（第三轮） |
 | `/admin/stats` 的 `connectionTotal` 口径 | 管理端把它标成「连接总数」，服务端统计的却是**联系申请**条数（`connection_request_history`）。改查询会改变页面上显示的数字（对外可见语义），本轮只去掉了完全重复的那条 COUNT | ⚠️ **需产品/客户确认口径后再改**（第三轮**未改**：这是对外可见的业务语义，不是性能问题。已按本轮约定「只记录、不擅改」处理） |
 | 连接列表未按对方的字段可见开关裁剪 | `/me/connections` 无条件返回对方的学院 / 地区 / 行业；而 `showCollege` 等开关在小程序里的说明是「**在通讯录中**显示你的毕业院系」—— 开关的语义只覆盖通讯录 | ⚠️ **需产品确认**「解除连接 / 连接列表」是否也应受开关约束；第三轮**未改**（改了就是改业务语义）。已按本轮约定「只记录、不擅改」处理 |
 | nginx 静态资源安全头的端到端验证 | #178 已在 `infra/nginx/admin-web.conf` 补齐 `location /assets/` 的安全头。**本轮（复核轮）已做「配置侧」端到端验证**：用仓库里的这份 conf + 本轮（复核轮）的构建产物在真实 `nginx:alpine` 里起服务，`curl -I /assets/index-*.js` → **9 个安全响应头全部到位**（`X-Content-Type-Options` / `X-Frame-Options` / `Referrer-Policy` / `Permissions-Policy` / `X-Permitted-Cross-Domain-Policies` / `Cross-Origin-Opener-Policy` / `Content-Security-Policy` / `X-XSS-Protection` / `Strict-Transport-Security`）+ `Cache-Control`。**但演示环境现场仍看不到这组头** —— 那边跑的是 4 天前的旧镜像（**部署未更新**，不是配置缺失） | ⚠️ **仍需人工**：部署到服务器后 `curl -I http://127.0.0.1:18082/assets/xxx.js` 再核对一次现场。证据见 `docs/TEST-REPORT.md` 第 11.7 节 |
 | ~~管理端「分类 CRUD / 系统设置写入」没有审计记录~~ | ✅ **第三轮已解决**：`ContentService` 的这 4 个方法（`createCategory` / `updateCategory` / `deleteCategory` / `upsertSetting`）现在支持传入事务 `EntityManager`，控制器（`admin-users.controller.ts`）用 `dataSource.transaction` 把「业务写 + 审计写入」放进**同一事务**（沿用缺陷 #134 的做法：审计写失败时业务写一起回滚）。审计动作名：`category.create` / `category.update` / `category.delete` / `setting.update`；`setting.update` **不记 `value`**（设置里可能放敏感配置，审计表不该成为泄密面，只记 `key` 与 `description`） | 已完成（第三轮） |
-| 通知深分页索引收益 | `(user_id, id)` 索引已建，但优化器在本次数据集上未自动改选；真实收益取决于数据分布 | 生产数据量到位后用 `EXPLAIN ANALYZE` 复测，必要时再调 |
+| 通知深分页索引收益 | `(user_id, id)` 索引已建，但优化器在本次数据集上未自动改选；真实收益取决于数据分布 | ✅ **第五轮已用 `EXPLAIN ANALYZE` 复测**（测试库造 20 万 + 10 万条通知、两次 `ANALYZE TABLE`）：**加索引 / 删索引 / 加回索引，计划与耗时都相同**（54.8 / 53.9 / 53.5 ms，差异在噪声内），且 `FORCE INDEX (user_id, id)` 反而**更慢**（2.87 ms vs 优化器自选 1.32 ms）→ **按「没有实测数字的索引不写进生产库」的既定口径，本轮不加索引、不走 TypeORM migration**。**真正的解法是游标分页（keyset pagination）** —— 深分页耗时由 `OFFSET` 决定（OFFSET 1980 → 54 ms；OFFSET 0 → 0.03 ms），但那会**改对外契约**（`page`/`pageSize` 语义），本轮**不改** | ⚠️ **需产品/客户确认**是否接受契约层面的分页改造；在此之前维持现状（数字见 `docs/TEST-REPORT.md` 第 12.5 节） |
+| 共享失效总线的**部署侧**要求（第五轮新增） | 总线靠 Redis pub/sub 广播「谁的缓存该作废」——**若多实例各连不同的 Redis，总线就不生效**（各自只订阅自己的），撤权延迟回落到 TTL 上界（≤60 秒）。频道名按环境隔离（`nmg:prod:` / `nmg:dev:` / `nmg:test:`），同一环境各实例必须一致 | ⚠️ **需人工在部署时确认**：所有 API 实例连**同一个** Redis（`docker-compose.prod.yml` 里已是共享的 `redis` 服务）；频道名用默认值即可（`RBAC_INVALIDATION_CHANNEL=nmg:rbac:invalidate`，服务端按 `NODE_ENV` 插入环境段） |
+| 字典 / 分类 / 系统设置的**跨实例**失效没有上总线 | 第五轮的总线**只承载 RBAC 失效事件**（频道名 `nmg:rbac:invalidate`）—— 分类 / 字典 / 系统设置在**其它实例**上仍要等各自的 TTL（≤300 秒）才变。这不是安全语义（不影响权限），是数据新鲜度问题 | ⚠️ **后续轮可做**：把失效事件按 `kind` 扩展到字典类（同一个总线、同一套降级路径），并补跨实例用例；本轮**有意不做**（口径写在 `docs/SECURITY.md` 第 2.1.5 节末） |
 | 第三轮新增端点 / 契约变更的**部署顺序** | 第三轮改了对外响应结构（`GET /admin/events/:id/registrations`、`GET /alumni/verification/mine`、`GET /admin/roles|permissions|settings` 改为 `{items, meta}`；新增 `GET /me/summary`；公开列表的 `body` 变为摘要）。**服务端与两端客户端必须一起发布** —— 只升级服务端会让旧客户端取 `.items` 得到 `undefined`，只升级客户端会让新客户端解析旧响应失败 | ⚠️ **需人工安排发布顺序**：建议「先发服务端（响应结构变更）+ 紧接着发两端客户端」的**同一次发布窗口**完成，不要跨版本长时间并存。**第四轮已产出逐端点的核对清单与两个方向的破坏形态：`docs/RELEASE-ORDER.md`**（含发布前 9 项勾选清单、发布后验证命令、回滚说明；其中 `GET /alumni/verification/mine` **两个方向都坏**，唯一可行顺序是「服务端先」，切换后到小程序新版铺开前该状态会一直错，需人工告知）。迁移说明见 `docs/API-SPEC.md` 的「第三轮的契约变更」小节。**本轮（复核轮）实测确认**：演示环境（`127.0.0.1:18080`，对外 `http://8.160.116.34:18080`）的 API **仍是第三轮之前的构建** —— `GET /me/summary` 返回 **404**、`GET /articles` 仍返回**全文 body**、管理后台静态资源缺 CSP / HSTS（跑的是 4 天前的旧镜像）。这与本行的约束**一致**（小程序新版本未过审前不能先切服务端），属**预期状态**而非漏发布；但也意味着**第三轮的契约变更目前确实尚未上线** |
 | 第三轮的两条索引迁移尚未在**业务库**应用 | `AddQueryIndexesAndProtectAuditLogs1730000005000` 与 `AddRemainingQueryIndexes1730000006000` 在本机测试库已应用，但**线上业务库 `nmg_alumni` 尚未应用**（`infra/scripts/check-pending-migrations.sh` 的 R2 检查会报出来） | ⚠️ **需人工在部署窗口执行** `pnpm --filter @nmg/api db:migrate`（或走既有的迁移发布流程）。**第四轮已核对**（见 `docs/TEST-REPORT.md` 第 10.3 节）：两条迁移都已登记进 `migrations/index.ts` 且**排在最后**；`check-pending-migrations.sh` 的 **R1**（清单 ↔ 文件，不连库）已通过；**R2**（清单 ↔ 库）在本机两个库上都如实报出这两条**未应用** —— 与「线上待应用」一致。CI 跑的是 `--static-only`（CI 用的是普通 MySQL **service**、不是 compose 栈，R2 在 CI 里连不上库），**线上库的实际应用仍属人工动作** |
 | ~~管理后台真实浏览器冒烟未在本机跑通~~ | ✅ **第三轮已跑通**：本机补装了 Playwright（**不写进仓库**，不引入新依赖），用已有的 Chromium 跑了 `infra/scripts/admin-ui-smoke.mjs`：**13 个路由全绿，0 条 console error，0 个未捕获异常，0 个失败请求**；定点截图见 `docs/screenshots/opt-003/` 与 `docs/TEST-REPORT.md` 第 9.7 节 | 已完成（第三轮） |

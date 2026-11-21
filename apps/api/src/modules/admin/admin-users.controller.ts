@@ -10,6 +10,7 @@ import { AdminUser, AdminUserRole, Role } from '../../database/entities/admin.en
 import { AdminActionLog } from '../../database/entities/admin.entity';
 import { User } from '../../database/entities/user.entity';
 import { RequestContextService } from '../../common/services/request-context.service';
+import { InvalidationBusService } from '../../common/services/invalidation-bus.service';
 import { isDuplicateKeyError } from '../../common/utils/duplicate-key';
 import { ContentService } from '../content/content.service';
 import {
@@ -32,6 +33,7 @@ export class AdminUsersController {
     private readonly contentService: ContentService,
     private readonly authService: AuthService,
     private readonly requestContext: RequestContextService,
+    private readonly invalidationBus: InvalidationBusService,
   ) {}
 
   @Post('users')
@@ -134,6 +136,13 @@ export class AdminUsersController {
     //    口径见 docs/SECURITY.md 第 2.1 节。
     if (body.status !== undefined || body.roles !== undefined) {
       this.authService.invalidateAdminCache(id);
+      // ⚠️ **跨实例**失效（第五轮）：把「这个管理员的缓存该作废」广播到共享失效总线，
+      //    其它实例收到后立刻清掉本地条目 → 多实例部署时撤权延迟也是 **0**。
+      //    - **在事务提交之后**发布：事务回滚了却把事件发出去，会让别的实例白丢缓存；
+      //    - **只传失效事件，不传权限内容**（见 2.1.5 节）；
+      //    - **Redis 不可用时 publish 不会抛错**：写操作照常成功，
+      //      撤权延迟回落到 TTL 上界（≤60 秒），不是永久放行。
+      await this.invalidationBus.publish({ kind: 'admin', adminId: id });
     }
 
     return {

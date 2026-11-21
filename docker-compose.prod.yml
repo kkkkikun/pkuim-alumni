@@ -236,6 +236,13 @@ services:
       # 服务端硬上限 60 秒 / 300 秒（写大了会被夹回上限），0 = 关闭对应缓存。
       RBAC_CACHE_TTL_SECONDS: ${RBAC_CACHE_TTL_SECONDS:-30}
       DICT_CACHE_TTL_SECONDS: ${DICT_CACHE_TTL_SECONDS:-60}
+      # 共享失效总线（docs/SECURITY.md 第 2.1.4 / 2.1.5 节）：
+      # 多实例部署时「停用 / 降权」靠它在其它实例上立刻生效；
+      # 总线不可用时写操作照常成功，撤权延迟回落到 TTL 上界（≤60 秒）。
+      # ⚠️ 生效频道按环境隔离（生产 → nmg:prod:rbac:invalidate），
+      #    这里写的是基准名；多实例必须连同一个 Redis（REDIS_HOST 已是共享的 redis 服务）。
+      RBAC_INVALIDATION_ENABLED: ${RBAC_INVALIDATION_ENABLED:-true}
+      RBAC_INVALIDATION_CHANNEL: ${RBAC_INVALIDATION_CHANNEL:-nmg:rbac:invalidate}
       DATABASE_URL: mysql://${MYSQL_USER:-nmg}:${MYSQL_PASSWORD:-CHANGE_ME_app}@mysql:3306/${MYSQL_DATABASE:-nmg_alumni}
       DB_HOST: mysql
       DB_PORT: "3306"
