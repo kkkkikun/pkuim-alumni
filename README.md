@@ -439,6 +439,17 @@ node infra/scripts/miniprogram-compile-check.mjs apps/miniprogram
    （**只读** `information_schema`：静态对账只能证明「迁移里写了创建那道索引」，
    证明不了「**这个库里真的有**」），
    它也带自己的反向验证（`check-unique-index-db-selftest.sh`），两者**均已接入 CI**。
+   **第十四轮起**：同一层再补一支 `infra/scripts/check-migration-schema-db.mjs`
+   （**只读**），把「实体 ↔ 迁移」三层对账（全部索引 / 外键 / 全部列的类型、长度、
+   可空性）的**库内实况**也核一遍 —— 静态对账证明「迁移里**写了**创建那道索引」，
+   这一层证明「**这个库里真的有**」；实测 32 张表 / 40 条实体索引 / 46 条实体外键 /
+   271 列逐条对齐。它也带自己的反向验证（`check-migration-schema-db-selftest.sh`，
+   5 类缺陷注入），**已接入 CI**。
+   同轮还补上了**管理端 404 分界的运行时用例**
+   （`apps/api/test/integration/admin-not-found-boundary.e2e-spec.ts`）：
+   登记在册的 20 个管理端端点**逐条**用不存在的 id 真去请求，断言真实响应是
+   **404 `NOT_FOUND`**（静态对账只能证明「源码里写了抛 404」），
+   并与 `check-read-visibility.mjs` 的登记表**逐条对齐**。
 10. **多实例的「撤权立刻生效」可以自己演练**：`infra/scripts/invalidation-bus-drill.mjs`
     起**两个 API 进程 + 一个 Redis**（外加一个总线整条关闭的**对照实例**），
     验证「实例 A 撤权 → 实例 B 的缓存立刻失效」在**跨进程**下真的成立

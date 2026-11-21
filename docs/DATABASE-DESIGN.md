@@ -321,3 +321,34 @@ note VARCHAR(500), created_at, updated_at`
 
 ⚠️ 新增唯一键的顺序：**先写迁移 → 再改实体 → 再登记失败语义**，
 三者缺一即报错（`check-error-semantics.mjs` 会当场点名）。
+
+### 12.2 三层对账的**库内实况**（第十四轮新增）
+
+12.1 那张表核的是「**实体 ↔ 迁移**」（静态）。
+它证明得了「迁移里**写了**创建那道索引 / 外键 / 列」，
+证明不了「**这个库里真的有**」——
+迁移没被应用过、库是从旧备份恢复的、有人手工 `DROP` 过，静态脚本**一律看不见**。
+
+第十四轮把这一层也补上了（**只读**，全程只查 `information_schema`）：
+
+| 层次 | 谁来核 | 怎么核 |
+|---|---|---|
+| 实体 ↔ **库（实况）** | `node infra/scripts/check-migration-schema-db.mjs` | 只读 `information_schema` 的 `columns` / `statistics` / `key_column_usage`：实体声明的**每一条**索引 / 外键 / 列，在库里必须**真的存在**且**逐条一致**（列集合、唯一性、指向、类型、长度、可空性）；**反向**也查：库里多出来的索引 / 外键 / 列同样报 |
+
+判定码：`DB_TABLE_MISSING` / `DB_INDEX_MISSING` / `DB_INDEX_COLUMN_MISMATCH` /
+`DB_INDEX_UNIQUENESS_MISMATCH` / `DB_INDEX_NOT_DECLARED` /
+`DB_FOREIGN_KEY_MISSING` / `DB_FOREIGN_KEY_TARGET_MISMATCH` /
+`DB_FOREIGN_KEY_NOT_DECLARED` / `DB_COLUMN_MISSING` / `DB_COLUMN_DEF_MISMATCH` /
+`DB_COLUMN_NOT_DECLARED`。
+
+实测（MySQL 8.4，`nmg_alumni_test`）：**32 张表 / 40 条实体索引 / 46 条实体外键 /
+271 列逐条对齐，0 处出入**。反向验证 5 例（`check-migration-schema-db-selftest.sh`）
+全部被抓出、退出码非 0，基线退出码 0；已接进 CI。
+
+⚠️ **口径与 12.1 一致**（枚举取值、精度、`unsigned`、默认值、`ON DELETE` 不判），
+另加两条**等价形态**（不算不一致）：
+
+- **主键等价**：唯一索引的列就是主键时，主键天然唯一（不必再建同列的唯一索引）。
+- **MySQL 自动建的外键支撑索引**：MySQL 会为没有可用索引的外键自动建一条同名索引
+  （例如 `fk_alumni_profiles_verified_by`）—— 那不是索引契约的一部分。
+  实体里 `unique: true` 的列由一条唯一索引兜着，同样不算「实体没声明」。

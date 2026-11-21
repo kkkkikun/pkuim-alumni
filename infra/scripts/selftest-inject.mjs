@@ -57,6 +57,11 @@
  *   error-semantics-entity-foreign-key-missing         → 实体 ↔ 迁移：实体声明了、迁移里没有的外键
  *   error-semantics-foreign-key-target-mismatch        → 实体 ↔ 迁移：外键的**指向**不一致
  *   unique-index-db-registry-injected → 库内对账：登记表要求、但**库里其实没有**的唯一键
+ *   migration-schema-db-entity-index-injected  → 库内实况：实体声明了、但**库里其实没有**的索引
+ *   migration-schema-db-index-columns-injected  → 库内实况：索引的**列**与库里对不上
+ *   migration-schema-db-column-length-injected  → 库内实况：同一列的**长度**不一致
+ *   migration-schema-db-column-nullable-injected → 库内实况：同一列的**可空性**不一致
+ *   migration-schema-db-foreign-key-injected     → 库内实况：实体声明了、但**库里其实没有**的外键
  *   read-visibility-filter-removed    → 读端点可见性：**可见性过滤被删掉**（未发布内容凭 id 就能读到）
  *   read-visibility-status-changed    → 读端点可见性：「不可见 → 404」被改成 403（泄露存在性）
  *   read-visibility-endpoint-unregistered → 读端点可见性：新增公开读端点却**没登记口径**
@@ -793,6 +798,80 @@ export class InjectedSafeUpsertService {
         + "    disposition: 'SEEDED',\n"
         + "    note: '自测注入：库里并没有这道唯一约束',\n"
         + "  },\n",
+    );
+  },
+
+  /*
+   * 库内实况对账（第十四轮）：在实体里声明一个**库里并不存在**的索引 ——
+   * 模拟「迁移没建 / 迁移没应用 / 索引被人手工删了」这三类情形：
+   * 静态对账（实体 ↔ 迁移）看不出来，只有对着**真实库**查才看得见。
+   * 期望：DB_INDEX_MISSING 点名 idx_alumni_profiles_injected_db。
+   */
+  'migration-schema-db-entity-index-injected'() {
+    const file = path.join(copyRoot, 'apps/api/src/database/entities/alumni.entity.ts');
+    replaceOnce(
+      file,
+      /@Index\('idx_alumni_profiles_graduation_year', \['graduationYear'\]\)\n/,
+      "@Index('idx_alumni_profiles_graduation_year', ['graduationYear'])\n"
+        + "// 自测注入：实体声明了一个库里并不存在的索引\n"
+        + "@Index('idx_alumni_profiles_injected_db', ['college'])\n",
+    );
+  },
+
+  /*
+   * 库内实况对账（第十四轮）：把实体里一条索引的**列**改掉 ——
+   * 库里那条索引还在（旧列），实体说的是新列：两边说的不是一回事。
+   * 期望：DB_INDEX_COLUMN_MISMATCH 点名 idx_alumni_profiles_region。
+   */
+  'migration-schema-db-index-columns-injected'() {
+    const file = path.join(copyRoot, 'apps/api/src/database/entities/alumni.entity.ts');
+    replaceOnce(
+      file,
+      /@Index\('idx_alumni_profiles_region', \['regionCode'\]\)/,
+      "@Index('idx_alumni_profiles_region', ['regionCode', 'college'])",
+    );
+  },
+
+  /*
+   * 库内实况对账（第十四轮）：把实体里一列的**长度**改短 ——
+   * 库里仍是 VARCHAR(64)，实体却说 32：按实体写进库的值会被**静默截断**。
+   * 期望：DB_COLUMN_DEF_MISMATCH 点名 alumni_profiles.display_name。
+   */
+  'migration-schema-db-column-length-injected'() {
+    const file = path.join(copyRoot, 'apps/api/src/database/entities/alumni.entity.ts');
+    replaceOnce(
+      file,
+      /@Column\(\{ name: 'display_name', type: 'varchar', length: 64, nullable: false \}\)/,
+      "@Column({ name: 'display_name', type: 'varchar', length: 32, nullable: false })",
+    );
+  },
+
+  /*
+   * 库内实况对账（第十四轮）：把实体里一列的**可空性**改掉 ——
+   * 库里那一列可空，实体却说是 NOT NULL：写进 NULL 时实体与库的理解不一致。
+   * 期望：DB_COLUMN_DEF_MISMATCH 点名 alumni_profiles.real_name。
+   */
+  'migration-schema-db-column-nullable-injected'() {
+    const file = path.join(copyRoot, 'apps/api/src/database/entities/alumni.entity.ts');
+    replaceOnce(
+      file,
+      /@Column\(\{ name: 'real_name', type: 'varchar', length: 64, nullable: true \}\)/,
+      "@Column({ name: 'real_name', type: 'varchar', length: 64, nullable: false })",
+    );
+  },
+
+  /*
+   * 库内实况对账（第十四轮）：把实体里一条**关系**的 `@JoinColumn` 改掉 ——
+   * 库里那条外键还在（旧列），实体说的是新列：引用完整性不再被数据库保证。
+   * 期望：DB_FOREIGN_KEY_MISSING 点名 alumni_profiles.region_code_injected。
+   */
+  'migration-schema-db-foreign-key-injected'() {
+    const file = path.join(copyRoot, 'apps/api/src/database/entities/alumni.entity.ts');
+    replaceOnce(
+      file,
+      /@ManyToOne\(\(\) => Region, \{ onDelete: 'SET NULL', nullable: true \}\)\n  @JoinColumn\(\{ name: 'region_code' \}\)/,
+      "@ManyToOne(() => Region, { onDelete: 'SET NULL', nullable: true })\n"
+        + "  @JoinColumn({ name: 'region_code_injected' })",
     );
   },
 
