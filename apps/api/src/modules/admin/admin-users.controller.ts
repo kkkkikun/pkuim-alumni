@@ -252,14 +252,21 @@ export class AdminUsersController {
     @CurrentUser() actor: RequestUser,
     @Body() body: CreateCategoryBodyDto,
   ) {
-    return this.dataSource.transaction(async (manager) => {
-      const result = await this.contentService.createCategory(body, manager);
-      await this.log(manager, actor, 'category.create', 'article_category', result.id, {
+    const result = await this.dataSource.transaction(async (manager) => {
+      const created = await this.contentService.createCategory(body, manager);
+      await this.log(manager, actor, 'category.create', 'article_category', created.id, {
         name: body.name,
         slug: body.slug,
       });
-      return result;
+      return created;
     });
+    // ⚠️ **跨实例**失效（第六轮）：事务**提交之后**才发布字典类失效事件 ——
+    //    事务回滚了却把事件发出去，会让别的实例白丢缓存；
+    //    事件**只说「分类字典该作废」**，不传分类名（口径见 2.1.6 节）；
+    //    Redis 不可用时 publish 不抛错：写操作照常成功，
+    //    陈旧延迟回落到 TTL 上界（≤300 秒），不是永久陈旧。
+    await this.invalidationBus.publish({ kind: 'dict', dict: 'categories' });
+    return result;
   }
 
   /** 修改资讯分类（**管理端**，同事务写审计）。 */
@@ -270,15 +277,17 @@ export class AdminUsersController {
     @Param('id', ParseIntPipe) id: number,
     @Body() body: UpdateCategoryBodyDto,
   ) {
-    return this.dataSource.transaction(async (manager) => {
-      const result = await this.contentService.updateCategory(id, body, manager);
+    const result = await this.dataSource.transaction(async (manager) => {
+      const updated = await this.contentService.updateCategory(id, body, manager);
       await this.log(manager, actor, 'category.update', 'article_category', id, {
         name: body.name,
         slug: body.slug,
         sortOrder: body.sortOrder,
       });
-      return result;
+      return updated;
     });
+    await this.invalidationBus.publish({ kind: 'dict', dict: 'categories' });
+    return result;
   }
 
   /** 删除资讯分类（**管理端**，同事务写审计）。 */
@@ -288,11 +297,13 @@ export class AdminUsersController {
     @CurrentUser() actor: RequestUser,
     @Param('id', ParseIntPipe) id: number,
   ) {
-    return this.dataSource.transaction(async (manager) => {
-      const result = await this.contentService.deleteCategory(id, manager);
+    const result = await this.dataSource.transaction(async (manager) => {
+      const deleted = await this.contentService.deleteCategory(id, manager);
       await this.log(manager, actor, 'category.delete', 'article_category', id, {});
-      return result;
+      return deleted;
     });
+    await this.invalidationBus.publish({ kind: 'dict', dict: 'categories' });
+    return result;
   }
 
   /** 写入系统设置（**管理端**，同事务写审计）。 */
@@ -307,18 +318,25 @@ export class AdminUsersController {
     //    重来一次时是**新的快照**，能看到另一个事务刚提交的那一行 → 走「更新」分支。
     //    ⚠️ 重试必须发生在**事务之外**：事务内的一致性读只看到事务开始时的快照，
     //    在同一个事务里补救会看不见刚提交的行（详见 `ContentService.upsertSetting`）。
-    return this.withDuplicateKeyRetry(() =>
+    const result = await this.withDuplicateKeyRetry(() =>
       this.dataSource.transaction(async (manager) => {
-        const result = await this.contentService.upsertSetting(body, manager);
+        const saved = await this.contentService.upsertSetting(body, manager);
         await this.log(manager, actor, 'setting.update', 'system_setting', 0, {
           key: body.key,
           // ⚠️ 不记 value：系统设置里可能放敏感配置（回调地址、密钥引用等），
           // 审计日志是要长期留痕的表，不该成为泄密面。
           description: body.description ?? null,
         });
-        return result;
+        return saved;
       }),
     );
+    // ⚠️ **跨实例**失效（第六轮）：事务提交之后才发布字典类失效事件 ——
+    //    事件**只说「设置字典该作废」**，不传设置项的 key / value
+    //    （设置里可能有敏感配置，口径见 docs/SECURITY.md 第 2.1.6 节）。
+    //    Redis 不可用时 publish 不抛错：写操作照常成功，
+    //    陈旧延迟回落到 TTL 上界（≤300 秒），不是永久陈旧。
+    await this.invalidationBus.publish({ kind: 'dict', dict: 'settings' });
+    return result;
   }
 
   /**

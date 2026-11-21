@@ -3308,9 +3308,59 @@
     且 TTL 窗口过后由 200 变 403（**不是永久放行**）；
     另有一条用例直接监听频道，断言总线上流动的消息**只有**
     `{"kind":"admin","adminId":N}`，**不含任何权限内容**。
-- **仍未做的（有意为之）**：字典 / 分类 / 系统设置的**跨实例**失效**没有**上总线 ——
-  它们的跨实例陈旧上界仍是各自的 TTL（≤300 秒），属数据新鲜度问题而非安全语义，
-  已记入下方待办表。
+- **仍未做的（有意为之）**：~~字典 / 分类 / 系统设置的**跨实例**失效没有上总线~~ ——
+  **第六轮已补上**（见下方 #188）：它们的跨实例陈旧上界从「各自的 TTL」变成
+  「总线可用 = 0 / 总线不可用 = ≤ TTL」，走的是**同一条总线、同一套降级路径**。
+
+### 188. 字典 / 分类 / 系统设置的**跨实例**失效此前**没有**上总线（第六轮补上）
+
+- **现象**：第五轮的总线**只承载 RBAC 失效事件**（`kind` 只有 `admin` / `rbac-all`）。
+  分类 / 字典 / 系统设置在**其它实例**上仍要等各自的 TTL（默认 ≤60 秒、硬上限 ≤300 秒）才变 ——
+  管理员在 A 实例改完分类，B 实例上的公开页面**半分钟内还是旧的**。
+- **为什么值得修**：这不是安全语义（越权与否与字典无关），但它是一个
+  **「改完不生效」的观感缺陷**，而且**没有明确上界**就容易被当成故障。
+  仓库里已有的基础设施（Redis pub/sub）正好能复用，**不引入新东西**。
+- **处置（第六轮）**：
+  - **口径先写进文档**（`docs/SECURITY.md` 第 2.1.6 节）：
+    字典 / 分类 / 设置的跨实例陈旧上界 = 单实例 **0**；多实例 + 总线可用 **0**；
+    多实例 + 总线不可用 **≤ TTL**（默认 ≤60 秒、硬上限 ≤300 秒）；
+  - **复用**第五轮的总线（`apps/api/src/common/services/invalidation-bus.service.ts`），
+    只**多一种 `kind`**：`{"kind":"dict","dict":"categories" | "settings" | "all"}` ——
+    **不新起总线、不新起频道、不引入新基础设施**；
+  - 发布端：分类增删改（`POST/PATCH/DELETE /admin/articles/categories`）与
+    系统设置写入（`PUT /admin/settings`）在**事务提交之后**发布；
+    订阅端清掉本地对应的 `dict:*` 条目（分类变更只清 `dict:categories`，
+    设置写入只清 `dict:settings`；地区 / 行业字典没有写端点，不在事件取值里）；
+  - **降级路径与第五轮完全一致**：Redis 不可用时写操作**照常成功**（不抛错、不回滚），
+    陈旧延迟回落到 **TTL 上界**，**不是永久陈旧**；
+  - **总线仍然只传失效事件、不传内容**：字典类事件里**没有分类名、没有设置项的
+    key / value**（设置里可能有敏感配置 —— 审计表都不记 value，总线更不能记）；
+  - 用例：`apps/api/test/integration/dict-invalidation-bus.e2e-spec.ts`（6 例，本轮实测全绿）。
+- **仍然要靠人工**：多实例部署时所有 API 实例必须连**同一个 Redis**
+  （否则总线不生效，陈旧回落到 TTL 上界）；频道名同环境各实例要一致。
+
+### 189. 通知深分页的**真正解法**是游标分页（keyset pagination）—— 但它会**改对外契约**
+
+- **现象**：`docs/TEST-REPORT.md` 第 12.5 节用 `EXPLAIN ANALYZE` 实测过：
+  深分页的耗时**由 `OFFSET` 决定**（`OFFSET 1980` → **54 ms**；`OFFSET 0` → **0.03 ms**），
+  而 `(user_id, id)` 索引在优化器眼里**没有任何收益**（加与不加，计划与耗时都相同：
+  54.8 / 53.9 / 53.5 ms，差异在噪声内；`FORCE INDEX` 反而更慢：2.87 ms vs 自选 1.32 ms）。
+- **结论**：**加索引解决不了深分页**，只有换成 keyset pagination
+  （`WHERE (user_id, id) < (:cursorId) ORDER BY id DESC LIMIT 20`）才能让第 N 页与第 1 页一样快。
+- **为什么本轮不改**：keyset pagination 会**改对外契约** ——
+  `page` / `pageSize` 语义要变成「游标 + 是否还有下一页」，
+  两端客户端（管理后台、小程序）与 `packages/contracts` 都要跟着改，
+  属于**契约变更轮**（第三轮那类），不在本轮授权范围内。
+- **本轮只写决策记录**（不改契约、不改行为）：
+  - 目标：把 `GET /me/notifications` / `GET /notifications` 这类**深翻页**列表端点
+    改为「游标 + `hasMore`」，保留 `page` / `pageSize` 一段过渡期
+    （旧参数还能用，但深页会提示改用游标）；
+  - 兼容面：契约（`packages/contracts`）、管理后台列表、小程序「通知」页；
+  - 风险：`OFFSET` 跳页能力会消失（「跳到第 50 页」要靠游标连翻），
+    若产品要保留跳页，就只能保留 `OFFSET` 路径并接受它的耗时；
+  - 验收口径：同一数据集下，第 50 页的耗时应与第 1 页**同量级**。
+- **需要谁拍板**：**产品 / 客户**（对外契约变更 + 跳页能力的取舍），
+  仓库侧在收到确认前维持现状（数字见 `docs/TEST-REPORT.md` 第 12.5 节）。
 
 ## 待验证 / 未完成（不得声称已通过）> 以下均为**缺少外部资质或环境**导致的未验证项，与实现质量无关。
 > 已实测完成的项（冒烟 10/10、集成测试 39/39、k6 分级压测、备份恢复演练、管理后台构建）见 `docs/TEST-REPORT.md`。
@@ -3339,9 +3389,9 @@
 | 连接列表未按对方的字段可见开关裁剪 | `/me/connections` 无条件返回对方的学院 / 地区 / 行业；而 `showCollege` 等开关在小程序里的说明是「**在通讯录中**显示你的毕业院系」—— 开关的语义只覆盖通讯录 | ⚠️ **需产品确认**「解除连接 / 连接列表」是否也应受开关约束；第三轮**未改**（改了就是改业务语义）。已按本轮约定「只记录、不擅改」处理 |
 | nginx 静态资源安全头的端到端验证 | #178 已在 `infra/nginx/admin-web.conf` 补齐 `location /assets/` 的安全头。**本轮（复核轮）已做「配置侧」端到端验证**：用仓库里的这份 conf + 本轮（复核轮）的构建产物在真实 `nginx:alpine` 里起服务，`curl -I /assets/index-*.js` → **9 个安全响应头全部到位**（`X-Content-Type-Options` / `X-Frame-Options` / `Referrer-Policy` / `Permissions-Policy` / `X-Permitted-Cross-Domain-Policies` / `Cross-Origin-Opener-Policy` / `Content-Security-Policy` / `X-XSS-Protection` / `Strict-Transport-Security`）+ `Cache-Control`。**但演示环境现场仍看不到这组头** —— 那边跑的是 4 天前的旧镜像（**部署未更新**，不是配置缺失） | ⚠️ **仍需人工**：部署到服务器后 `curl -I http://127.0.0.1:18082/assets/xxx.js` 再核对一次现场。证据见 `docs/TEST-REPORT.md` 第 11.7 节 |
 | ~~管理端「分类 CRUD / 系统设置写入」没有审计记录~~ | ✅ **第三轮已解决**：`ContentService` 的这 4 个方法（`createCategory` / `updateCategory` / `deleteCategory` / `upsertSetting`）现在支持传入事务 `EntityManager`，控制器（`admin-users.controller.ts`）用 `dataSource.transaction` 把「业务写 + 审计写入」放进**同一事务**（沿用缺陷 #134 的做法：审计写失败时业务写一起回滚）。审计动作名：`category.create` / `category.update` / `category.delete` / `setting.update`；`setting.update` **不记 `value`**（设置里可能放敏感配置，审计表不该成为泄密面，只记 `key` 与 `description`） | 已完成（第三轮） |
-| 通知深分页索引收益 | `(user_id, id)` 索引已建，但优化器在本次数据集上未自动改选；真实收益取决于数据分布 | ✅ **第五轮已用 `EXPLAIN ANALYZE` 复测**（测试库造 20 万 + 10 万条通知、两次 `ANALYZE TABLE`）：**加索引 / 删索引 / 加回索引，计划与耗时都相同**（54.8 / 53.9 / 53.5 ms，差异在噪声内），且 `FORCE INDEX (user_id, id)` 反而**更慢**（2.87 ms vs 优化器自选 1.32 ms）→ **按「没有实测数字的索引不写进生产库」的既定口径，本轮不加索引、不走 TypeORM migration**。**真正的解法是游标分页（keyset pagination）** —— 深分页耗时由 `OFFSET` 决定（OFFSET 1980 → 54 ms；OFFSET 0 → 0.03 ms），但那会**改对外契约**（`page`/`pageSize` 语义），本轮**不改** | ⚠️ **需产品/客户确认**是否接受契约层面的分页改造；在此之前维持现状（数字见 `docs/TEST-REPORT.md` 第 12.5 节） |
+| 通知深分页索引收益 | `(user_id, id)` 索引已建，但优化器在本次数据集上未自动改选；真实收益取决于数据分布 | ✅ **第五轮已用 `EXPLAIN ANALYZE` 复测**（测试库造 20 万 + 10 万条通知、两次 `ANALYZE TABLE`）：**加索引 / 删索引 / 加回索引，计划与耗时都相同**（54.8 / 53.9 / 53.5 ms，差异在噪声内），且 `FORCE INDEX (user_id, id)` 反而**更慢**（2.87 ms vs 优化器自选 1.32 ms）→ **按「没有实测数字的索引不写进生产库」的既定口径，本轮不加索引、不走 TypeORM migration**。**真正的解法是游标分页（keyset pagination）** —— 深分页耗时由 `OFFSET` 决定（OFFSET 1980 → 54 ms；OFFSET 0 → 0.03 ms），但那会**改对外契约**（`page`/`pageSize` 语义），本轮**不改** | ⚠️ **需产品/客户确认**是否接受契约层面的分页改造；**第六轮已把决策记录写进 #189**（目标、兼容面、风险、验收口径），在此之前维持现状（数字见 `docs/TEST-REPORT.md` 第 12.5 节） |
 | 共享失效总线的**部署侧**要求（第五轮新增） | 总线靠 Redis pub/sub 广播「谁的缓存该作废」——**若多实例各连不同的 Redis，总线就不生效**（各自只订阅自己的），撤权延迟回落到 TTL 上界（≤60 秒）。频道名按环境隔离（`nmg:prod:` / `nmg:dev:` / `nmg:test:`），同一环境各实例必须一致 | ⚠️ **需人工在部署时确认**：所有 API 实例连**同一个** Redis（`docker-compose.prod.yml` 里已是共享的 `redis` 服务）；频道名用默认值即可（`RBAC_INVALIDATION_CHANNEL=nmg:rbac:invalidate`，服务端按 `NODE_ENV` 插入环境段） |
-| 字典 / 分类 / 系统设置的**跨实例**失效没有上总线 | 第五轮的总线**只承载 RBAC 失效事件**（频道名 `nmg:rbac:invalidate`）—— 分类 / 字典 / 系统设置在**其它实例**上仍要等各自的 TTL（≤300 秒）才变。这不是安全语义（不影响权限），是数据新鲜度问题 | ⚠️ **后续轮可做**：把失效事件按 `kind` 扩展到字典类（同一个总线、同一套降级路径），并补跨实例用例；本轮**有意不做**（口径写在 `docs/SECURITY.md` 第 2.1.5 节末） |
+| ~~字典 / 分类 / 系统设置的**跨实例**失效没有上总线~~ | ✅ **第六轮已解决**：失效事件按 `kind` 扩展到字典类（`{"kind":"dict","dict":"categories"｜"settings"}`），**复用第五轮的同一条总线、同一个频道、同一套降级路径**（不新起总线、不引入新基础设施）。分类增删改与 `PUT /admin/settings` 在**事务提交后**发布，订阅端清掉本地对应的 `dict:*` 条目。跨实例陈旧上界从「各自的 TTL」变成「总线可用 = **0**；总线不可用 = **≤ TTL**（默认 ≤60 秒、硬上限 ≤300 秒）」。总线**仍然只传失效事件、不传字典内容**（没有分类名、没有设置项的 key / value）。口径见 `docs/SECURITY.md` 第 2.1.6 节，用例见 `apps/api/test/integration/dict-invalidation-bus.e2e-spec.ts` | 已完成（第六轮） |
 | 第三轮新增端点 / 契约变更的**部署顺序** | 第三轮改了对外响应结构（`GET /admin/events/:id/registrations`、`GET /alumni/verification/mine`、`GET /admin/roles|permissions|settings` 改为 `{items, meta}`；新增 `GET /me/summary`；公开列表的 `body` 变为摘要）。**服务端与两端客户端必须一起发布** —— 只升级服务端会让旧客户端取 `.items` 得到 `undefined`，只升级客户端会让新客户端解析旧响应失败 | ⚠️ **需人工安排发布顺序**：建议「先发服务端（响应结构变更）+ 紧接着发两端客户端」的**同一次发布窗口**完成，不要跨版本长时间并存。**第四轮已产出逐端点的核对清单与两个方向的破坏形态：`docs/RELEASE-ORDER.md`**（含发布前 9 项勾选清单、发布后验证命令、回滚说明；其中 `GET /alumni/verification/mine` **两个方向都坏**，唯一可行顺序是「服务端先」，切换后到小程序新版铺开前该状态会一直错，需人工告知）。迁移说明见 `docs/API-SPEC.md` 的「第三轮的契约变更」小节。**本轮（复核轮）实测确认**：演示环境（`127.0.0.1:18080`，对外 `http://8.160.116.34:18080`）的 API **仍是第三轮之前的构建** —— `GET /me/summary` 返回 **404**、`GET /articles` 仍返回**全文 body**、管理后台静态资源缺 CSP / HSTS（跑的是 4 天前的旧镜像）。这与本行的约束**一致**（小程序新版本未过审前不能先切服务端），属**预期状态**而非漏发布；但也意味着**第三轮的契约变更目前确实尚未上线** |
 | 第三轮的两条索引迁移尚未在**业务库**应用 | `AddQueryIndexesAndProtectAuditLogs1730000005000` 与 `AddRemainingQueryIndexes1730000006000` 在本机测试库已应用，但**线上业务库 `nmg_alumni` 尚未应用**（`infra/scripts/check-pending-migrations.sh` 的 R2 检查会报出来） | ⚠️ **需人工在部署窗口执行** `pnpm --filter @nmg/api db:migrate`（或走既有的迁移发布流程）。**第四轮已核对**（见 `docs/TEST-REPORT.md` 第 10.3 节）：两条迁移都已登记进 `migrations/index.ts` 且**排在最后**；`check-pending-migrations.sh` 的 **R1**（清单 ↔ 文件，不连库）已通过；**R2**（清单 ↔ 库）在本机两个库上都如实报出这两条**未应用** —— 与「线上待应用」一致。CI 跑的是 `--static-only`（CI 用的是普通 MySQL **service**、不是 compose 栈，R2 在 CI 里连不上库），**线上库的实际应用仍属人工动作** |
 | ~~管理后台真实浏览器冒烟未在本机跑通~~ | ✅ **第三轮已跑通**：本机补装了 Playwright（**不写进仓库**，不引入新依赖），用已有的 Chromium 跑了 `infra/scripts/admin-ui-smoke.mjs`：**13 个路由全绿，0 条 console error，0 个未捕获异常，0 个失败请求**；定点截图见 `docs/screenshots/opt-003/` 与 `docs/TEST-REPORT.md` 第 9.7 节 | 已完成（第三轮） |
