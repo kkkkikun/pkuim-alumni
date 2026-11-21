@@ -56,6 +56,9 @@
  *   error-semantics-column-length-mismatch             → 实体 ↔ 迁移：同一列的**长度**不一致
  *   error-semantics-entity-foreign-key-missing         → 实体 ↔ 迁移：实体声明了、迁移里没有的外键
  *   error-semantics-foreign-key-target-mismatch        → 实体 ↔ 迁移：外键的**指向**不一致
+ *   error-semantics-column-default-mismatch              → 实体 ↔ 迁移：同一列的**默认值**不一致
+ *   error-semantics-column-unsigned-mismatch             → 实体 ↔ 迁移：同一列的**无符号性**不一致
+ *   error-semantics-column-enum-mismatch                → 实体 ↔ 迁移：同一列的**枚举取值**不一致
  *   unique-index-db-registry-injected → 库内对账：登记表要求、但**库里其实没有**的唯一键
  *   migration-schema-db-entity-index-injected  → 库内实况：实体声明了、但**库里其实没有**的索引
  *   migration-schema-db-index-columns-injected  → 库内实况：索引的**列**与库里对不上
@@ -1137,6 +1140,53 @@ export class InjectedSafeUpsertService {
       file,
       /        name: 'fk_alumni_profiles_user',\n        column: 'user_id',\n        refTable: 'users',/,
       "        name: 'fk_alumni_profiles_user',\n        column: 'user_id',\n        refTable: 'admin_users',",
+    );
+  },
+
+  /*
+   * 错误语义对账（实体 ↔ 迁移，第十六轮新增的三个维度）：把实体里一列的
+   * **默认值**改掉 —— 迁移里那一列仍是 `DEFAULT 0`，实体却说是 7：
+   * 「这一列没传值时填什么」的理解不一致（走实体的写入与走库默认值的写入
+   * 会填不同的值）。
+   * 期望：MIGRATION_COLUMN_DEFAULT_MISMATCH 点名 users.version。
+   */
+  'error-semantics-column-default-mismatch'() {
+    const file = path.join(copyRoot, 'apps/api/src/database/entities/user.entity.ts');
+    replaceOnce(
+      file,
+      /@Column\(\{ name: 'version', type: 'int', default: 0 \}\)/,
+      "@Column({ name: 'version', type: 'int', default: 7 })",
+    );
+  },
+
+  /*
+   * 错误语义对账（实体 ↔ 迁移，第十六轮新增的三个维度）：把实体里一列的
+   * **无符号性**改掉 —— 迁移里那一列是 `BIGINT UNSIGNED`，实体却说有符号：
+   * 有符号性与实体不一致（**外键两侧的有符号性必须一致**，
+   * 不一致时那一列连外键都建不出来）。
+   * 期望：MIGRATION_COLUMN_UNSIGNED_MISMATCH 点名 alumni_profiles.verified_by。
+   */
+  'error-semantics-column-unsigned-mismatch'() {
+    const file = path.join(copyRoot, 'apps/api/src/database/entities/alumni.entity.ts');
+    replaceOnce(
+      file,
+      /@Column\(\{ name: 'verified_by', type: 'bigint', unsigned: true, nullable: true \}\)/,
+      "@Column({ name: 'verified_by', type: 'bigint', unsigned: false, nullable: true })",
+    );
+  },
+
+  /*
+   * 错误语义对账（实体 ↔ 迁移，第十六轮新增的三个维度）：把实体里一个
+   * **枚举列的取值**改掉 —— 迁移里那一列的枚举是 ('active','disabled','locked')，
+   * 实体却多了一个 'archived'：实体的类型检查放过去了，数据库会拒收（1265）。
+   * 期望：MIGRATION_COLUMN_ENUM_MISMATCH 点名 users.status。
+   */
+  'error-semantics-column-enum-mismatch'() {
+    const file = path.join(copyRoot, 'apps/api/src/database/entities/user.entity.ts');
+    replaceOnce(
+      file,
+      /export const USER_STATUSES = \['active', 'disabled', 'locked'\] as const;/,
+      "export const USER_STATUSES = ['active', 'disabled', 'locked', 'archived'] as const;",
     );
   },
 

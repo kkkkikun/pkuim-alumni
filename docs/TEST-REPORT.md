@@ -5786,3 +5786,132 @@ DATABASE_URL=mysql://user:pass@host:3306/nmg_alumni node infra/scripts/check-db-
 - **那 9 处布尔位的 `unsigned` 差异**：只记录、不擅改（改表结构需单独排期）。
 - **专用压测窗口**排期、发布窗口排期、正式密钥轮转、`AUTH_MODE=wechat` 切换、
   域名与 HTTPS、WAF 与备份定时任务、小程序真机复验：延续的人工项。
+
+## 22. 第十六轮（opt-016）：静态层与库内层的**口径对齐**、管理端 403 分界的**运行时**用例、复核第十五轮
+
+本轮是「口径对齐 + 补齐另一半 + 复核」轮：**对外行为一个字没改**。
+
+### 22.1 静态层（实体 ↔ 迁移）的判定维度扩到与**库内实况层**一致
+
+第十五轮起，**库内实况层**（`check-db-reality.mjs`，实体 ↔ 库）已经判
+**默认值 / `unsigned` / 枚举取值**三个维度，
+而**静态层**（`check-error-semantics.mjs` 的 R9，实体 ↔ 迁移）只判
+类型 / 长度 / 可空性 —— **两层口径不一致**：
+静态层报不出「迁移里的默认值与实体不一致」这一类分歧，
+而库内实况层能报出 → 静态层在这一层形同**漏检**。
+
+本轮把静态层扩到**与库内实况层逐条相同的口径**（**只收紧、不放宽**）：
+
+| 维度 | 静态层判定码 | 库内实况层判定码 | 判定条件（两层**逐条相同**） |
+| --- | --- | --- | --- |
+| 默认值 | `MIGRATION_COLUMN_DEFAULT_MISMATCH` | `DB_COLUMN_DEFAULT_MISMATCH` | 只在实体**显式声明** `default:` 时判定；迁移侧是 `CURRENT_TIMESTAMP(3)` 这类**表达式**时**不判**（判不了，不猜） |
+| `unsigned` | `MIGRATION_COLUMN_UNSIGNED_MISMATCH` | `DB_COLUMN_UNSIGNED_MISMATCH` | 只在实体**显式声明** `unsigned:` 时判定；**布尔位**（实体类型是 `tinyint` / `boolean` 的开关列）**不判**（无符号对布尔位没有意义） |
+| 枚举取值 | `MIGRATION_COLUMN_ENUM_MISMATCH` | `DB_COLUMN_ENUM_MISMATCH` | 只在实体**显式声明** `enum:`、且取值**解析得出来**时判定（解析不出来就**不判**，绝不猜） |
+
+**实测（静态层，迁移解析自 `apps/api/src/database/migrations/*`）**：
+
+| 维度 | 静态层判了 | 库内实况层判了 | 不一致 |
+| --- | --- | --- | --- |
+| 默认值 | **47** 列 | **47** 列 | **0** |
+| `unsigned` | **70** 列（另有 **9** 列布尔位按口径不判、只记录） | **70** 列（同） | **0** |
+| 枚举取值 | **21** 列 | **21** 列 | **0** |
+
+→ **两层的判定口径与判定结果逐个相同**：静态层不再报不出库内层已判出的分歧。
+
+⚠️ 顺带修掉一处**解析缺陷**（不是误报，是**报错报错了**）：
+迁移 DDL 里的 `DEFAULT 0`（**数字**形态）此前**解析不出来**
+（`analyzeDdlColumnDef` 的正则只认引号串与标识符），
+于是每一列 `default: 0` 都被判成「迁移里没有默认值」——
+首次实跑报了 **28 处假红**。修好后基线 **0 处不一致**。
+
+### 22.2 反向验证：17 例 → **20 例**
+
+`check-error-semantics-selftest.sh` 新增三类注入
+（`infra/scripts/selftest-inject.mjs` 里的新 case）：
+
+| 注入 | 注入形态 | 期望判定码 | 结果 |
+| --- | --- | --- | --- |
+| `error-semantics-column-default-mismatch` | 实体 `users.version` 的 `default: 0` → `default: 7` | `MIGRATION_COLUMN_DEFAULT_MISMATCH` | ✅ 被抓出，退出码非 0 |
+| `error-semantics-column-unsigned-mismatch` | 实体 `alumni_profiles.verified_by` 的 `unsigned: true` → `false` | `MIGRATION_COLUMN_UNSIGNED_MISMATCH` | ✅ 被抓出，退出码非 0 |
+| `error-semantics-column-enum-mismatch` | 实体 `USER_STATUSES` 多一个 `'archived'` | `MIGRATION_COLUMN_ENUM_MISMATCH` | ✅ 被抓出，退出码非 0 |
+
+基线退出码 **0**（干净副本 0 处不一致）。
+
+### 22.3 管理端 403 分界的**运行时**用例（新增套件，**81 例**）
+
+新增 `apps/api/test/integration/admin-forbidden-boundary.e2e-spec.ts`：
+登记在册的 **40 个**管理端点**逐条**跑两遍 ——
+
+- **权限点不足 → 403 `FORBIDDEN`**：给一个**别的**权限点（他仍然是管理员，
+  只是没有这个端点要的那一个 → 403 的原因只有一个），
+  真去请求 → 断言 **403** 且错误码是 `FORBIDDEN`；
+- **权限点给足 → 2xx**：给该端点**要的**那个权限点 → 断言 **2xx**
+  （`200` / `201` / `204`）且不得带 `FORBIDDEN`。
+
+⚠️ **两半缺一不可**：只验 403 会漏掉「守卫**整体失效**」
+（任何管理员都能调任何端点 —— 静态矩阵仍然是绿的，因为它只说
+「这个端点该要哪个权限点」，并不说「运行时真的按它拒绝了」）；
+只验 2xx 会漏掉「守卫**过度拒绝**」。
+
+对象一律**走真实 API 造出来**（满足业务不变量）：
+活动 / 资讯 / 公告 / 分类用管理端接口建，资源用**发布接口**建（建出来就是 `pending`，
+审核端点要求这个状态），认证申请用**提交接口**建，附件用**登记接口**建并**真的挂上去**。
+
+最后一条用例断言**运行时用例与 `check-rbac-matrix.mjs` 的权限点矩阵逐条一致**
+（少一条 / 多一条 / 权限点对不上，当场红）——
+静态矩阵与运行时用例因此**不可能各说各话**。
+
+### 22.4 修掉一处「恒过」：RBAC 矩阵的规则 6 从未真正跑过
+
+`check-rbac-matrix.mjs` 的规则 6 写着
+「每个 `/admin` 端点都必须有 `@RequirePermissions`（否则任何管理员都能调用）」，
+但它的判定条件是 `endpoint.path.startsWith('/admin')` ——
+而控制器前缀写的是 `admin`（**没有**前导斜杠），拼出来的路径是 `admin/alumni`，
+**永远不以 `/admin` 开头** → 这条规则**一次都没被判过**。
+
+第二处：权限点的解析此前只看路由装饰器**后面**的文字，
+而 `admin-ops.controller.ts` 的写法是 `@RequirePermissions` 在 `@Get` **前面**
+→ 即便规则 6 跑起来，那个端点也会被**误报**成「没有权限点」。
+
+两处都已修正（路径归一成前导斜杠；控制器解析改为**按行扫描**，
+并把路由装饰器**上下**紧邻的装饰器块**一起**看）。
+修正后实测：**40 个**管理端点**全部**声明了权限点，规则 6 通过；
+端点总数 **109** 条（与修正前一致），基线仍为 **0** 处不一致。
+反向验证（`check-rbac-matrix-selftest.sh`）仍绿。
+
+### 22.5 复核第十五轮产出（逐条实跑，全部绿）
+
+| 校验器 / 自测 | 结果 |
+| --- | --- |
+| `bash infra/scripts/check-error-semantics-selftest.sh` | 退出码 **0** —— **20 类**「错误语义失配」缺陷全部被抓出（本轮 17 → 20） |
+| `bash infra/scripts/check-read-visibility-selftest.sh` | 退出码 **0** —— **12 类**「可见性口径失配」缺陷全部被抓出 |
+| `bash infra/scripts/check-migration-schema-db-selftest.sh` | 退出码 **0** —— **8 类**缺陷全部被抓出 |
+| `bash infra/scripts/check-unique-index-db-selftest.sh` | 退出码 **0** —— 「库里没有那道唯一约束」被抓住 |
+| `bash infra/scripts/check-rbac-matrix-selftest.sh` | 退出码 **0** —— 「角色 × 权限矩阵漂移」被抓住 |
+| `node infra/scripts/check-error-semantics.mjs` | 退出码 **0** —— 21 个唯一键 + 32 张表 / 40 条实体索引 / 46 条实体外键 / 271 列逐条对齐；新增三个维度 **47 / 70 / 21** 列、**0** 处不一致 |
+| `node infra/scripts/check-db-reality.mjs`（测试库，只读） | 退出码 **0** —— 32 张表 / 40 条实体索引 / 46 条实体外键 / 271 列 + 21 个登记唯一键逐条对齐；新增三个维度 **47 / 70 / 21** 列 |
+
+### 22.6 回归
+
+| 项 | 结果 |
+| --- | --- |
+| `pnpm --filter @nmg/api typecheck` | 退出码 **0** |
+| `apps/api` 集成测试（新增套件在内） | 退出码 **0** —— **57 套件 / 563 例全绿**（新增套件 1 个 / 81 例；上一轮为 56 套件 / 482 例） |
+
+### 22.7 本轮未做完 / 仍需人工
+
+- **#202**（9 处布尔位的 `unsigned` 差异）：**只记录、不擅改** ——
+  两条路（去掉实体里的 `unsigned: true`，或加一条迁移把列改成 `UNSIGNED`）
+  属**产品 / 运维**决策，后者还要改表结构、需单独排期。
+- **#197 / #198**（公开活动详情的可见性与 `myRegistration`）、**#194 / #195**
+  （认证申请并发提交、连接解除后重建）、**#189**（游标分页）、
+  **`/admin/stats` 的 `connectionTotal` 口径**、**连接列表是否受对方可见开关约束**：
+  延续项，仍需产品 / 客户拍板 —— 本轮**一个字没改对外行为**。
+- **#200**：`GET /admin/events/:id/registrations` 在活动不存在时返回 200 + 空名单 ——
+  仍需**产品**拍板。
+- **上线环境**跑一次 `node infra/scripts/check-db-reality.mjs`（**只读**）、
+  `bash infra/scripts/healthcheck.sh`、`node infra/scripts/invalidation-bus-drill.mjs`：
+  部署侧动作。
+- **线上业务库应用那两条索引迁移**：部署侧人工动作。
+- **专用压测窗口**排期、发布窗口排期、正式密钥轮转、`AUTH_MODE=wechat` 切换、
+  域名与 HTTPS、WAF 与备份定时任务、小程序真机复验：延续的人工项。

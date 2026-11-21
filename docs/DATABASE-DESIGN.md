@@ -307,7 +307,9 @@ note VARCHAR(500), created_at, updated_at`
 | **全部列** | 每一列的类型 / 长度 / 可空性；以及两边各自多出来的列 | `MIGRATION_COLUMN_DEF_MISMATCH` / `MIGRATION_COLUMN_MISSING` / `MIGRATION_COLUMN_NOT_DECLARED` / `MIGRATION_TABLE_MISSING` |
 
 ⚠️ **口径**：只报**能由迁移与实体直接判定**的分歧 ——
-枚举**取值**、精度、`unsigned`、`ON DELETE` 行为、默认值一律**不判**。
+精度、`ON DELETE` 行为一律**不判**；
+**默认值 / `unsigned` / 枚举取值**这三个维度自**第十六轮**起也判了
+（见 12.1.1，与 12.2.1 的库内实况层**同一口径**）。
 ⚠️ **主键等价**仍不算缺陷（唯一索引的列就是主键时，主键天然唯一）。
 实测：32 张表 / 40 条实体索引 / 46 条实体外键 / 271 列**逐条对齐**。
 
@@ -321,6 +323,34 @@ note VARCHAR(500), created_at, updated_at`
 
 ⚠️ 新增唯一键的顺序：**先写迁移 → 再改实体 → 再登记失败语义**，
 三者缺一即报错（`check-error-semantics.mjs` 会当场点名）。
+
+#### 12.1.1 第十六轮：静态层的判定维度扩到与**库内实况层**一致
+
+12.2.1 那三个维度（**默认值** / **`unsigned`** / **枚举取值**）
+自第十五轮起只有**库内实况层**（`check-db-reality.mjs`，实体 ↔ 库）在判，
+**静态层**（`check-error-semantics.mjs`，实体 ↔ 迁移）此前**不判** ——
+两层口径不一致，静态层报不出「迁移里的默认值与实体不一致」这一类分歧。
+第十六轮把静态层也扩到**同一口径**（**只收紧、不放宽**）：
+
+| 维度 | 静态层判定码 | 库内实况层判定码 | 判定条件（两层**逐条相同**） |
+|---|---|---|---|
+| 默认值 | `MIGRATION_COLUMN_DEFAULT_MISMATCH` | `DB_COLUMN_DEFAULT_MISMATCH` | 只在实体**显式声明** `default:` 时判定；迁移 / 库侧是 `CURRENT_TIMESTAMP(3)` 这类**表达式**时**不判**（判不了，不猜） |
+| `unsigned` | `MIGRATION_COLUMN_UNSIGNED_MISMATCH` | `DB_COLUMN_UNSIGNED_MISMATCH` | 只在实体**显式声明** `unsigned:` 时判定；**布尔位**（实体类型是 `tinyint` / `boolean` 的开关列）**不判** —— 无符号对布尔位没有意义（取值只有 0/1） |
+| 枚举取值 | `MIGRATION_COLUMN_ENUM_MISMATCH` | `DB_COLUMN_ENUM_MISMATCH` | 只在实体**显式声明** `enum:`、且取值**解析得出来**时判定（解析不出来就**不判**，绝不猜） |
+
+实测（**静态层**，迁移解析自 `apps/api/src/database/migrations/*`）：
+默认值判了 **47** 列、**`unsigned`** 判了 **70** 列、枚举取值判了 **21** 列，
+**0 处不一致** —— 与库内实况层量到的数字（47 / 70 / 21）**逐个相同**。
+另有 **9** 列布尔位按口径**不判、只记录**（与库内实况层同一批，见
+`docs/KNOWN-ISSUES.md`）。
+
+⚠️ 静态层为此还修掉一处**解析缺陷**：迁移 DDL 里的 `DEFAULT 0`（**数字**形态）
+此前**解析不出来**（只认引号串与标识符），于是每一列 `default: 0`
+都会被误报成「迁移里没有默认值」（**28 处假红**）。修好后基线 **0 处不一致**。
+
+反向验证由 **17 例**扩到 **20 例**（`check-error-semantics-selftest.sh`）：
+新增「默认值不一致」「无符号性不一致」「枚举取值不一致」三类注入，
+全部被抓出、退出码非 0，基线退出码 0。
 
 ### 12.2 三层对账的**库内实况**（第十四轮新增，第十五轮合并 + 扩面）
 

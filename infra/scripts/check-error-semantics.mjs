@@ -62,8 +62,21 @@
  *      ⚠️ `ON DELETE` 行为**不判**（CASCADE / SET NULL / RESTRICT 不在口径里）。
  *   R9 **全部列的定义**：类型 / 长度 / 可空性，逐列与迁移对账；
  *      实体有迁移没有的列、迁移有实体没有的列 → 都报。
- *      ⚠️ 枚举**取值**、精度、`unsigned`、默认值一律**不判**
- *         （那些要么查不到、要么判了会动到业务语义）。
+ *      ⚠️ 精度与 `ON DELETE` 行为**不判**（判了会动到业务语义）。
+ *
+ *   第十六轮把 R9 的**判定维度扩到与库内实况层一致**：
+ *   **默认值** / **`unsigned`** / **枚举取值** 三项此前只有库内实况层
+ *   （`check-db-reality.mjs`）在判，静态层不判 → 两层口径不一致，
+ *   静态层报不出「迁移里的默认值与实体不一致」这一类分歧。
+ *   现在静态层也判，且**判定口径与库内实况层逐条相同**：
+ *     - 默认值：只在实体**显式声明** `default:` 时判定；
+ *       迁移侧是 `CURRENT_TIMESTAMP(3)` 这类**表达式**时**不判**（判不了，不猜）；
+ *     - `unsigned`：只在实体**显式声明** `unsigned:` 时判定，
+ *       且**布尔位**（实体类型是 `tinyint` / `boolean` 的开关列）**不判** ——
+ *       实体显式声明的 79 列里有 **9** 列属于这一类，纳入判定会产生 9 处常驻误报，
+ *       故**只对非布尔位的数值列判**（70 列），那 9 处**只记录不改**；
+ *     - 枚举取值：只在实体**显式声明** `enum:`、且取值**解析得出来**时判定。
+ *   口径**只收紧、不放宽**：既有的判定条件一字未改，只是**多判了三项**。
  *
  * ⚠️ 这一层**必须解析得准**，否则会凭空报出「假缺口」（门禁假红比不做更糟）：
  *    类级 `@Index` 的**类归属**、**属性名 → 列名**映射、关系列的列名来自
@@ -623,13 +636,18 @@ function analyzeDdlColumnDef(def) {
     if (lengthMatch) length = Number(lengthMatch[1]);
   }
   const notNull = /\bNOT\s+NULL\b/i.test(text);
-  // ⚠️ `DEFAULT` 的取值有三种形态，**不能一律当字面量**：
-  //    - 字面量：DEFAULT 0 / DEFAULT 'draft'
+  // ⚠️ `DEFAULT` 的取值有四种形态，**不能一律当字面量**：
+  //    - 字面量（字符串）：DEFAULT 'draft'
+  //    - 字面量（数字）：DEFAULT 0 / DEFAULT -1
   //    - 表达式：DEFAULT CURRENT_TIMESTAMP(3)（`@CreateDateColumn` 就是它）
   //    - 函数：DEFAULT (uuid())
   //    表达式与函数**判不了**（库里的形态与 DDL 原文不一定逐字相同），
   //    所以单独标出来 —— 对账时**跳过**，不报。
-  const defaultMatch = /\bDEFAULT\s+('(?:[^']|'')*'|[A-Za-z_][\w$]*(?:\s*\([^)]*\))?)/i.exec(text);
+  // ⚠️ **数字形态必须一并匹配**：只认引号串或标识符的话，
+  //   `DEFAULT 0` 会被解析成「这一列没有默认值」——
+  //   那样每一列 `default: 0` 都会被误报成「实体与迁移不一致」（那是假红）。
+  const defaultMatch =
+    /\bDEFAULT\s+('(?:[^']|'')*'|[A-Za-z_][\w$]*(?:\s*\([^)]*\))?|-?\d+(?:\.\d+)?)/i.exec(text);
   const defaultRaw = defaultMatch ? defaultMatch[1] : null;
   const defaultIsExpression = Boolean(
     defaultRaw && !/^'/.test(defaultRaw) && /[A-Za-z_]/.test(defaultRaw),
@@ -1065,6 +1083,20 @@ function normalizeDefaultValue(raw) {
   // 表达式（函数 / 箭头函数 / 括号）：**不判定**
   if (/[()=>]/.test(text)) return null;
   return text.replace(/^['"]|['"]$/g, '');
+}
+
+/**
+ * 把两个值归一成「可比较」的形态：数字按数字比，其余按字符串比。
+ *
+ * ⚠️ 为什么需要：实体里写的是 `default: 0`（数字），
+ *   迁移 DDL 里写的是 `DEFAULT 0`（也是数字），
+ *   但从 SQL 文本里抠出来的两边的形态未必逐字相同
+ *   （`'0'` 与 `0`）—— 不归一就会把 `0` 与 `'0'` 判成不一致（那是假红）。
+ */
+function normalizeComparable(value) {
+  const text = String(value).trim();
+  if (/^-?\d+(\.\d+)?$/.test(text)) return String(Number(text));
+  return text;
 }
 
 /**
@@ -2427,6 +2459,157 @@ function main() {
     }
   }
 
+  // --- 6.6 默认值 / `unsigned` / 枚举取值（第十六轮新增） --------------------
+  //
+  // 第十五轮起，**库内实况层**（`check-db-reality.mjs`）已经判这三个维度；
+  // 而**静态层**（本脚本的 R9）此前只判类型 / 长度 / 可空性 ——
+  // 两层口径不一致：静态层报不出「迁移里的默认值与实体不一致」，
+  // 而库内实况层能报出 → 静态层在这一层形同**漏检**。
+  // 本节把静态层的判定维度**扩到与库内实况层一致**（只收紧、不放宽）。
+  //
+  // ⚠️ **判定口径与库内实况层逐条相同**（改这里必须同步改那边，否则两层又会分叉）：
+  //   - **默认值**：只在实体**显式声明** `default:` 时判定；
+  //     迁移侧是 `CURRENT_TIMESTAMP(3)` 这类**表达式**时**不判**（判不了，不猜）；
+  //   - **`unsigned`**：只在实体**显式声明** `unsigned:` 时判定，
+  //     且**布尔位**（实体类型是 `tinyint` / `boolean` 的开关列）**不判** ——
+  //     无符号对布尔位没有意义（取值只有 0/1）。
+  //     第十五轮的误报率实测：实体显式声明 `unsigned:` 的 **79** 列里有 **9** 列
+  //     属于这一类（实体写了 `unsigned: true`，迁移与库里是 `tinyint(1)`）——
+  //     纳入判定会产生 9 处常驻误报，故**只对非布尔位的数值列判**
+  //     （70 列），那 9 处**只记录不改**（记进 `docs/KNOWN-ISSUES.md`）；
+  //   - **枚举取值**：只在实体**显式声明** `enum:`、且取值**解析得出来**时判定
+  //     （取值写在 `export const X = [...]` 里，解析不出来就**不判**，绝不猜）。
+  //
+  // ⚠️ 本节**单独遍历**一遍列，不并进 6.5 ——
+  //    6.5 在类型 / 长度不一致时会 `continue`，那会让**后面的列漏判**；
+  //    三个新维度必须对**每一列**都独立判定。
+  const dimensionStats = {
+    default: { checked: 0, skipped: 0, mismatch: 0 },
+    unsigned: { checked: 0, skipped: 0, mismatch: 0, booleanSkipped: 0 },
+    enum: { checked: 0, skipped: 0, mismatch: 0 },
+  };
+
+  for (const table of entitySchema.tables.values()) {
+    const migrationColumns = migrationSchema.tables.get(table.table);
+    if (!migrationColumns) continue; // 表缺失已在 6.5 报过
+    for (const column of table.columns.values()) {
+      const ddlText = migrationColumns.get(column.column);
+      if (!ddlText) continue; // 列缺失已在 6.5 报过
+      const ddl = analyzeDdlColumnDef(ddlText);
+
+      /* --- 6.6.1 默认值 --- */
+      if (column.defaultValue !== null && column.defaultValue !== undefined) {
+        if (ddl.defaultIsExpression) {
+          // 迁移侧是表达式（`CURRENT_TIMESTAMP(3)` 这类）→ 判不了，**不判**。
+          dimensionStats.default.skipped += 1;
+        } else {
+          dimensionStats.default.checked += 1;
+          const entityDefault = String(column.defaultValue);
+          const migrationDefault = ddl.defaultValue;
+          const same =
+            migrationDefault !== null &&
+            normalizeComparable(entityDefault) === normalizeComparable(migrationDefault);
+          if (!same) {
+            dimensionStats.default.mismatch += 1;
+            issues.push({
+              kind: 'MIGRATION_COLUMN_DEFAULT_MISMATCH',
+              where: `${table.table}.${column.column}`,
+              detail:
+                `实体声明 \`${column.column}\` 的默认值是 ${entityDefault}，` +
+                `迁移里却是 ${
+                  migrationDefault === null ? '**没有默认值**' : `\`${migrationDefault}\``
+                } —— 实体与迁移对「这一列没传值时填什么」的理解不一致：` +
+                '走实体的写入会带上默认值，走库默认值的写入（原生 SQL / 报表）会带上另一个',
+            });
+          }
+        }
+      } else {
+        dimensionStats.default.skipped += 1;
+      }
+
+      /* --- 6.6.2 `unsigned` --- */
+      if (column.unsigned !== null && column.unsigned !== undefined) {
+        const entityType = normalizeType(column.type);
+        if (entityType === 'tinyint' || entityType === 'boolean') {
+          // ⚠️ 布尔位（实体类型是 `tinyint` / `boolean` 的开关列）：无符号对它没有意义
+          //   （取值只有 0/1）。按现状纳入判定会产生 9 处常驻误报 —— **只记录不改**。
+          dimensionStats.unsigned.skipped += 1;
+          dimensionStats.unsigned.booleanSkipped += 1;
+          notes.push({
+            kind: 'MIGRATION_COLUMN_UNSIGNED_BOOLEAN_NOT_JUDGED',
+            where: `${table.table}.${column.column}`,
+            detail:
+              `实体把 \`${column.column}\` 声明成 \`unsigned: true\`，但它是**布尔位**` +
+              `（类型 ${column.type}）—— 无符号对布尔位没有意义（取值只有 0/1）：` +
+              '**只记录不判定**（见 `docs/KNOWN-ISSUES.md`）',
+          });
+        } else {
+          dimensionStats.unsigned.checked += 1;
+          const migrationUnsigned = Boolean(ddl.unsigned);
+          if (migrationUnsigned !== column.unsigned) {
+            dimensionStats.unsigned.mismatch += 1;
+            issues.push({
+              kind: 'MIGRATION_COLUMN_UNSIGNED_MISMATCH',
+              where: `${table.table}.${column.column}`,
+              detail:
+                `实体声明 \`${column.column}\` 是${
+                  column.unsigned ? '**无符号**' : '**有符号**'
+                }，迁移里却是${
+                  migrationUnsigned ? '**无符号**' : '**有符号**'
+                } —— 有符号性与实体不一致：` +
+                '**外键两侧的有符号性必须一致**（MySQL 要求外键列与被引用列类型完全相同），' +
+                '不一致时那一列连外键都建不出来',
+            });
+          }
+        }
+      } else {
+        dimensionStats.unsigned.skipped += 1;
+      }
+
+      /* --- 6.6.3 枚举取值 --- */
+      if (column.enumValues !== null && column.enumValues !== undefined) {
+        dimensionStats.enum.checked += 1;
+        const migrationValues = ddl.enumValues;
+        if (!migrationValues) {
+          dimensionStats.enum.mismatch += 1;
+          issues.push({
+            kind: 'MIGRATION_COLUMN_ENUM_MISMATCH',
+            where: `${table.table}.${column.column}`,
+            detail:
+              `实体声明 \`${column.column}\` 是枚举（取值：${column.enumValues.join(',')}），` +
+              `迁移里却是 ${ddl.type ?? '未知类型'} —— 不是枚举列：` +
+              '实体能写进去的取值，库那一列可能直接拒收（严格模式报 1265）',
+          });
+        } else {
+          const entityValues = [...column.enumValues].sort().join('|');
+          const migrationValuesSorted = [...migrationValues].sort().join('|');
+          if (entityValues !== migrationValuesSorted) {
+            dimensionStats.enum.mismatch += 1;
+            const missing = column.enumValues.filter((item) => !migrationValues.includes(item));
+            const extra = migrationValues.filter((item) => !column.enumValues.includes(item));
+            issues.push({
+              kind: 'MIGRATION_COLUMN_ENUM_MISMATCH',
+              where: `${table.table}.${column.column}`,
+              detail:
+                `实体声明 \`${column.column}\` 的枚举取值是（${column.enumValues.join(',')}），` +
+                `迁移里却是（${migrationValues.join(',')}）` +
+                (missing.length
+                  ? ` —— 实体允许但**迁移里不允许**的取值：${missing.join(',')}`
+                  : '') +
+                (extra.length
+                  ? ` —— 迁移里允许但**实体不允许**的取值：${extra.join(',')}`
+                  : '') +
+                ' —— 枚举取值不一致：写入会被数据库拒收（严格模式报 1265），' +
+                '而实体的类型检查放过去了',
+            });
+          }
+        }
+      } else {
+        dimensionStats.enum.skipped += 1;
+      }
+    }
+  }
+
   const report = {
     reviewedUniqueKeys: UNIQUE_KEY_REGISTRY.length,
     discoveredUniqueKeys: discovered.length,
@@ -2444,6 +2627,9 @@ function main() {
       0,
     ),
     migrationForeignKeys: migrationForeignKeys.size,
+    // ⚠️ 三个新维度的判定统计 —— 与库内实况层（`check-db-reality.mjs` 的
+    //    `dimensions`）**同名同义**，两层可以逐条对账。
+    dimensions: dimensionStats,
     issues: issues.length,
     notes: notes.length,
     detail: issues,
@@ -2462,7 +2648,12 @@ function main() {
           `${report.discoveredUniqueKeys} 个唯一键全部登记，` +
           `每个都有可预期的处置与文档口径；` +
           `迁移层也有对应的唯一约束（${report.migrationUniqueConstraints} 条，` +
-          `含自增主键）—— 生产库跑的是迁移，那道防线真实存在\n`,
+          `含自增主键）—— 生产库跑的是迁移，那道防线真实存在；` +
+          `实体 ↔ 迁移的三个维度（与库内实况层同一口径）：` +
+          `默认值判了 ${dimensionStats.default.checked} 列、` +
+          `unsigned 判了 ${dimensionStats.unsigned.checked} 列` +
+          `（另有 ${dimensionStats.unsigned.booleanSkipped} 列布尔位按口径不判、只记录）、` +
+          `枚举取值判了 ${dimensionStats.enum.checked} 列\n`,
       );
     } else {
       for (const issue of issues) {
