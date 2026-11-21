@@ -415,6 +415,14 @@ node infra/scripts/miniprogram-compile-check.mjs apps/miniprogram
    反向验证已脚本化并接入回归链：
    `infra/scripts/check-frontend-selftest.sh`（6 个前端 / 契约校验器，12 类缺陷注入 + 元自检）、
    `infra/scripts/backup-restore-drill-selftest.sh`（恢复演练校验器，2 轮缺陷注入）。
+   **第八轮起，前端 / 契约 / RBAC 那 8 个校验器各自有一份 `-selftest.sh`**
+   （`check-miniprogram` / `check-admin-web` / `check-contract-mirror` / `check-rbac-matrix` /
+   `check-contract-routes` / `check-api-spec-doc` / `check-client-paths` / `check-spec-coverage`），
+   **并已接入 CI**（纯静态的四个不需要 API，依赖跑着 API 的四个放在 API 起来之后并显式传
+   `--swagger`）—— 此前这批校验器的反向验证只在一个合并脚本里，而那个脚本**从没进过 CI**，
+   即「校验器恒过」这一层从未被自动验证过。
+   新增的错误语义校验器 `check-error-semantics.mjs` 同样带反向验证
+   （`check-error-semantics-selftest.sh`，3 类缺陷注入 + 元自检）。
 10. **备份必须真的能恢复**：`backup-restore-drill.sh` 把恢复演练变成常规检查 ——
    全部表逐表行数 + 列结构/外键/索引/迁移指纹比对，演练库自动清理，线上库全程只读。
 11. **契约是唯一事实来源，且集合级比对只做一处**：`check-contract-routes.mjs` 负责

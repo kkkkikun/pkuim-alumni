@@ -3362,20 +3362,98 @@
 - **需要谁拍板**：**产品 / 客户**（对外契约变更 + 跳页能力的取舍），
   仓库侧在收到确认前维持现状（数字见 `docs/TEST-REPORT.md` 第 12.5 节）。
 
-### 190. 资讯分类 **slug 重复**返回 500（Internal Server Error），而不是 409 CONFLICT（第七轮发现）
+### 190. 资讯分类 **slug 重复**返回 500（Internal Server Error），而不是 409 CONFLICT（第七轮发现，第八轮已修）
 
 - **现象**：`POST /admin/articles/categories` 用**已存在**的 `slug` 再建一个分类时，
   服务端返回 **500 Internal Server Error**（唯一索引 `uk_article_categories_slug` 冲突
   被直接抛成未处理异常），而不是管理端账号端点那套「**409 CONFLICT**」的错误语义
-  （`docs/API-SPEC.md` 第 11 节「管理端账号端点的错误语义」）。
-- **为什么本轮不修**：修它要**改一个端点的错误语义**（500 → 409），
-  属于本轮明确划出的边界（「不改业务语义」「对外契约变更先评估再动」）。
-  本轮只把它**记下来**，并在下一轮（opt-008）连同**同类端点的错误语义对账**一起做。
+  （`docs/API-SPEC.md` 第 11 节「管理端写操作的错误语义」）。
 - **为什么它值得记**：错误码**不可预期**会直接伤到管理端 ——
   管理端按 `code` 分支处理，500 会被当成「服务端故障」而不是「你填的 slug 重复了」，
   运维与用户都会拿错信息去排查。
+- **处置（第八轮）**：
+  - **修复**：`ContentService.createCategory` / `updateCategory`
+    捕获唯一键冲突（`ER_DUP_ENTRY` / 1062）并转成 **409 `CONFLICT`**；
+    ⚠️ 处置方式是**捕获冲突并转 409**，**不是**去掉唯一索引
+    （那等于允许重名分类，是数据损坏）。
+  - **顺带扫了同类唯一键冲突端点**：管理端写端点能触发的唯一键共 3 处 ——
+    `admin_users.username`（原本已是 409，第八轮把判定换成仓库共用的
+    `isDuplicateKeyError`，此前只认 `ER_DUP_ENTRY`、漏判 `errno=1062` 那种形态）、
+    `article_categories.slug`（本条，已修）、`system_settings.key`
+    （并发 upsert 重试耗尽后原先抛成 500，第八轮改为 **409**）。
+    其余管理端写端点所涉的表**没有唯一列**（文章 / 公告 / 活动 / 资源 / 审核）。
+  - **口径写进文档**：`docs/API-SPEC.md` 第 11 节「管理端写操作的错误语义」
+    （原「管理端账号端点的错误语义」）补上分类与设置两行，并写明
+    「唯一键冲突必须是 409，不能是 500」。
+  - **用例**：`apps/api/test/integration/admin-write-error-semantics.e2e-spec.ts`
+    （8 例）：注入冲突数据必须得到 409 / `CONFLICT`；
+    冲突时**事务整体回滚**（不多出分类、不留下审计痕迹）；
+    不存在的对象 → 404；缺参数 → 400。
+  - **守护脚本**：新增 `infra/scripts/check-error-semantics.mjs`
+    （唯一键登记表 ↔ 实现 ↔ 文档三方对账），并按仓库规矩做了**反向验证**
+    （`infra/scripts/check-error-semantics-selftest.sh`：
+    冲突处置被改回 500 / 新增唯一列没登记 / 口径改了但文档没改，三类缺陷都被抓出）。
 - **验收口径**：注入冲突数据必须得到 **409 / `CONFLICT`**（而不是 5xx）；
-  且**不得**靠放宽校验（去掉唯一索引）来「解决」它。
+  且**不得**靠放宽校验（去掉唯一索引）来「解决」它 —— ✅ 已达成。
+
+### 191. 八个校验器的**反向验证**只在一个合并脚本里、而且**从来没进过 CI**（第八轮发现）
+
+- **现象**：`infra/scripts/` 下这 8 个校验器
+  （`check-miniprogram.mjs` / `check-admin-web.mjs` / `check-contract-mirror.mjs` /
+  `check-rbac-matrix.mjs` / `check-contract-routes.mjs` / `check-api-spec-doc.mjs` /
+  `check-client-paths.mjs` / `check-spec-coverage.mjs`）
+  此前**没有**各自的 `-selftest.sh`；它们的反向验证全在**一个**合并脚本
+  `check-frontend-selftest.sh` 里，而那个脚本**没有接进 CI**
+  （只在 README / `docs/TEST-REPORT.md` / `infra/scripts/test-integration.sh` 里被提到）。
+  后果是：这些校验器「有没有恒过」在 CI 里**从来没被验证过** ——
+  与缺陷 #44 / #45 记的是同一片土壤。
+- **为什么它值得记**：仓库的硬规矩是「**每个校验器都必须做反向验证**」，
+  但这条规矩此前只对 6 个校验器（各自有 `-selftest.sh` 且进了 CI）成立。
+- **处置（第八轮）**：
+  - 给这 8 个校验器**各补一份** `-selftest.sh`（沿用仓库既有模板：
+    正向基线 + 逐个用例注入缺陷 + 元自检 + 清理临时副本）；
+    注入用例**全部复用** `infra/scripts/selftest-inject.mjs` 里**已有**的用例，
+    没有新增注入点（新增注入点会依赖现有代码的写法，实现一演进就失配）。
+  - **接入 CI**：纯静态的四个（miniprogram / admin-web / contract-mirror / rbac-matrix）
+    与本轮新增的错误语义自测放进「Checker reverse verification (selftests)」那一步；
+    依赖**跑着的 API** 的四个（contract-routes / api-spec-doc / client-paths /
+    spec-coverage）另起一步，放在 API 起来**之后**并显式传 `--swagger`
+    （默认地址上可能是**旧构建**的 API，基线会如实报出不一致并失败，不会假绿）。
+  - 顺带修正一处**归属错误**：`MIRROR_LITERAL_PATH` 由 `check-client-paths.mjs`
+    产出（不是 `check-contract-mirror.mjs`）—— 该用例挪到
+    `check-client-paths-selftest.sh` 里断言。
+- **仍需人工**：以上门禁只在 **CI** 里自动跑；本地要手动执行对应的 `-selftest.sh`。
+- **补不了的（写明原因）**：`infra/scripts/` 下剩余的三个脚本**不做**反向验证，
+  原因是它们**不是「判定型」校验器**，或**造不出可注入的仓库内对象**：
+  | 脚本 | 为什么补不了 |
+  |---|---|
+  | `check-miniprogram-demo-content-inject.mjs` | 它是**注入器**（给 `check-miniprogram-demo-content.mjs` 造缺陷用的辅助脚本），本身不判定任何东西 —— 它的反向验证由调用它的 `check-miniprogram-demo-content-selftest.sh` 承担 |
+  | `check-public-edge-e2e.sh` | 验的是**已部署的公网边缘链路**（边缘 nginx → SSH 反向隧道 → 后端），判定对象在**部署环境**里、不在仓库里 —— 仓库侧无法「注入缺陷」；它的脚本内已自带一条反向验证（端口冲突必须被发现） |
+  | `admin-ui-smoke.mjs` | 浏览器冒烟，需要**真实浏览器**（Playwright + Chromium）；它的失败即非 0，不存在「判定码恒过」这一层，但它同样跑不出「注入缺陷」的自证场景 |
+
+### 192. 多实例部署的「总线自证」此前**要人记得单独 curl**（第八轮接进运维巡检）
+
+- **现象**：第七轮给了只读运维端点 `GET /api/v1/admin/ops/invalidation-bus`
+  （逐实例查 `subscribed` / `channel` / `degraded`），但**没有任何脚本**会去看它 ——
+  多实例部署时「某个实例压根没订阅上频道」这件事，
+  只有人**记得**逐个实例 curl 才会暴露；
+  而那一档的撤权 / 字典失效延迟会**回落到 TTL 上界**（≤60 秒 / ≤300 秒），
+  表现成「偶尔不生效」，极难定位。
+- **处置（第八轮）**：把该端点接进既有运维巡检脚本 `infra/scripts/healthcheck.sh`：
+  - **逐实例**查询（在**容器内部**查本实例，不经 nginx ——
+    经 nginx 只会打到负载均衡后的某一个实例，那样就看不出「是哪一台没订阅上」）；
+  - 判定：`enabled=1` 且 `subscribed=0` → **FAIL**（并点名频道名）；
+    `enabled=0` → 总线被整条关闭，**不是故障**；
+    各实例 `channel` **不一致** → FAIL（事件互相打不到）；
+    有 `lastError` → WARN 并打印；
+  - 认证：该端点只对管理员开放，所以巡检要一个管理员凭据
+    （`ADMIN_HEALTHCHECK_TOKEN` > `ADMIN_HEALTHCHECK_USERNAME/PASSWORD`
+    > `.env.prod` 的 `ADMIN_BOOTSTRAP_USERNAME/PASSWORD`）；
+    **都取不到时跳过这一项**（不是失败），但跳过这件事会**打印出来**，不静默。
+- **仍需人工**：本轮**只在仓库侧**把手段做齐（脚本 + 判定口径 + 文档），
+  **上线环境是否真的跑过一次巡检**（多实例部署下逐实例 `subscribed=1`、频道一致）
+  仍属部署侧动作，见「共享失效总线的**部署侧**要求」那一行。
+  口径与读法见 `docs/SERVER-OPERATIONS.md` 第 2.1 节。
 
 
 ## 待验证 / 未完成（不得声称已通过）> 以下均为**缺少外部资质或环境**导致的未验证项，与实现质量无关。
@@ -3405,14 +3483,14 @@
 | 连接列表未按对方的字段可见开关裁剪 | `/me/connections` 无条件返回对方的学院 / 地区 / 行业；而 `showCollege` 等开关在小程序里的说明是「**在通讯录中**显示你的毕业院系」—— 开关的语义只覆盖通讯录 | ⚠️ **需产品确认**「解除连接 / 连接列表」是否也应受开关约束；第三轮**未改**（改了就是改业务语义）。已按本轮约定「只记录、不擅改」处理 |
 | nginx 静态资源安全头的端到端验证 | #178 已在 `infra/nginx/admin-web.conf` 补齐 `location /assets/` 的安全头。**本轮（复核轮）已做「配置侧」端到端验证**：用仓库里的这份 conf + 本轮（复核轮）的构建产物在真实 `nginx:alpine` 里起服务，`curl -I /assets/index-*.js` → **9 个安全响应头全部到位**（`X-Content-Type-Options` / `X-Frame-Options` / `Referrer-Policy` / `Permissions-Policy` / `X-Permitted-Cross-Domain-Policies` / `Cross-Origin-Opener-Policy` / `Content-Security-Policy` / `X-XSS-Protection` / `Strict-Transport-Security`）+ `Cache-Control`。**但演示环境现场仍看不到这组头** —— 那边跑的是 4 天前的旧镜像（**部署未更新**，不是配置缺失） | ⚠️ **仍需人工**：部署到服务器后 `curl -I http://127.0.0.1:18082/assets/xxx.js` 再核对一次现场。证据见 `docs/TEST-REPORT.md` 第 11.7 节 |
 | ~~管理端「分类 CRUD / 系统设置写入」没有审计记录~~ | ✅ **第三轮已解决**：`ContentService` 的这 4 个方法（`createCategory` / `updateCategory` / `deleteCategory` / `upsertSetting`）现在支持传入事务 `EntityManager`，控制器（`admin-users.controller.ts`）用 `dataSource.transaction` 把「业务写 + 审计写入」放进**同一事务**（沿用缺陷 #134 的做法：审计写失败时业务写一起回滚）。审计动作名：`category.create` / `category.update` / `category.delete` / `setting.update`；`setting.update` **不记 `value`**（设置里可能放敏感配置，审计表不该成为泄密面，只记 `key` 与 `description`） | 已完成（第三轮） |
-| 通知深分页索引收益 | `(user_id, id)` 索引已建，但优化器在本次数据集上未自动改选；真实收益取决于数据分布 | ✅ **第五轮已用 `EXPLAIN ANALYZE` 复测**（测试库造 20 万 + 10 万条通知、两次 `ANALYZE TABLE`）：**加索引 / 删索引 / 加回索引，计划与耗时都相同**（54.8 / 53.9 / 53.5 ms，差异在噪声内），且 `FORCE INDEX (user_id, id)` 反而**更慢**（2.87 ms vs 优化器自选 1.32 ms）→ **按「没有实测数字的索引不写进生产库」的既定口径，本轮不加索引、不走 TypeORM migration**。**真正的解法是游标分页（keyset pagination）** —— 深分页耗时由 `OFFSET` 决定（OFFSET 1980 → 54 ms；OFFSET 0 → 0.03 ms），但那会**改对外契约**（`page`/`pageSize` 语义），本轮**不改** | ⚠️ **需产品/客户确认**是否接受契约层面的分页改造；**第六轮已把决策记录写进 #189**（目标、兼容面、风险、验收口径），在此之前维持现状（数字见 `docs/TEST-REPORT.md` 第 12.5 节） |
-| 共享失效总线的**部署侧**要求（第五轮新增） | 总线靠 Redis pub/sub 广播「谁的缓存该作废」——**若多实例各连不同的 Redis，总线就不生效**（各自只订阅自己的），撤权延迟回落到 TTL 上界（≤60 秒）。频道名按环境隔离（`nmg:prod:` / `nmg:dev:` / `nmg:test:`），同一环境各实例必须一致 | ⚠️ **需人工在部署时确认**：所有 API 实例连**同一个** Redis（`docker-compose.prod.yml` 里已是共享的 `redis` 服务）；频道名用默认值即可（`RBAC_INVALIDATION_CHANNEL=nmg:rbac:invalidate`，服务端按 `NODE_ENV` 插入环境段）。**第七轮已给出「自证」手段**：部署后逐个实例查只读运维端点 `GET /api/v1/admin/ops/invalidation-bus`（管理员令牌），确认每个实例的 `subscribed` 都是 `true`、各实例 `channel` **一致**；读法见 `docs/SERVER-OPERATIONS.md` 第 2.1 节 |
+| 通知深分页索引收益 | `(user_id, id)` 索引已建，但优化器在本次数据集上未自动改选；真实收益取决于数据分布 | ✅ **第五轮已用 `EXPLAIN ANALYZE` 复测**（测试库造 20 万 + 10 万条通知、两次 `ANALYZE TABLE`）：**加索引 / 删索引 / 加回索引，计划与耗时都相同**（54.8 / 53.9 / 53.5 ms，差异在噪声内），且 `FORCE INDEX (user_id, id)` 反而**更慢**（2.87 ms vs 优化器自选 1.32 ms）→ **按「没有实测数字的索引不写进生产库」的既定口径，本轮不加索引、不走 TypeORM migration**。**真正的解法是游标分页（keyset pagination）** —— 深分页耗时由 `OFFSET` 决定（OFFSET 1980 → 54 ms；OFFSET 0 → 0.03 ms），但那会**改对外契约**（`page`/`pageSize` 语义），本轮**不改** | ⚠️ **需产品/客户确认**是否接受契约层面的分页改造；**第六轮已把决策记录写进 #189**（目标、兼容面、风险、验收口径），**第八轮复核：仍无结论**（对外契约变更仍需产品 / 客户拍板，本轮按约定只记录、不擅改），在此之前维持现状（数字见 `docs/TEST-REPORT.md` 第 12.5 节） |
+| 共享失效总线的**部署侧**要求（第五轮新增） | 总线靠 Redis pub/sub 广播「谁的缓存该作废」——**若多实例各连不同的 Redis，总线就不生效**（各自只订阅自己的），撤权延迟回落到 TTL 上界（≤60 秒）。频道名按环境隔离（`nmg:prod:` / `nmg:dev:` / `nmg:test:`），同一环境各实例必须一致 | ⚠️ **需人工在部署时确认**：所有 API 实例连**同一个** Redis（`docker-compose.prod.yml` 里已是共享的 `redis` 服务）；频道名用默认值即可（`RBAC_INVALIDATION_CHANNEL=nmg:rbac:invalidate`，服务端按 `NODE_ENV` 插入环境段）。**第七轮已给出「自证」手段**：部署后逐个实例查只读运维端点 `GET /api/v1/admin/ops/invalidation-bus`（管理员令牌），确认每个实例的 `subscribed` 都是 `true`、各实例 `channel` **一致**；读法见 `docs/SERVER-OPERATIONS.md` 第 2.1 节。**第八轮已把这一步接进运维巡检**：跑 `bash infra/scripts/healthcheck.sh` 即可逐实例判定（`enabled=1` 且 `subscribed=0` → FAIL；各实例频道不一致 → FAIL），不再需要人记得单独 curl（见 #192）。**但上线环境是否真的跑过一次巡检，仍属部署侧动作**（仓库侧只能把手段做齐） |
 | ~~字典 / 分类 / 系统设置的**跨实例**失效没有上总线~~ | ✅ **第六轮已解决**：失效事件按 `kind` 扩展到字典类（`{"kind":"dict","dict":"categories"｜"settings"}`），**复用第五轮的同一条总线、同一个频道、同一套降级路径**（不新起总线、不引入新基础设施）。分类增删改与 `PUT /admin/settings` 在**事务提交后**发布，订阅端清掉本地对应的 `dict:*` 条目。跨实例陈旧上界从「各自的 TTL」变成「总线可用 = **0**；总线不可用 = **≤ TTL**（默认 ≤60 秒、硬上限 ≤300 秒）」。总线**仍然只传失效事件、不传字典内容**（没有分类名、没有设置项的 key / value）。口径见 `docs/SECURITY.md` 第 2.1.6 节，用例见 `apps/api/test/integration/dict-invalidation-bus.e2e-spec.ts` | 已完成（第六轮） |
 | 第三轮新增端点 / 契约变更的**部署顺序** | 第三轮改了对外响应结构（`GET /admin/events/:id/registrations`、`GET /alumni/verification/mine`、`GET /admin/roles|permissions|settings` 改为 `{items, meta}`；新增 `GET /me/summary`；公开列表的 `body` 变为摘要）。**服务端与两端客户端必须一起发布** —— 只升级服务端会让旧客户端取 `.items` 得到 `undefined`，只升级客户端会让新客户端解析旧响应失败 | ⚠️ **需人工安排发布顺序**：建议「先发服务端（响应结构变更）+ 紧接着发两端客户端」的**同一次发布窗口**完成，不要跨版本长时间并存。**第四轮已产出逐端点的核对清单与两个方向的破坏形态：`docs/RELEASE-ORDER.md`**（含发布前 9 项勾选清单、发布后验证命令、回滚说明；其中 `GET /alumni/verification/mine` **两个方向都坏**，唯一可行顺序是「服务端先」，切换后到小程序新版铺开前该状态会一直错，需人工告知）。迁移说明见 `docs/API-SPEC.md` 的「第三轮的契约变更」小节。**本轮（复核轮）实测确认**：演示环境（`127.0.0.1:18080`，对外 `http://8.160.116.34:18080`）的 API **仍是第三轮之前的构建** —— `GET /me/summary` 返回 **404**、`GET /articles` 仍返回**全文 body**、管理后台静态资源缺 CSP / HSTS（跑的是 4 天前的旧镜像）。这与本行的约束**一致**（小程序新版本未过审前不能先切服务端），属**预期状态**而非漏发布；但也意味着**第三轮的契约变更目前确实尚未上线** |
 | 第三轮的两条索引迁移尚未在**业务库**应用 | `AddQueryIndexesAndProtectAuditLogs1730000005000` 与 `AddRemainingQueryIndexes1730000006000` 在本机测试库已应用，但**线上业务库 `nmg_alumni` 尚未应用**（`infra/scripts/check-pending-migrations.sh` 的 R2 检查会报出来） | ⚠️ **需人工在部署窗口执行** `pnpm --filter @nmg/api db:migrate`（或走既有的迁移发布流程）。**第四轮已核对**（见 `docs/TEST-REPORT.md` 第 10.3 节）：两条迁移都已登记进 `migrations/index.ts` 且**排在最后**；`check-pending-migrations.sh` 的 **R1**（清单 ↔ 文件，不连库）已通过；**R2**（清单 ↔ 库）在本机两个库上都如实报出这两条**未应用** —— 与「线上待应用」一致。CI 跑的是 `--static-only`（CI 用的是普通 MySQL **service**、不是 compose 栈，R2 在 CI 里连不上库），**线上库的实际应用仍属人工动作** |
 | ~~管理后台真实浏览器冒烟未在本机跑通~~ | ✅ **第三轮已跑通**：本机补装了 Playwright（**不写进仓库**，不引入新依赖），用已有的 Chromium 跑了 `infra/scripts/admin-ui-smoke.mjs`：**13 个路由全绿，0 条 console error，0 个未捕获异常，0 个失败请求**；定点截图见 `docs/screenshots/opt-003/` 与 `docs/TEST-REPORT.md` 第 9.7 节 | 已完成（第三轮） |
 | 冒烟脚本的两个「找不到列」是**空表**而非缺陷 | `/resource`（资源审核）与 `/system/logs`（审计日志）此前冒烟报「表格里找不到列」：原因是**这两张表在测试库里是空的**（seed 不造资源与审计记录），空表时 TDesign 渲染的是空状态、**根本没有 `<table>`**，列自然找不到 | ✅ **第四轮已修好**（不再靠补测试数据绕过）：列内容断言**先看这一页有没有渲染出表格** —— 没有表格 → 记为「空表 / 空状态，跳过列内容断言」（不算缺陷）；有表格但找不到该列 → 仍是缺陷。见缺陷 #184 |
-| 首屏下载量的**同机同负载**延迟对照 | 第 9.2 节只把 **SQL 条数**当作本轮的有效结论；延迟（p50/p95）本机两轮测量时机器负载不同，**不可直接比较**（公开端点一行没改，延迟却也变高了，说明是负载波动）。**本轮（复核轮）已量化这个「波动」有多大**：同机、同数据集、背靠背跑了 **A（缓存开）→ B（缓存关）→ A2（缓存开）** 三组 —— A 与 A2 **配置完全相同**，但 p50 已经相差最多 **2 倍**（`管理端·数据总览` 36.3 → 72.6 ms；`首页聚合` 62.7 → 84.0 ms），且**根本没有缓存**的 `首页聚合`、`通讯录检索` 同样在波动 → **波动幅度盖过了缓存本身可能带来的差异**，本机给不出延迟结论。（确定性指标不受影响：A 与 A2 的 SQL 条数逐个相同；A 与 B 的差**恰好是 3 条**/管理端请求，即 RBAC 解析那三条） | ⚠️ **仍需人工**：在专门的压测窗口（无其它任务）重跑 `perf:baseline` 两次，才能给出可比的延迟结论。本轮（复核轮）的实测与结论见 `docs/TEST-REPORT.md` 第 11.2 / 11.8 节 |
+| 首屏下载量的**同机同负载**延迟对照 | 第 9.2 节只把 **SQL 条数**当作本轮的有效结论；延迟（p50/p95）本机两轮测量时机器负载不同，**不可直接比较**（公开端点一行没改，延迟却也变高了，说明是负载波动）。**本轮（复核轮）已量化这个「波动」有多大**：同机、同数据集、背靠背跑了 **A（缓存开）→ B（缓存关）→ A2（缓存开）** 三组 —— A 与 A2 **配置完全相同**，但 p50 已经相差最多 **2 倍**（`管理端·数据总览` 36.3 → 72.6 ms；`首页聚合` 62.7 → 84.0 ms），且**根本没有缓存**的 `首页聚合`、`通讯录检索` 同样在波动 → **波动幅度盖过了缓存本身可能带来的差异**，本机给不出延迟结论。（确定性指标不受影响：A 与 A2 的 SQL 条数逐个相同；A 与 B 的差**恰好是 3 条**/管理端请求，即 RBAC 解析那三条） | ⚠️ **仍需人工**：在专门的压测窗口（无其它任务）重跑 `perf:baseline` 两次，才能给出可比的延迟结论。本轮（复核轮）的实测与结论见 `docs/TEST-REPORT.md` 第 11.2 / 11.8 节。**第八轮复核：专用压测窗口仍未排期，本轮未跑新的延迟对照**（第七轮的 A/B/A 三组已给出「总线开关对读延迟无可测影响」的结论，剩余问题仍是缓存本身的延迟对照） |
 | RBAC / 字典缓存的 TTL **旋钮此前没有暴露** | `RBAC_CACHE_TTL_SECONDS`（默认 30、上限 60）与 `DICT_CACHE_TTL_SECONDS`（默认 60、上限 300）在代码里一直生效，但 `infra/env/env.prod.example` 与 `docker-compose.prod.yml` 的 api `environment:` 里**都没有这两个变量** → 运维**无法在不重新打镜像的前提下**调整它们，只能改代码重发 | ✅ **第四轮已补齐**：`infra/env/env.prod.example` 与 `docker-compose.prod.yml` 已写入这两个变量（含中文注释），`docs/SECURITY.md` 第 2.1 节同步写明「默认 30 秒 / 上限 60 秒」的口径与旋钮位置。已用 `docker compose config` 验证渲染结果为 30 / 60，且改环境变量能被覆盖 |
 | 小程序「我的」页四个计数与红点的**真机**复验 | 第四轮已用**单元测试**（`apps/miniprogram/test/summary.spec.ts` 等，48 例全绿）覆盖 `toSummaryView()` 的四个计数与红点判定，并核对了 `apps/miniprogram/src/pages/me/index/index.wxml` 的绑定与 `post.body` 摘要排版（`-webkit-line-clamp: 2`）。但**小程序没有浏览器冒烟脚本**（不是网页，跑不了 Playwright），真实渲染效果仍需在微信开发者工具 / 真机上看过 | ⚠️ **需人工复验**：在微信开发者工具或真机上打开「我的」页，确认四个计数与红点符合预期、资讯/公告卡片摘要排版无截断异常（体验版已上传，见下方「小程序真机 / 开发者工具验证」行） |
 

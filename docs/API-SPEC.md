@@ -245,12 +245,16 @@
 
 角色与权限点见 `docs/DATABASE-DESIGN.md` §8。
 
-### 管理端账号端点的错误语义（#112 / #113 / #116）
+### 管理端写操作的错误语义（#112 / #113 / #116 / #190）
 
 | 情形 | HTTP | 业务 `code` |
 |---|---|---|
 | `POST /admin/users` 登录名重复（唯一索引冲突） | **409** | `CONFLICT` |
+| `POST /admin/articles/categories` 分类 slug 重复（唯一索引冲突） | **409** | `CONFLICT` |
+| `PATCH /admin/articles/categories/:id` 改成别人已占用的 slug（唯一索引冲突） | **409** | `CONFLICT` |
+| `PUT /admin/settings` 并发写同一个 key 且重试耗尽（唯一键冲突） | **409** | `CONFLICT` |
 | `GET /admin/users/:id`、`PATCH /admin/users/:id`、`PATCH\|POST /admin/users/:id/status` 目标不存在 | **404** | `NOT_FOUND` |
+| `PATCH\|DELETE /admin/articles/categories/:id` 目标不存在 | **404** | `NOT_FOUND` |
 | 停用 / 降权会导致**系统里不再有 active 且拥有 `admin:manage` 的管理员** | **400** | `VALIDATION_ERROR` |
 
 - **不存在一律 404**：不再返回 `200 + {error:'NOT_FOUND'}` ——
@@ -260,6 +264,13 @@
   服务端在事务内、提交前校验，不满足即拒绝并整体回滚。
 - `admin_users.status` 的取值只有 `active` / `disabled`
   （**没有** `locked`，那是普通校友账号的状态）；列表筛选 `status` 同理。
+- ⚠️ **唯一键冲突必须是 409，不能是 500**（缺陷 #190）：
+  管理端按业务 `code` 分支处理失败 —— 500 会被当成「服务端故障」，
+  运维去查服务健康度、管理员去刷新页面，而真实原因只是「你填的 slug 重复了」。
+  处置方式是**捕获唯一键冲突并转成 409**；
+  **不得**靠去掉唯一索引来「解决」它（那等于允许重名分类，是数据损坏）。
+  对账口径与守护脚本见 `infra/scripts/check-error-semantics.mjs`，
+  用例见 `apps/api/test/integration/admin-write-error-semantics.e2e-spec.ts`。
 
 ## 12. 系统 `/system`
 
