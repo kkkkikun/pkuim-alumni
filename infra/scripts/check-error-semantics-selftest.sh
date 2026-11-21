@@ -32,6 +32,8 @@
 #   error-semantics-migration-unique-columns-changed
 #                                                 → R5：迁移里唯一索引的**列**与实体对不上
 #   error-semantics-migration-unique-not-declared → R5：迁移建了实体没声明的唯一约束
+#   error-semantics-doc-index-not-in-migration    → R6：文档索引清单写了迁移里没有的索引
+#   error-semantics-migration-index-not-in-doc    → R6：迁移建了文档索引清单里没写的索引
 #
 # 第九轮新增的四个用例针对**用户侧**：这一轮把唯一键登记表扩到了用户侧
 # （连接申请 / 联系方式授权 / 活动报名 / 资源附件 / 认证附件 / openid / unionid /
@@ -43,6 +45,11 @@
 # 「实体里有、迁移里没建」这一类缺陷此前**完全无人核对**，
 # 而它的后果是**静默**的：撞键不报错，数据库直接写出重复行。
 # 不验证这三个注入的话，「迁移层对账」同样可能是恒过的。
+#
+# 第十一轮新增的两个用例针对**文档索引清单**：DATABASE-DESIGN 的索引清单
+# 与迁移此前**从未逐条对齐**（文档写了迁移里没有的索引 / 迁移建了文档没写的索引，
+# 两边都让「表结构的事实来源」失去可信度）。
+# 不验证这两个注入的话，「文档 ↔ 迁移对齐」同样可能是恒过的。
 #
 # 流程：
 #   0. 正向基线：干净副本上必须 0 不一致、退出码 0；
@@ -188,6 +195,10 @@ run_case "error-semantics-migration-unique-missing" "MIGRATION_UNIQUE_MISSING"
 run_case "error-semantics-migration-unique-columns-changed" "MIGRATION_UNIQUE_COLUMN_MISMATCH"
 # 迁移层：迁移建了实体没声明的唯一约束（库比实体多一道防线）
 run_case "error-semantics-migration-unique-not-declared" "MIGRATION_UNIQUE_NOT_DECLARED"
+# 文档索引清单：文档写了迁移里根本没有的索引（口径与生产库分叉）
+run_case "error-semantics-doc-index-not-in-migration" "DOC_INDEX_NOT_IN_MIGRATION"
+# 文档索引清单：迁移建了文档里没写的索引（清单不完整）
+run_case "error-semantics-migration-index-not-in-doc" "MIGRATION_INDEX_NOT_IN_DOC"
 
 # --- 2. 清理 ---------------------------------------------------------------
 log "[2/2] 清理临时副本……"
@@ -198,5 +209,5 @@ if [ "$FAILED" -ne 0 ]; then
   die "错误语义对账校验器反向验证失败 ❌"
 fi
 
-log "=== 反向验证通过 ✅（10 类「错误语义失配」缺陷全部被抓出，校验器非恒过）==="
+log "=== 反向验证通过 ✅（12 类「错误语义失配」缺陷全部被抓出，校验器非恒过）==="
 log "错误语义对账校验器反向验证通过 ✅"

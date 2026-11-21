@@ -49,7 +49,15 @@
  *   error-semantics-migration-unique-missing           → 迁移层：唯一索引**没建**（生产库没有那道防线）
  *   error-semantics-migration-unique-columns-changed   → 迁移层：唯一索引的**列**与实体对不上
  *   error-semantics-migration-unique-not-declared      → 迁移层：迁移建了实体没声明的唯一约束
+ *   error-semantics-doc-index-not-in-migration         → 文档索引清单：文档写了迁移里没有的索引
+ *   error-semantics-migration-index-not-in-doc         → 文档索引清单：迁移建了文档里没写的索引
  *   unique-index-db-registry-injected → 库内对账：登记表要求、但**库里其实没有**的唯一键
+ *   read-visibility-filter-removed    → 读端点可见性：**可见性过滤被删掉**（未发布内容凭 id 就能读到）
+ *   read-visibility-status-changed    → 读端点可见性：「不可见 → 404」被改成 403（泄露存在性）
+ *   read-visibility-endpoint-unregistered → 读端点可见性：新增公开读端点却**没登记口径**
+ *   read-visibility-doc-row-removed   → 读端点可见性：API-SPEC 里的可见性口径那一行被删掉
+ *   read-visibility-known-issue-removed → 读端点可见性：待拍板条目（#197）被从 KNOWN-ISSUES 删掉
+ *   read-visibility-pending-resolved  → 读端点可见性：待拍板端点的行为被改掉（登记表过期）
  */
 
 import fs from 'node:fs';
@@ -774,6 +782,146 @@ export class InjectedSafeUpsertService {
         + "    disposition: 'SEEDED',\n"
         + "    note: '自测注入：库里并没有这道唯一约束',\n"
         + "  },\n",
+    );
+  },
+
+  /*
+   * 错误语义对账（文档索引清单，第十一轮）：在 `docs/DATABASE-DESIGN.md`
+   * 的索引清单里塞一条**迁移里根本没有**的索引 ——
+   * 文档是表结构的事实来源，文档与迁移分叉时，
+   * 读文档的人会以为生产库里真有那么一道索引。
+   * 期望：DOC_INDEX_NOT_IN_MIGRATION 点名 idx_articles_by_title。
+   */
+  'error-semantics-doc-index-not-in-migration'() {
+    const file = path.join(copyRoot, 'docs/DATABASE-DESIGN.md');
+    replaceOnce(
+      file,
+      /索引 `idx_articles_published\(status, published_at\)`/,
+      '索引 `idx_articles_published(status, published_at)`、`idx_articles_by_title(title)`',
+    );
+  },
+
+  /*
+   * 错误语义对账（文档索引清单，第十一轮）：把 `docs/DATABASE-DESIGN.md`
+   * 索引清单里的 `idx_articles_published` 删掉 ——
+   * 迁移里明明建了这条索引，文档却没写 → 清单不完整，
+   * 下一轮「文档 ↔ 迁移逐条对齐」就没有基线。
+   * 期望：MIGRATION_INDEX_NOT_IN_DOC 点名 idx_articles_published。
+   */
+  'error-semantics-migration-index-not-in-doc'() {
+    const file = path.join(copyRoot, 'docs/DATABASE-DESIGN.md');
+    replaceOnce(
+      file,
+      /`idx_articles_published\(status, published_at\)`、/,
+      '',
+    );
+  },
+
+  /*
+   * 读端点可见性对账（第十一轮）：把「未发布 → 404」的**可见性过滤**删掉 ——
+   * 公开详情端点只判「存在与否」，不再判「发布与否」。
+   * 后果：草稿 / 未审核的资讯**凭 id 就能公开读到**（对外可见性失控）。
+   * 期望：READ_VISIBILITY_FILTER_MISSING 点名 GET /articles/:id。
+   */
+  'read-visibility-filter-removed'() {
+    const file = path.join(copyRoot, 'apps/api/src/modules/content/content.service.ts');
+    replaceOnce(
+      file,
+      /if \(!article \|\| article\.status !== 'published'\) throw new NotFoundException\('内容不存在'\);/,
+      "if (!article) throw new NotFoundException('内容不存在');",
+    );
+  },
+
+  /*
+   * 读端点可见性对账（第十一轮）：把「不可见 → 404」改成 **403** ——
+   * 状态码本身就泄露了「这个对象存在」，与「已知设计取舍」第 2 条相反。
+   * 期望：READ_VISIBILITY_STATUS_MISMATCH 点名 GET /articles/:id。
+   */
+  'read-visibility-status-changed'() {
+    const file = path.join(copyRoot, 'apps/api/src/modules/content/content.service.ts');
+    replaceOnce(
+      file,
+      /if \(!article \|\| article\.status !== 'published'\) throw new NotFoundException\('内容不存在'\);/,
+      "if (!article || article.status !== 'published') throw new ForbiddenException('内容不存在');",
+    );
+  },
+
+  /*
+   * 读端点可见性对账（第十一轮）：新增一个**公开读端点**却没人登记可见性口径 ——
+   * 「不可见的对象返回什么」没人想过，上线后只能靠人记得。
+   * 期望：READ_VISIBILITY_NOT_REGISTERED 点名 GET /draft-preview。
+   */
+  'read-visibility-endpoint-unregistered'() {
+    const file = path.join(copyRoot, 'apps/api/src/modules/content/content.controller.ts');
+    replaceOnce(
+      file,
+      /\n\}\n$/,
+      `
+  @Public()
+  @Get('draft-preview')
+  @ApiOperation({ summary: '自测注入：没登记可见性口径的公开读端点' })
+  draftPreview() {
+    return { ok: true };
+  }
+}
+`,
+    );
+  },
+
+  /*
+   * 读端点可见性对账（第十一轮）：把 API-SPEC「读端点的可见性口径」里的
+   * `GET /articles/:id` 那一行删掉 ——
+   * 对外契约只存在于代码里，客户端无从得知「未发布 → 404」。
+   * 期望：READ_VISIBILITY_UNDOCUMENTED 点名 GET /articles/:id。
+   */
+  'read-visibility-doc-row-removed'() {
+    const file = path.join(copyRoot, 'docs/API-SPEC.md');
+    const lines = readText(file).split('\n');
+    // ⚠️ 必须按**单元格**定位：说明列里常出现「同 `/articles/:id`」这样的引用，
+    //    按子串找会删掉**别处**的那一行，注入就白注了。
+    const index = lines.findIndex((line) => {
+      if (!line.trim().startsWith('|')) return false;
+      const cells = line.split('|').map((cell) => cell.trim());
+      return cells[1] === 'GET' && cells[2] === '`/articles/:id`' && line.includes('**404**');
+    });
+    if (index < 0) throw new Error('注入失败：API-SPEC 里找不到 /articles/:id 的可见性那一行');
+    lines.splice(index, 1);
+    writeText(file, lines.join('\n'));
+  },
+
+  /*
+   * 读端点可见性对账（第十一轮）：把 KNOWN-ISSUES 里 #197（`GET /events/:id`
+   * 的可见性口径待拍板）整条删掉 ——
+   * 「口径还没人拍板」这件事必须仍然记着，否则这个端点就没人管了。
+   * 期望：READ_VISIBILITY_KNOWN_ISSUE_MISSING 点名 GET /events/:id。
+   */
+  'read-visibility-known-issue-removed'() {
+    const file = path.join(copyRoot, 'docs/KNOWN-ISSUES.md');
+    const lines = readText(file).split('\n');
+    const start = lines.findIndex((line) => /^#{2,4}\s*197\./.test(line));
+    if (start < 0) throw new Error('注入失败：KNOWN-ISSUES 里找不到 #197');
+    let end = lines.length;
+    for (let i = start + 1; i < lines.length; i += 1) {
+      if (/^#{2,4}\s/.test(lines[i])) {
+        end = i;
+        break;
+      }
+    }
+    lines.splice(start, end - start);
+    writeText(file, lines.join('\n'));
+  },
+
+  /*
+   * 读端点可见性对账（第十一轮）：把 `GET /events/:id` 的**可见性过滤补上** ——
+   * 模拟「产品已拍板 / 有人擅自改了对外行为」，但登记表与文档还停在「待拍板」。
+   * 期望：READ_VISIBILITY_REGISTRY_STALE 点名 GET /events/:id。
+   */
+  'read-visibility-pending-resolved'() {
+    const file = path.join(copyRoot, 'apps/api/src/modules/events/events.service.ts');
+    replaceOnce(
+      file,
+      /if \(!event\) throw new NotFoundException\('活动不存在'\);/,
+      "if (!event || event.status !== 'published') throw new NotFoundException('活动不存在');",
     );
   },
 

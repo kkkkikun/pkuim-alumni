@@ -1536,10 +1536,85 @@ function main() {
     });
   }
 
+  // --- 5) 文档的索引清单 ↔ 迁移（第十一轮新增） ----------------------------
+  //
+  // 生产库 `synchronize: false`，跑的是迁移；而 `docs/DATABASE-DESIGN.md`
+  // 是「表结构事实来源」（该文件自己写的口径）。
+  // 三者（文档 / 实体 / 迁移）里，**索引名**这一层此前从未被逐条核对过：
+  //   - 文档里写了、迁移里没建 → 口径与生产库分叉（读文档的人以为有那个索引）；
+  //   - 迁移里建了、文档里没写 → 文档的索引清单不完整（下一轮对账无从下手）。
+  // 这一层只报**能由文档与迁移直接判定**的分歧（索引名），不猜列的含义。
+  const docIndexNames = new Set();
+  const docDesign = readTextSafe(path.join(root(), 'docs/DATABASE-DESIGN.md'));
+  if (!docDesign) {
+    issues.push({
+      kind: 'DOC_INDEX_LIST_MISSING',
+      where: 'docs/DATABASE-DESIGN.md',
+      detail:
+        '找不到 `docs/DATABASE-DESIGN.md` —— 它是表结构的事实来源，' +
+        '索引清单必须与迁移逐条对齐',
+    });
+  } else {
+    for (const match of docDesign.matchAll(/`((?:uk|idx)_[a-z0-9_]+)/g)) {
+      docIndexNames.add(match[1]);
+    }
+  }
+
+  const migrationIndexNames = new Map();
+  {
+    const dir = path.join(root(), 'apps/api/src/database/migrations');
+    const files = fs.existsSync(dir)
+      ? fs.readdirSync(dir)
+          .filter((name) => name.endsWith('.ts') && name !== 'index.ts')
+          .sort()
+      : [];
+    for (const name of files) {
+      const src = readTextSafe(path.join(dir, name));
+      if (!src) continue;
+      // ⚠️ 只看**会被执行**的语句（down() 是回滚，见 withoutDownMethod 的说明）。
+      const body = withoutDownMethod(src);
+      const patterns = [
+        /name:\s*'((?:uk|idx)_[a-z0-9_]+)'/g,
+        /CREATE\s+(?:UNIQUE\s+)?INDEX\s+`?((?:uk|idx)_[a-z0-9_]+)`?/gi,
+      ];
+      for (const pattern of patterns) {
+        for (const match of body.matchAll(pattern)) {
+          migrationIndexNames.set(match[1], name);
+        }
+      }
+    }
+  }
+
+  for (const name of docIndexNames) {
+    if (migrationIndexNames.has(name)) continue;
+    issues.push({
+      kind: 'DOC_INDEX_NOT_IN_MIGRATION',
+      where: name,
+      detail:
+        `\`docs/DATABASE-DESIGN.md\` 的索引清单里写着 \`${name}\`，` +
+        '但**迁移里没有创建它** —— 生产库跑的是迁移：' +
+        '要么文档写错了，要么迁移漏了这一条（两者分叉，必须逐条判断改哪一边）',
+    });
+  }
+
+  for (const [name, source] of migrationIndexNames) {
+    if (docIndexNames.has(name)) continue;
+    issues.push({
+      kind: 'MIGRATION_INDEX_NOT_IN_DOC',
+      where: name,
+      detail:
+        `迁移 \`${source}\` 里创建了索引 \`${name}\`，` +
+        '但 `docs/DATABASE-DESIGN.md` 的索引清单里**没有它** —— ' +
+        '文档是表结构的事实来源，清单不完整就没法与迁移逐条对齐',
+    });
+  }
+
   const report = {
     reviewedUniqueKeys: UNIQUE_KEY_REGISTRY.length,
     discoveredUniqueKeys: discovered.length,
     migrationUniqueConstraints: migrationUniques.length,
+    docIndexNames: docIndexNames.size,
+    migrationIndexNames: migrationIndexNames.size,
     issues: issues.length,
     notes: notes.length,
     detail: issues,
