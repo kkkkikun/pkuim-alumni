@@ -741,8 +741,9 @@ async function main() {
 
       /* --- 4.2 unsigned --- */
       if (column.unsigned !== null && column.unsigned !== undefined) {
-        if (normalizeType(column.type) === 'tinyint') {
-          // ⚠️ 布尔位（实体类型是 `tinyint` 的开关列）：无符号对它没有意义
+        const entityType = normalizeType(column.type);
+        if (entityType === 'tinyint' || entityType === 'boolean') {
+          // ⚠️ 布尔位（实体类型是 `tinyint` / `boolean` 的开关列）：无符号对它没有意义
           //   （取值只有 0/1）。第十五轮的误报率实测：可判定的 79 列里有 9 列
           //   属于这一类（实体写了 `unsigned: true`，迁移与库里是 `tinyint(1)`）——
           //   纳入判定会产生 9 处常驻误报，故**不判**（记进 KNOWN-ISSUES）。
