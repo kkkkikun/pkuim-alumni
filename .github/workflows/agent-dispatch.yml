@@ -85,14 +85,23 @@ jobs:
           done
           # Only a dispatch issue opened by the dispatcher counts as "this task is in flight".
           # A marker left on an issue a person opened must not block the queue forever.
+          #
+          # ⚠️ 这里必须带「2 小时内才新鲜」的条件，不能只查 state=open：
+          # 上一段刚把过期派活单 close 掉，GitHub 的 issue 列表是最终一致的 ——
+          # 关闭后一两秒内再查，仍会读到关闭前的旧状态，于是会误判成
+          # 「这个任务还在派活中」而放弃重派（2026-11-21 就这样白白停了一轮）。
+          # 用新鲜度窗口表达「在飞」，就不依赖关闭是否已经生效。
           INFLIGHT=$(gh api "repos/$REPO/issues?state=open&per_page=100" \
-            --jq '[.[] | select(.user.login == "github-actions[bot]") | select(.body // "" | contains("'"$MARKER"'"))] | length')
+            --jq '[.[] | select(.user.login == "github-actions[bot]") | select(.body // "" | contains("'"$MARKER"'")) | select((now - (.updated_at | fromdateiso8601)) <= 7200)] | length')
           if [ "$INFLIGHT" -gt 0 ]; then
             echo "dispatch=false" >>"$GITHUB_OUTPUT"
             echo "task $ID is already dispatched and still open"
             exit 0
           fi
-          OPEN=$(gh pr list --repo "$REPO" --state open --limit 50 --json headRefName --jq '[.[] | select(.headRefName | startswith("agent/"))] | length')
+          # 同理：刚被关掉的过期 agent PR 也可能还出现在 open 列表里，
+          # 判「有 agent PR 开着」时只看两小时内更新过的。
+          OPEN=$(gh pr list --repo "$REPO" --state open --limit 50 --json headRefName,updatedAt \
+            --jq '[.[] | select(.headRefName | startswith("agent/")) | select((now - (.updatedAt | fromdateiso8601)) <= 7200)] | length')
           if [ "$OPEN" -gt 0 ]; then
             echo "dispatch=false" >>"$GITHUB_OUTPUT"
             echo "$OPEN agent pull request(s) are open"
