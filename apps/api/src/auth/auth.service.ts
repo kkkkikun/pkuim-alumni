@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   HttpException,
   HttpStatus,
   Inject,
@@ -16,6 +17,7 @@ import { CacheKeys, ResponseCode } from '../common/constants';
 import type { RequestUser } from '../common/decorators';
 import { TtlCacheService } from '../common/services/ttl-cache.service';
 import { hashToken } from '../common/utils/crypto';
+import { duplicateKeyName, isDuplicateKeyError } from '../common/utils/duplicate-key';
 import { parseDurationToSeconds } from '../common/utils/duration';
 import {
   AdminUser,
@@ -214,42 +216,69 @@ export class AuthService {
     identity: AuthIdentity,
     nickname: string | null,
   ): Promise<AuthenticatedLoginResult> {
-    await this.dataSource.transaction(async (manager) => {
-      let user = await manager.findOne(User, { where: { openid: identity.openid } });
-      if (!user) {
-        user = manager.create(User, {
-          openid: identity.openid,
-          unionid: identity.unionid,
-          nickname: nickname ?? '校友',
-          source: identity.source,
-          status: 'active',
-          stage: 'logged_in',
-        });
-        user = await manager.save(user);
-      } else {
-        if (nickname) user.nickname = nickname;
-        if (identity.unionid && !user.unionid) user.unionid = identity.unionid;
-        user.source = identity.source;
-        user.lastLoginAt = new Date();
-        await manager.save(user);
-      }
+    // ⚠️ 唯一键冲突的处置（第九轮，扩到用户侧）：
+    //   `users.openid` / `users.unionid` / `alumni_profiles.user_id` 上都有唯一索引，
+    //   而这里是「先查后插」—— 两个并发首登（同一 openid）必然有一个撞唯一键。
+    //   修复前这个 `ER_DUP_ENTRY` 直接冒泡成 **500**（用户看到「服务器内部错误」，
+    //   其实只是「另一个请求刚好把账号建好了」）。
+    //   现在：**重跑整个事务**（重跑时是新的快照，能看到对方刚提交的行 → 走「已存在」分支）。
+    await this.withDuplicateKeyRetry(() =>
+      this.dataSource.transaction(async (manager) => {
+        // ⚠️ `users.unionid` 也有唯一索引（uk_users_unionid）：
+        //   同一个 unionid 已经被**另一个**账号占着时，写上去就是撞键 → 500。
+        //   这是**业务冲突**（两个账号指向同一个微信主体），不是「服务端故障」→
+        //   先查清楚，给出 409（可预期错误码），而不是等数据库来报错。
+        //   ⚠️ 只在 unionid 真的存在时才查（Mock 登录没有 unionid，
+        //     不该为此多打一条 SQL）。
+        if (identity.unionid) {
+          const owner = await manager.findOne(User, { where: { unionid: identity.unionid } });
+          if (owner && owner.openid !== identity.openid) {
+            throw new ConflictException('该微信账号已绑定其它校友账号，无法合并');
+          }
+        }
+        let user = await manager.findOne(User, { where: { openid: identity.openid } });
+        if (!user) {
+          user = manager.create(User, {
+            openid: identity.openid,
+            unionid: identity.unionid,
+            nickname: nickname ?? '校友',
+            source: identity.source,
+            status: 'active',
+            stage: 'logged_in',
+          });
+          user = await manager.save(user);
+        } else {
+          if (nickname) user.nickname = nickname;
+          // ⚠️ unionid 的占用已在上面**统一**查过（两种分支都要拦住）；
+          //   这里只在「本账号还没绑 unionid」时补上。
+          if (identity.unionid && !user.unionid) {
+            user.unionid = identity.unionid;
+          }
+          user.source = identity.source;
+          user.lastLoginAt = new Date();
+          await manager.save(user);
+        }
 
-      // 资料行与联系方式行始终存在，便于后续填写
-      const profile = await manager.findOne(AlumniProfile, { where: { userId: user.id } });
-      if (!profile) {
-        await manager.save(
-          manager.create(AlumniProfile, {
-            userId: user.id,
-            displayName: nickname ?? user.nickname,
-            showInDirectory: false,
-          }),
-        );
-      }
-      const contact = await manager.findOne(PrivateContact, { where: { userId: user.id } });
-      if (!contact) {
-        await manager.save(manager.create(PrivateContact, { userId: user.id }));
-      }
-    });
+        // 资料行与联系方式行始终存在，便于后续填写
+        // ⚠️ `alumni_profiles.user_id` 有唯一索引（uk_alumni_profiles_user）：
+        //   并发首登时两个请求都会「没找到资料行」→ 都去 INSERT → 一个撞键。
+        //   这个撞键由外层的 `withDuplicateKeyRetry` 统一处置（重跑一次即可命中既有行）。
+        const profile = await manager.findOne(AlumniProfile, { where: { userId: user.id } });
+        if (!profile) {
+          await manager.save(
+            manager.create(AlumniProfile, {
+              userId: user.id,
+              displayName: nickname ?? user.nickname,
+              showInDirectory: false,
+            }),
+          );
+        }
+        const contact = await manager.findOne(PrivateContact, { where: { userId: user.id } });
+        if (!contact) {
+          await manager.save(manager.create(PrivateContact, { userId: user.id }));
+        }
+      }),
+    );
 
     const user = await this.users.findOne({ where: { openid: identity.openid } });
     if (!user) throw authFailed('用户创建失败');
@@ -312,6 +341,54 @@ export class AuthService {
   async logout(refreshToken?: string): Promise<void> {
     if (!refreshToken) return;
     await this.sessions.revokeByHash(hashToken(refreshToken));
+  }
+
+  /**
+   * 唯一键冲突时**重跑整个事务**（最多 3 次）。
+   *
+   * 适用场景：登录链路的「先查后插」——
+   * 两个并发首登（同一个 openid）都会读到「用户不存在」→ 都去 INSERT →
+   * 后到的那个撞 `uk_users_openid`。
+   * 重跑时是**新的快照**，能看到另一个事务刚提交的那一行 → 走「已存在」分支，
+   * 于是登录照常成功（而不是把数据库异常甩给用户）。
+   *
+   * ⚠️ 重试耗尽后**不得**把数据库异常抛成 500（缺陷 #190 同款口径）：
+   *   连撞 3 次说明此刻确实有别的请求在抢同一行 ——
+   *   `uk_users_unionid`（同一微信主体绑了两个账号）是**业务冲突** → 409；
+   *   其余情况也一律 409「请重试」，而不是 500。
+   */
+  private async withDuplicateKeyRetry<T>(run: () => Promise<T>): Promise<T> {
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        return await run();
+      } catch (error) {
+        if (!isDuplicateKeyError(error)) throw error;
+        if (attempt === maxAttempts) {
+          throw new ConflictException(this.duplicateKeyMessage(duplicateKeyName(error)));
+        }
+      }
+    }
+    // 理论上不可达（循环要么 return、要么 throw）
+    throw new ConflictException('登录信息冲突，请重试');
+  }
+
+  /** 唯一键冲突 → 可预期的错误文案（按**撞的是哪把钥匙**区分）。 */
+  private duplicateKeyMessage(indexName: string | null): string {
+    switch (indexName) {
+      case 'uk_users_unionid':
+        return '该微信账号已绑定其它校友账号，无法合并';
+      case 'uk_users_openid':
+        return '登录信息冲突，请重试';
+      case 'uk_alumni_profiles_user':
+        return '资料创建冲突，请重试';
+      case 'uk_private_contacts_user':
+        return '联系方式创建冲突，请重试';
+      case 'uk_user_sessions_token':
+        return '登录会话创建冲突，请重试';
+      default:
+        return '登录信息冲突，请重试';
+    }
   }
 
   /* ------------------------------ 管理后台登录 ------------------------------ */
@@ -542,23 +619,36 @@ export class AuthService {
     expiresIn: number;
   }> {
     const secret = this.config.get<string>('app.jwtSecret');
-    const accessToken = await this.jwtService.signAsync(
-      { sub: String(user.id), kind: 'user', typ: 'access', jti: randomUUID() },
-      { secret, expiresIn: this.accessTokenTtlSeconds() },
-    );
-    const refreshToken = await this.jwtService.signAsync(
-      { sub: String(user.id), kind: 'user', typ: 'refresh', jti: randomUUID() },
-      { secret, expiresIn: this.refreshTokenTtlSeconds() },
-    );
     const expiresIn = this.accessTokenTtlSeconds();
     const refreshTtl = this.refreshTokenTtlSeconds();
-    await this.sessions.create(
-      user.id,
-      refreshToken,
-      hashToken(refreshToken),
-      new Date(Date.now() + refreshTtl * 1000),
-    );
-    return { accessToken, refreshToken, expiresIn };
+    // ⚠️ `user_sessions.refresh_token_hash` 有唯一索引（uk_user_sessions_token）：
+    //   撞键时**重新签发一枚**令牌再试一次（令牌带随机 jti，重发即换哈希）；
+    //   仍撞（几乎不可能）才给 409 —— 绝不把数据库异常抛成 500。
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      const accessToken = await this.jwtService.signAsync(
+        { sub: String(user.id), kind: 'user', typ: 'access', jti: randomUUID() },
+        { secret, expiresIn },
+      );
+      const refreshToken = await this.jwtService.signAsync(
+        { sub: String(user.id), kind: 'user', typ: 'refresh', jti: randomUUID() },
+        { secret, expiresIn: refreshTtl },
+      );
+      try {
+        await this.sessions.create(
+          user.id,
+          refreshToken,
+          hashToken(refreshToken),
+          new Date(Date.now() + refreshTtl * 1000),
+        );
+        return { accessToken, refreshToken, expiresIn };
+      } catch (error) {
+        if (!isDuplicateKeyError(error)) throw error;
+        if (attempt === 2) {
+          throw new ConflictException(this.duplicateKeyMessage(duplicateKeyName(error)));
+        }
+      }
+    }
+    throw new ConflictException('登录会话创建冲突，请重试');
   }
 
   private async signAdminAccessToken(adminId: number): Promise<string> {

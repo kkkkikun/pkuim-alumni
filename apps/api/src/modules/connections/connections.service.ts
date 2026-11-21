@@ -7,10 +7,11 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, In, QueryFailedError, Repository } from 'typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 import { paginate } from '../../common/dto/pagination.dto';
 import type { PageResult } from '../../common/dto/pagination.dto';
 import { decryptValue } from '../../common/utils/crypto';
+import { isDuplicateKeyError } from '../../common/utils/duplicate-key';
 import { normalizePair, pairKey } from '../../common/utils/pair';
 import { AlumniProfile, PrivateContact } from '../../database/entities/alumni.entity';
 import {
@@ -145,13 +146,16 @@ export class ConnectionsService {
       if (!created) throw new NotFoundException('联系申请不存在');
       return { ...(await this.toRequestView(created)), idempotent: false };
     } catch (error) {
-      if (error instanceof QueryFailedError && this.isDuplicateKey(error)) {
+      if (isDuplicateKeyError(error)) {
         // 并发下另一方已插入 pending 申请，返回既有记录
         const concurrent = await this.requests.findOne({ where: { pairKey: key, status: 'pending' } });
         if (concurrent) {
           // 并发下另一方已插入 pending 申请：返回既有记录（不重复创建）
           return { ...(await this.toRequestView(concurrent)), idempotent: true };
         }
+        // ⚠️ 读不到既有申请 → 这是**真冲突**（不是「服务端故障」）：
+        //   绝不能把数据库异常原样抛出去（那会变成 500），给可预期的 409。
+        throw new ConflictException('联系申请冲突，请重试');
       }
       throw error;
     }
@@ -195,6 +199,11 @@ export class ConnectionsService {
           status: 'active',
           establishedAt: new Date(),
         })
+        // ⚠️ `connection_pairs` 有唯一索引 `uk_connection_pairs (user_a_id, user_b_id)`：
+        //   并发接受同一份申请时两个请求都会去 INSERT → 后到的撞唯一键。
+        //   这里用 `orIgnore`（INSERT IGNORE）**吸收**这次冲突 ——
+        //   随后按 (userAId, userBId) 读回既有关系行，于是「建立连接关系」是幂等的，
+        //   而不是把数据库异常甩成 500。
         .orIgnore()
         .execute();
 
@@ -390,9 +399,12 @@ export class ConnectionsService {
       //    后到的那一个撞唯一索引 `uk_contact_grant (pair_id, user_id)`（缺陷 #137）。
       //    「先查后插」在单线程下没问题，**并发**下必须有兜底：
       //    捕获唯一键冲突后改成**更新**既有行，而不是甩 500 给用户。
-      if (!this.isDuplicateKey(error)) throw error;
+      if (!isDuplicateKeyError(error)) throw error;
       const concurrent = await this.grants.findOne({ where: { pairId, userId } });
-      if (!concurrent) throw error;
+      if (!concurrent) {
+        // 读不到既有行 → 真冲突，给 409（绝不把数据库异常抛成 500）
+        throw new ConflictException('联系方式授权冲突，请重试');
+      }
       concurrent.allow = allow;
       await this.grants.save(concurrent);
     }
@@ -404,13 +416,6 @@ export class ConnectionsService {
   private async findActivePair(a: number, b: number): Promise<ConnectionPair | null> {
     const [userAId, userBId] = normalizePair(a, b);
     return this.pairs.findOne({ where: { userAId, userBId, status: 'active' } });
-  }
-
-  /** MySQL 唯一键冲突（ER_DUP_ENTRY / 1062）。 */
-  private isDuplicateKey(error: unknown): boolean {
-    if (!(error instanceof QueryFailedError)) return false;
-    const driverError = error.driverError as { code?: string; errno?: number } | undefined;
-    return driverError?.code === 'ER_DUP_ENTRY' || driverError?.errno === 1062;
   }
 
   private async toRequestView(request: ConnectionRequestHistory): Promise<ConnectionRequestView> {

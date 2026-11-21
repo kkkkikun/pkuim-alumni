@@ -1,8 +1,9 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository } from 'typeorm';
 import { decryptValue, encryptValue } from '../../common/utils/crypto';
+import { isDuplicateKeyError } from '../../common/utils/duplicate-key';
 import { AlumniProfile, PrivateContact } from '../../database/entities/alumni.entity';
 import { User } from '../../database/entities/user.entity';
 import type { UpdateContactDto, UpdatePrivacyDto, UpdateProfileDto } from './dto/me.dto';
@@ -207,7 +208,20 @@ export class MeService {
     const contacts = manager ? manager.getRepository(PrivateContact) : this.contacts;
     let contact = await contacts.findOne({ where: { userId } });
     if (!contact) {
-      contact = contacts.create({ userId });
+      try {
+        contact = await contacts.save(contacts.create({ userId }));
+      } catch (error) {
+        // ⚠️ `private_contacts.user_id` 是主键（天然唯一）：
+        //   并发下两个请求都读不到联系方式行 → 都去 INSERT → 后到的撞主键。
+        //   修复前这个异常直接冒泡成 **500**；现在读回既有行（幂等），
+        //   实在读不到才给 409 —— 绝不把数据库异常抛成 500。
+        if (!isDuplicateKeyError(error)) throw error;
+        const existing = await contacts.findOne({ where: { userId } });
+        if (!existing) {
+          throw new ConflictException('联系方式创建冲突，请重试');
+        }
+        contact = existing;
+      }
     }
     if (dto.contactPhone !== undefined) {
       contact.phoneCipher = encryptValue(dto.contactPhone, this.secret);
@@ -227,10 +241,21 @@ export class MeService {
     profiles: Repository<AlumniProfile> = this.profiles,
   ): Promise<AlumniProfile> {
     const profile = await profiles.findOne({ where: { userId } });
-    if (!profile) {
-      const created = profiles.create({ userId, displayName: '校友' });
-      return profiles.save(created);
+    if (profile) return profile;
+    const created = profiles.create({ userId, displayName: '校友' });
+    try {
+      return await profiles.save(created);
+    } catch (error) {
+      // ⚠️ `alumni_profiles.user_id` 有唯一索引（uk_alumni_profiles_user）：
+      //   并发下两个请求都读不到资料行 → 都去 INSERT → 后到的撞唯一键。
+      //   修复前这个 `ER_DUP_ENTRY` 直接冒泡成 **500**；
+      //   现在读回既有行（幂等），实在读不到才给 409 —— 绝不把数据库异常抛成 500。
+      if (!isDuplicateKeyError(error)) throw error;
+      const existing = await profiles.findOne({ where: { userId } });
+      if (!existing) {
+        throw new ConflictException('资料创建冲突，请重试');
+      }
+      return existing;
     }
-    return profile;
   }
 }

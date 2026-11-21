@@ -182,6 +182,27 @@ jobs:
       - name: Integration tests
         run: pnpm --filter @nmg/api test:integration
 
+      # 第九轮：把「跨实例撤权立刻生效」接进 CI（**跨进程**那一档）。
+      #
+      # 为什么必须进门禁：
+      #   `docs/SECURITY.md` 第 2.1.4 节承诺「多实例 + 总线可用 → 撤权延迟 0」，
+      #   而仓库里此前只有「同进程两个 Nest 上下文」这一档的用例
+      #   （`rbac-invalidation-bus.e2e-spec.ts`）——
+      #   真跨进程（两个 API 进程 + 一个 Redis）只能靠部署环境人工核对。
+      #   演练脚本 `infra/scripts/invalidation-bus-drill.mjs` 把这一档变成可重复的自证：
+      #   实例 B 的缓存热起来 → 实例 A 降权 → 实例 B 必须**立刻 403**（不等 TTL）。
+      #
+      # ⚠️ 脚本自带**退化形态对照**：另起一个实例把总线整条关掉
+      #   （`RBAC_INVALIDATION_ENABLED=false`），同样的降权之后它**仍然 200** ——
+      #   没有这一档，「B 变成 403 了」也可能只是「缓存本来就没热」，演练就会假绿。
+      #
+      # 需要：构建产物（`pnpm build` 已跑）、测试库（迁移 + seed 已跑）、Redis（service 已起）。
+      - name: Cross-process invalidation drill
+        run: |
+          set -euo pipefail
+          ADMIN_USERNAME=admin ADMIN_PASSWORD=Admin@2026 \
+            node infra/scripts/invalidation-bus-drill.mjs
+
       # 第七轮：把失效总线的**负向验证**接进 CI。
       #
       # ⚠️ 为什么必须进门禁：

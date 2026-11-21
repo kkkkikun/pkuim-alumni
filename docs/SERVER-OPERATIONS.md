@@ -120,6 +120,33 @@ bash infra/scripts/healthcheck.sh --wait   # 等全部健康
 - 查询在**容器内部**发起（查本实例，不经 nginx）—— 经 nginx 只会打到
   负载均衡后的某一个实例，那样就看不出「到底是哪一台没订阅上」。
 
+### 2.3 跨进程撤权演练脚本（第九轮新增）
+
+巡检（2.2 节）看的是「每个实例**订阅上**没有」；这一节是**端到端**的自证：
+「实例 A 撤权 → 实例 B 的缓存**立刻**失效」在**跨进程**下真的成立。
+
+```bash
+cd /home/kikun/MyProject/pkuim-alumni
+node infra/scripts/invalidation-bus-drill.mjs
+```
+
+- 默认会**自起两个 API 进程**（18181 / 18182）+ **一个对照实例**（18183，总线整条关闭）
+  → 需要先 `pnpm --filter @nmg/api build`（脚本跑的是 `apps/api/dist/main.js`）。
+- 对着**已经在跑**的实例演练（上线环境用）：
+
+```bash
+node infra/scripts/invalidation-bus-drill.mjs \
+  --base-a http://127.0.0.1:3001 --base-b http://127.0.0.1:3002
+```
+
+- 需要一个**超管**账号的凭据（`ADMIN_USERNAME` / `ADMIN_PASSWORD`，
+  默认 `admin` / `Admin@2026`，**仅限开发 / 测试库**）；
+  演练会新建一个 `drill-*` 靶子账号，结束时**复原角色并停用**。
+- 判定：实例 B 必须**立刻 403**（脚本会打印实测毫秒数）；
+  对照实例（总线关闭）在同一段时间里**仍然 200** —— 两项都满足才算通过。
+- ⚠️ 两个实例必须连**同一个 Redis**，否则总线不生效，结论必然是「不成立」。
+
+
 ---
 
 ## 3. 日志
