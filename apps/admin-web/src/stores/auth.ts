@@ -9,8 +9,12 @@ import { applyTokens, clearSession, persistSession, sessionState } from '@/api/s
  * 数据来源：docs/DATABASE-DESIGN.md「管理后台 RBAC」初始种子。
  * 仅在会话恢复时服务端未返回 permissions 的情况下用于界面兜底显示，
  * 真正的权限校验始终由服务端执行。
+ *
+ * ⚠️ 键集合是**开放**的（缺陷 #182）：角色是目录表，代码可能不在内置角色集合里
+ *    → 查不到时回退到空数组（服务端返回的 permissions 才是权威）。
+ *    `satisfies Record<AdminRole, AdminPermission[]>` 保证内置角色都有兜底矩阵。
  */
-export const ROLE_PERMISSIONS: Record<AdminRole, AdminPermission[]> = {
+export const ROLE_PERMISSIONS: Record<string, AdminPermission[] | undefined> = {
   super_admin: [
     'dashboard:view',
     'alumni:view',
@@ -29,7 +33,7 @@ export const ROLE_PERMISSIONS: Record<AdminRole, AdminPermission[]> = {
   resource_reviewer: ['resource:review', 'resource:manage', 'audit:view'],
   content_admin: ['content:manage', 'notification:broadcast', 'audit:view'],
   event_admin: ['event:manage', 'audit:view'],
-};
+} satisfies Record<AdminRole, AdminPermission[]>;
 
 // ⚠️ 中文名常量在 `./role-labels.ts`（**无依赖**的纯常量模块）里定义 ——
 //    放在这里会与 `api/mock.ts` 形成循环依赖，浏览器求值时撞 TDZ → 页面白屏。
@@ -39,7 +43,7 @@ export { PERMISSION_LABELS, ROLE_LABELS } from './role-labels';
 export const useAuthStore = defineStore('auth', () => {
   const admin = computed(() => sessionState.admin);
   const permissions = computed<AdminPermission[]>(() => sessionState.permissions);
-  const roles = computed<AdminRole[]>(() => sessionState.admin?.roles ?? []);
+  const roles = computed<string[]>(() => sessionState.admin?.roles ?? []);
   const stage = computed(() => sessionState.stage);
   const isAuthenticated = computed(() => Boolean(sessionState.accessToken));
   const displayName = computed(

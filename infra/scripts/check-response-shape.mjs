@@ -201,12 +201,37 @@ function parseFields(body) {
 
 const PRIMITIVES = new Set(['string', 'number', 'boolean', 'unknown', 'any', 'void', 'never', 'null', 'undefined', 'Date']);
 
-/** 按顶层 '|' 切分联合类型（忽略尖括号 / 括号内的竖线） */
+/**
+ * 按顶层 '|' 切分联合类型（忽略尖括号 / 括号内的竖线）。
+ *
+ * ⚠️ **空片段必须丢弃**（第三轮复核发现）：
+ * 联合类型常写成多行、且**首行就是一个 `|`**：
+ * ```ts
+ * export type AdminRole =
+ *   | 'super_admin'
+ *   | 'alumni_reviewer';
+ * ```
+ * 此时 `splitUnion` 的第一个片段是**空字符串**。
+ *
+ * 空片段不是「一个可以匹配任何值的分支」，而是被后续逻辑当成
+ * 「这个值符合空类型」→ **任何取值都判定为通过** ——
+ * 于是字面量联合（枚举）的取值校验**整体恒过**：
+ * 服务端返回 `status: 'totally_bogus_status'` 也不会报错。
+ *
+ * 丢弃空片段后，`isLiteralUnion` 才能认出这是字面量联合，
+ * 取值校验才真正生效（见 `selftest-inject-shape.mjs` 的
+ * `shape-bogus-enum-value` 用例：它必须让校验器失败）。
+ */
 function splitUnion(expr) {
   const parts = [];
   let depth = 0;
   let quote = null;
   let current = '';
+  const push = () => {
+    const trimmed = current.trim();
+    current = '';
+    if (trimmed) parts.push(trimmed);
+  };
   for (const ch of expr) {
     if (quote) {
       current += ch;
@@ -221,13 +246,12 @@ function splitUnion(expr) {
     if (ch === '<' || ch === '(' || ch === '{' || ch === '[') depth += 1;
     else if (ch === '>' || ch === ')' || ch === '}' || ch === ']') depth -= 1;
     if (ch === '|' && depth === 0) {
-      parts.push(current.trim());
-      current = '';
+      push();
       continue;
     }
     current += ch;
   }
-  if (current.trim()) parts.push(current.trim());
+  push();
   return parts;
 }
 
@@ -549,6 +573,18 @@ const CLIENTS = [
     pathsFile: path.join(ROOT, 'packages/contracts/src/api.ts'),
     typeFiles: [path.join(ROOT, 'packages/contracts/src/api.ts')],
     methods: ['apiGet'],
+    // ⚠️ 第三轮复核发现：管理后台这四个分页端点的**声明类型不在 `apiGet` 上**。
+    //
+    //   const raw = await apiGet<unknown>(ApiPaths.adminRoles, {...});
+    //   return readPageResult<AdminRoleDto>(raw, ApiPaths.adminRoles);
+    //
+    // `apiGet` 的泛型是 `unknown`（运行时结构校验由 `readPageResult` 负责），
+    // **真正的返回类型写在 `readPageResult` 的泛型上**。
+    //
+    // 只扫 `apiGet` 时，这四个端点的类型被记成 `unknown` → 校验器直接放行，
+    // **结构从未被校验过**（第三轮改的恰恰就是这四个端点）。
+    // 这里补扫包装器：泛型是**条目**类型，返回类型是 `PageResult<条目>`。
+    wrappers: [{ method: 'readPageResult', pathArg: 2, typeOf: (item) => `PageResult<${item}>` }],
   },
   {
     name: '小程序',
@@ -653,6 +689,32 @@ function scanCallSites() {
           });
         }
       }
+      // 包装器调用（类型声明在包装器的泛型上，路径在第 N 个实参上）
+      for (const wrapper of client.wrappers ?? []) {
+        const re = new RegExp(`\\b${wrapper.method}\\s*<`, 'g');
+        let match;
+        while ((match = re.exec(src)) !== null) {
+          const genericStart = match.index + match[0].length - 1;
+          const genericEnd = matchAngle(src, genericStart);
+          if (genericEnd < 0) continue;
+          const itemType = src.slice(genericStart + 1, genericEnd).trim();
+          if (!itemType) continue;
+          const arg = readNthArgument(src, genericEnd + 1, wrapper.pathArg);
+          if (!arg) continue;
+          const resolved = resolveCallPath(arg.expr, table);
+          if (!resolved || !resolved.path) continue;
+          calls.push({
+            client: client.name,
+            method: 'GET',
+            path: resolved.path,
+            pathKey: resolved.key,
+            hasParam: Boolean(resolved.hasParam),
+            typeExpr: wrapper.typeOf(itemType),
+            file: relative,
+            line: lineOf(src, match.index),
+          });
+        }
+      }
     }
   }
   return calls;
@@ -674,14 +736,26 @@ function matchAngle(src, openIndex) {
 
 /** 线性读取第一个实参（不触发灾难性回溯） */
 function readFirstArgument(src, index) {
+  return readNthArgument(src, index, 1);
+}
+
+/**
+ * 线性读取第 n 个实参（1 起）。
+ *
+ * 包装器调用的路径不在第一个实参上
+ * （`readPageResult<AdminRoleDto>(raw, ApiPaths.adminRoles)`），
+ * 所以要能按序号取。
+ */
+function readNthArgument(src, index, n) {
   let i = index;
   const isSpace = (ch) => ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r';
   while (i < src.length && isSpace(src[i])) i += 1;
   if (src[i] !== '(') return null;
   i += 1;
-  const start = i;
   let depth = 0;
   let quote = null;
+  let argStart = i;
+  let seen = 1;
   while (i < src.length) {
     const ch = src[i];
     if (quote) {
@@ -692,14 +766,20 @@ function readFirstArgument(src, index) {
     } else if (ch === '(' || ch === '[' || ch === '{') {
       depth += 1;
     } else if (ch === ')' || ch === ']' || ch === '}') {
-      if (depth === 0) break;
+      if (depth === 0) {
+        // 实参列表结束
+        if (seen !== n) return null;
+        return { expr: src.slice(argStart, i).trim(), end: i };
+      }
       depth -= 1;
     } else if (ch === ',' && depth === 0) {
-      break;
+      if (seen === n) return { expr: src.slice(argStart, i).trim(), end: i };
+      seen += 1;
+      argStart = i + 1;
     }
     i += 1;
   }
-  return { expr: src.slice(start, i).trim(), end: i };
+  return null;
 }
 
 /** 把调用实参还原成路径模板 */
@@ -854,6 +934,13 @@ async function main() {
     const bucket = call.hasParam ? paramTargets : listTargets;
     if (!bucket.has(key)) bucket.set(key, { ...call, typeExprs: new Set() });
     bucket.get(key).typeExprs.add(call.typeExpr);
+  }
+  // 同一个端点上「`unknown` + 真实类型」并存时，保留真实类型：
+  // `unknown` 不校验任何东西，留在报告里只会让人误以为「这个端点的声明类型是 unknown」。
+  for (const bucket of [listTargets, paramTargets]) {
+    for (const target of bucket.values()) {
+      if (target.typeExprs.size > 1) target.typeExprs.delete('unknown');
+    }
   }
 
   if (DEBUG_KEYS) {

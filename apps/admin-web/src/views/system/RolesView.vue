@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
-import type { AdminPermission, AdminPermissionDto, AdminRole, AdminRoleDto } from '@nmg/contracts';
+import type { AdminPermissionDto, AdminRoleDto } from '@nmg/contracts';
 import { fetchPermissions, fetchRoles } from '@/api/admin';
 import { errorMessage } from '@/api/http';
 import { PERMISSION_LABELS, ROLE_LABELS, ROLE_PERMISSIONS } from '@/stores/auth';
@@ -41,16 +41,16 @@ async function load(): Promise<void> {
   }
 }
 
-function roleLabel(role: AdminRole): string {
+function roleLabel(role: string): string {
   return ROLE_LABELS[role] || role;
 }
 
-function permissionLabel(code: AdminPermission): string {
+function permissionLabel(code: string): string {
   return PERMISSION_LABELS[code] || code;
 }
 
-function hasPermission(role: AdminRole, code: AdminPermission): boolean {
-  return (ROLE_PERMISSIONS[role] || []).includes(code);
+function hasPermission(role: string, code: string): boolean {
+  return (ROLE_PERMISSIONS[role] || []).some((item) => item === code);
 }
 
 onMounted(() => {

@@ -1,0 +1,28 @@
+{
+  "code": "OK",
+  "message": "success",
+  "data": {
+    "items": [
+      {
+        "id": 1,
+        "code": "dashboard:view",
+        "name": "夹具查看数据总览",
+        "description": "查看管理后台数据总览",
+        "createdAt": "2026-01-01T00:00:00.000Z"
+      },
+      {
+        "id": 2,
+        "code": "fixture:custom-permission",
+        "name": "夹具自定义权限点",
+        "description": "目录表里的非内置权限点代码",
+        "createdAt": "2026-01-01T00:00:00.000Z"
+      }
+    ],
+    "meta": {
+      "page": 1,
+      "pageSize": 20,
+      "total": 2,
+      "totalPages": 1
+    }
+  }
+}

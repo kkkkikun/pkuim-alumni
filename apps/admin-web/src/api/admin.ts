@@ -1,7 +1,6 @@
 import type {
   AdminActionLogDto,
   AdminPermissionDto,
-  AdminRole,
   AdminRoleDto,
   AdminStats,
   AdminUserDto,
@@ -111,7 +110,8 @@ export interface CreateAdminUserBody {
   username: string;
   displayName: string;
   password: string;
-  roles: AdminRole[];
+  /** 角色代码（角色是目录表 → 开放集合，见 KNOWN-ISSUES #182） */
+  roles: string[];
 }
 
 export type UpdateArticleBody = Partial<Omit<CreateArticleBody, 'status'>> & {

@@ -211,6 +211,14 @@ run_case "shape-missing-admin-name" "adminName"
 # 缺陷 #75：嵌套数组（证明材料）里的元素缺少契约声明的字段
 run_case "shape-nested-missing-field" "fileName"
 
+# 缺陷 #181：字面量联合的**取值**越界
+# （此前联合切分出的空片段让取值校验恒过 —— 护栏形同虚设）
+run_case "shape-bogus-enum-value" "totally_bogus_status"
+
+# 缺陷 #181：角色目录条目缺少字段
+# （此前第三轮端点被记成 unknown → 结构从未被校验）
+run_case "shape-missing-role-field" "缺失必填字段"
+
 # 只有部分条目的嵌套数组为空 → 元素结构**已被校验过** → **不得**报盲点（防假盲点）
 run_no_note_case() {
   local case_name="$1" case_copy
@@ -258,5 +266,5 @@ if [ "$FAILED" -ne 0 ]; then
   die "响应结构校验器反向验证失败 ❌"
 fi
 
-log "=== 反向验证通过 ✅（5 类结构缺陷全部被抓出 + 1 类盲点被报出，校验器非恒过）==="
+log "=== 反向验证通过 ✅（7 类结构缺陷全部被抓出 + 1 类盲点被报出，校验器非恒过）==="
 log "响应结构校验器反向验证通过 ✅"

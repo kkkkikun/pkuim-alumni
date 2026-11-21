@@ -533,7 +533,7 @@ export class AdminController {
     return paginate(
       rows.map((row) => ({
         id: row.id,
-        code: row.code as AdminPermission,
+        code: row.code,
         name: row.name,
         description: row.description,
         createdAt: row.createdAt,
@@ -547,14 +547,14 @@ export class AdminController {
   /** 角色目录条目（契约 `AdminRoleDto`） */
   private toRoleDto(row: Role): {
     id: number;
-    code: AdminRole;
+    code: string;
     name: string;
     description: string | null;
     createdAt: Date;
   } {
     return {
       id: row.id,
-      code: row.code as AdminRole,
+      code: row.code,
       name: row.name,
       description: row.description,
       createdAt: row.createdAt,

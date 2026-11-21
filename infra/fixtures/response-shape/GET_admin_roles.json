@@ -1,0 +1,28 @@
+{
+  "code": "OK",
+  "message": "success",
+  "data": {
+    "items": [
+      {
+        "id": 1,
+        "code": "super_admin",
+        "name": "夹具超级管理员",
+        "description": "拥有全部权限",
+        "createdAt": "2026-01-01T00:00:00.000Z"
+      },
+      {
+        "id": 2,
+        "code": "fixture_custom_role",
+        "name": "夹具自定义角色",
+        "description": "目录表里的非内置角色代码",
+        "createdAt": "2026-01-01T00:00:00.000Z"
+      }
+    ],
+    "meta": {
+      "page": 1,
+      "pageSize": 20,
+      "total": 2,
+      "totalPages": 1
+    }
+  }
+}

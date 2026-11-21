@@ -15,6 +15,8 @@
  *   shape-nested-missing-field 嵌套数组（证明材料）元素缺少字段（缺陷 #75）
  *   shape-nested-empty-array  嵌套数组全空 → 元素结构从未被校验（缺陷 #76 的盲点）
  *   shape-nested-sparse-array 只有部分条目数组为空 → **不得**报盲点（元素结构已被校验过）
+ *   shape-bogus-enum-value    字面量联合的取值越界（缺陷 #181：联合取值校验曾恒过）
+ *   shape-missing-role-field  角色目录条目缺少字段（缺陷 #181：第三轮端点结构曾从未被校验）
  *
  * 只改临时副本里的夹具文件，仓库里的基线夹具永远只读。
  */
@@ -168,6 +170,40 @@ switch (caseName) {
     }
     if (!touched.length) throw new Error('注入失败：没有找到带附件的夹具');
     console.log(`已注入：${touched.join('、')} 的所有附件数组被清空`);
+    break;
+  }
+  case 'shape-bogus-enum-value': {
+    // 缺陷 #181：字面量联合（枚举）的**取值**校验曾恒过 ——
+    // 契约里 `export type X = | 'a' | 'b'` 的写法让切分出的第一个片段是空串，
+    // 空片段「匹配任何取值」→ 任何取值都判过。
+    // 这里注入一个越界取值，校验器必须抓出来。
+    const name = 'GET_admin_verifications.json';
+    const body = read(name);
+    const data = dataOf(body);
+    const item = Array.isArray(data?.items) ? data.items[0] : null;
+    if (!item || typeof item.status !== 'string') {
+      console.error(`夹具 ${name} 的首个列表项没有 status 字段，无法注入`);
+      process.exit(2);
+    }
+    item.status = 'totally_bogus_status';
+    write(name, body);
+    console.log(`已注入：${name} 的首个列表项 status 改为越界取值`);
+    break;
+  }
+  case 'shape-missing-role-field': {
+    // 缺陷 #181：第三轮把 `GET /admin/roles` 改成了 `{items, meta}`，
+    // 但校验器把该端点记成 `unknown` → **结构从未被校验**。
+    // 这里删掉角色目录条目的必填字段，校验器必须抓出来。
+    const name = 'GET_admin_roles.json';
+    const body = read(name);
+    const data = dataOf(body);
+    if (!Array.isArray(data?.items) || data.items.length === 0) {
+      console.error(`夹具 ${name} 不是分页结构或没有条目，无法注入`);
+      process.exit(2);
+    }
+    delete data.items[0].code;
+    write(name, body);
+    console.log(`已注入：${name} 的首个角色目录条目缺少 code`);
     break;
   }
   default:
