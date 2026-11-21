@@ -1,39 +1,47 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue';
+import { onMounted, reactive, ref, watch } from 'vue';
 import { MessagePlugin } from '@/plugins/tdesign';
 import type { SystemSettingDto } from '@nmg/contracts';
 import { fetchSettings, upsertSetting } from '@/api/admin';
-import { errorMessage } from '@/api/http';
+import { usePagedList } from '@/composables/usePagedList';
 import { formatDateTime } from '@/utils/format';
 import PageHeader from '@/components/PageHeader.vue';
 import StateBox from '@/components/StateBox.vue';
+import PagerBar from '@/components/PagerBar.vue';
 import AppIcon from '@/components/AppIcon.vue';
 
-const settings = ref<SystemSettingDto[]>([]);
-const loading = ref(false);
-const error = ref<string | null>(null);
+// ⚠️ 第三轮：`GET /admin/settings` 改为分页结构（此前是无上限的全表返回）。
+//    此前页面硬编码 `page=1&pageSize=100` 且**不渲染分页控件** ——
+//    配置项超过 100 条时后面的行永远看不到（第四轮浏览器冒烟发现，缺陷 #183）。
+//    现在按仓库统一的分页约定（`usePagedList` + `PagerBar`）消费分页结构。
+const list = usePagedList<SystemSettingDto>((params) =>
+  fetchSettings({ page: params.page, pageSize: params.pageSize }),
+);
+
+const settings = list.items;
+const loading = list.loading;
+const error = list.error;
 const savingKey = ref<string | null>(null);
 
 const draft = reactive<Record<string, string>>({});
 const creating = ref(false);
 const newSetting = reactive({ key: '', value: '', description: '' });
 
-async function load(): Promise<void> {
-  loading.value = true;
-  error.value = null;
-  try {
-    // ⚠️ 第三轮：`GET /admin/settings` 改为分页结构（此前是无上限的全表返回）。
-    //    配置项表很小，这里一次取完（pageSize=100 是服务端上限）。
-    const page = await fetchSettings({ page: 1, pageSize: 100 });
-    settings.value = page.items;
-    settings.value.forEach((item) => {
+// 每页的配置项都可能是新的一批 → 换页时把草稿重建成本页的值，
+// 否则上一页的草稿会留在 `draft` 里串到下一页。
+watch(
+  () => list.items.value,
+  (items) => {
+    for (const key of Object.keys(draft)) delete draft[key];
+    items.forEach((item) => {
       draft[item.key] = item.value;
     });
-  } catch (e) {
-    error.value = errorMessage(e);
-  } finally {
-    loading.value = false;
-  }
+  },
+  { immediate: true },
+);
+
+async function load(): Promise<void> {
+  await list.load();
 }
 
 async function save(item: SystemSettingDto): Promise<void> {
@@ -143,6 +151,14 @@ onMounted(() => {
             </t-button>
           </template>
         </t-table>
+
+        <PagerBar
+          :page="list.page.value"
+          :page-size="list.pageSize.value"
+          :total="list.meta.value.total"
+          @update:page="list.changePage"
+          @update:page-size="list.changePageSize"
+        />
       </div>
     </StateBox>
 

@@ -232,6 +232,10 @@ services:
       RATE_LIMIT_DEFAULT: ${RATE_LIMIT_DEFAULT:-240}
       RATE_LIMIT_WRITE: ${RATE_LIMIT_WRITE:-30}
       RATE_LIMIT_AUTH: ${RATE_LIMIT_AUTH:-20}
+      # 进程内 TTL 缓存（docs/SECURITY.md 第 2.1 节）：默认 30 秒 / 60 秒，
+      # 服务端硬上限 60 秒 / 300 秒（写大了会被夹回上限），0 = 关闭对应缓存。
+      RBAC_CACHE_TTL_SECONDS: ${RBAC_CACHE_TTL_SECONDS:-30}
+      DICT_CACHE_TTL_SECONDS: ${DICT_CACHE_TTL_SECONDS:-60}
       DATABASE_URL: mysql://${MYSQL_USER:-nmg}:${MYSQL_PASSWORD:-CHANGE_ME_app}@mysql:3306/${MYSQL_DATABASE:-nmg_alumni}
       DB_HOST: mysql
       DB_PORT: "3306"

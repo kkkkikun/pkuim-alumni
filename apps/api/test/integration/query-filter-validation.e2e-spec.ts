@@ -1,7 +1,7 @@
 import request from 'supertest';
 import type { INestApplication } from '@nestjs/common';
 import type { DataSource } from 'typeorm';
-import { createTestApp, ensureAdmin, login, markVerified, resetDatabase } from '../helpers';
+import { BUILT_IN_ROLE_CODES, createTestApp, ensureAdmin, login, markVerified, resetDatabase } from '../helpers';
 
 /**
  * 状态筛选参数的枚举校验（e2e）。
@@ -30,11 +30,45 @@ describe('状态筛选枚举校验 (e2e)', () => {
   let app: INestApplication;
   let dataSource: DataSource;
 
+  /**
+   * 本套件创建的角色编码。
+   *
+   * ⚠️ `roles` 是**保留表**（`resetDatabase` 不清空），
+   *    本套件的角色编码（`q_*`）不在契约的 `AdminRole` 联合里 ——
+   *    残留会把角色目录撑成几十个编码，并让 `GET /admin/users`
+   *    回显出契约不认的角色编码 → 响应形状校验判负。
+   *    所以套件结束前必须把它们删掉。
+   */
+  const createdRoleCodes: string[] = [];
+
   beforeAll(async () => {
     ({ app, dataSource } = await createTestApp());
   });
 
   afterAll(async () => {
+    // ⚠️ 清理必须在 `app.close()` **之前**做：
+    //    `app.close()` 会连带销毁 TypeORM 的 DataSource，
+    //    之后再调 `dataSource.query()` 会直接抛「连接已关闭」，
+    //    异常又被下面的 catch 吞掉 → 角色编码永远删不掉。
+    try {
+      for (const code of createdRoleCodes) {
+        // ⚠️ 内置角色编码（契约 `AdminRole` 联合类型里的那 5 个）**绝不删除**。
+        if (BUILT_IN_ROLE_CODES.has(code)) continue;
+        // ⚠️ `role_permissions` / `admin_user_roles` 指向 `roles` 的外键虽是
+        //    ON DELETE CASCADE，但这里**显式**先删子表 —— 清理不依赖库的级联行为。
+        await dataSource.query(
+          `DELETE FROM role_permissions WHERE role_id IN (SELECT id FROM roles WHERE code = ?)`,
+          [code],
+        );
+        await dataSource.query(
+          'DELETE FROM admin_user_roles WHERE role_id IN (SELECT id FROM roles WHERE code = ?)',
+          [code],
+        );
+        await dataSource.query('DELETE FROM roles WHERE code = ?', [code]);
+      }
+    } catch {
+      // 清理失败不影响测试结论（测试库每轮都会重建）
+    }
     await app?.close();
   });
 
@@ -48,6 +82,9 @@ describe('状态筛选枚举校验 (e2e)', () => {
     roleCode: string,
     username: string,
   ): Promise<string> {
+    // ⚠️ 角色编码在这里被真正建出来（`ensureAdmin` 会 INSERT `roles`），
+    //    所以必须**在建的地方**登记，套件结束才能把它删掉。
+    if (!createdRoleCodes.includes(roleCode)) createdRoleCodes.push(roleCode);
     await ensureAdmin(dataSource, { roleCode, permissionCode, username });
     const response = await request(app.getHttpServer())
       .post(`${API}/auth/admin/login`)

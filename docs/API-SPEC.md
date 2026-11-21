@@ -18,10 +18,22 @@
 
 - 角色 / 权限点 / 设置项的**条目结构**此前契约写窄了（写成 `AdminRole[]` 等代码联合类型，
   实际返回的是目录整行）。第三轮起契约写清楚：`AdminRoleDto` / `AdminPermissionDto` / `SystemSettingDto`。
+- **第四轮**把角色 / 权限点的**代码**字段也放宽了（`docs/KNOWN-ISSUES.md` #182）：
+  `roles.code` / `permissions.code` 在库里是 `VARCHAR` **自由文本列**（目录表），
+  服务端按库里实际代码返回，服务端自己的入参 DTO 也是 `roles?: string[]`（比契约更宽）——
+  契约却写成封闭联合 `AdminRole`，**比实现窄**。
+  故 `AdminRoleDto.code` / `AdminPermissionDto.code` / `AdminUserDto.roles` /
+  `UpdateAdminUserBody.roles` 改为 `string` / `string[]`。
+  `AdminRole` / `AdminPermission` 两个联合**保留** —— 它们描述的是「系统内置的那几个」，
+  由 RBAC 三方对账（契约联合 ≡ 种子角色 ≡ 前端矩阵）保证不会漂移。
+  ⚠️ 这**不是**放宽校验：值域校验仍由「内置目录一致性」那一层负责。
 - `viewCount` 的**一致性口径**由「即时一致」改为**最终一致**：
   详情接口返回的值 = 库里的基线值 + 尚未落库的增量（用户看到的数字当场就是对的），
   但数据库行里的 `view_count` 可能滞后最多一个刷回周期（60 秒）。
   详见 `docs/SECURITY.md` 第 2.2 节。
+
+> **发布顺序**：上表这些改动要求**服务端与两端客户端同一发布窗口上线**
+> （逐端点的两个方向破坏形态、发布前核对清单与回滚说明见 `docs/RELEASE-ORDER.md`）。
 
 ## 通用约定
 

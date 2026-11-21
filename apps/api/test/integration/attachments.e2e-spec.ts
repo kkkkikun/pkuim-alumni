@@ -1,7 +1,7 @@
 import request from 'supertest';
 import type { INestApplication } from '@nestjs/common';
 import type { DataSource } from 'typeorm';
-import { createTestApp, ensureAdmin, login, markVerified, resetDatabase } from '../helpers';
+import { BUILT_IN_ROLE_CODES, createTestApp, ensureAdmin, login, markVerified, resetDatabase } from '../helpers';
 
 /**
  * 附件链路（资源 / 认证）端到端测试。
@@ -34,11 +34,73 @@ describe('附件链路 (e2e)', () => {
   let app: INestApplication;
   let dataSource: DataSource;
 
+  /**
+   * 本套件创建的角色编码。
+   *
+   * ⚠️ `roles` 是**保留表**（`resetDatabase` 不清空），
+   *    本套件的角色编码（`attachment_reviewer` / `attachment_other` /
+   *    `attachment_no_res`）不在契约的 `AdminRole` 联合里 ——
+   *    残留会把角色目录撑成几十个编码，并让 `GET /admin/users`
+   *    回显出契约不认的角色编码 → 响应形状校验判负。
+   *    所以套件结束前必须把它们删掉。
+   */
+  const createdRoleCodes: string[] = [];
+
+  /**
+   * 本套件创建的管理员账号。
+   *
+   * ⚠️ `admin_users` 是**保留表**（`resetDatabase` 不清空），
+   *    不清理的话这些账号会跨套件、跨运行一直留在库里。
+   */
+  const createdUsernames: string[] = [];
+
   beforeAll(async () => {
     ({ app, dataSource } = await createTestApp());
   });
 
   afterAll(async () => {
+    // ⚠️ 清理必须在 `app.close()` **之前**做：
+    //    `app.close()` 会连带销毁 TypeORM 的 DataSource，
+    //    之后再调 `dataSource.query()` 会直接抛「连接已关闭」，
+    //    异常又被下面的 catch 吞掉 → 角色编码永远删不掉。
+    try {
+      // 先删本套件建的管理员账号（审计日志外键是 ON DELETE RESTRICT，
+      // 必须先删它自己产生的审计记录，否则删账号会被数据库拒绝）。
+      if (createdUsernames.length) {
+        const placeholders = createdUsernames.map(() => '?').join(',');
+        await dataSource.query(
+          `DELETE FROM admin_action_logs WHERE admin_id IN
+             (SELECT id FROM admin_users WHERE username IN (${placeholders}))`,
+          createdUsernames,
+        );
+        await dataSource.query(
+          `DELETE FROM admin_user_roles WHERE admin_user_id IN
+             (SELECT id FROM admin_users WHERE username IN (${placeholders}))`,
+          createdUsernames,
+        );
+        await dataSource.query(
+          `DELETE FROM admin_users WHERE username IN (${placeholders})`,
+          createdUsernames,
+        );
+      }
+      for (const code of createdRoleCodes) {
+        // ⚠️ 内置角色编码（契约 `AdminRole` 联合类型里的那 5 个）**绝不删除**。
+        if (BUILT_IN_ROLE_CODES.has(code)) continue;
+        // ⚠️ `role_permissions` / `admin_user_roles` 指向 `roles` 的外键虽是
+        //    ON DELETE CASCADE，但这里**显式**先删子表 —— 清理不依赖库的级联行为。
+        await dataSource.query(
+          `DELETE FROM role_permissions WHERE role_id IN (SELECT id FROM roles WHERE code = ?)`,
+          [code],
+        );
+        await dataSource.query(
+          'DELETE FROM admin_user_roles WHERE role_id IN (SELECT id FROM roles WHERE code = ?)',
+          [code],
+        );
+        await dataSource.query('DELETE FROM roles WHERE code = ?', [code]);
+      }
+    } catch {
+      // 清理失败不影响测试结论（测试库每轮都会重建）
+    }
     await app?.close();
   });
 
@@ -65,12 +127,27 @@ describe('附件链路 (e2e)', () => {
   async function adminToken(
     permissionCode: string,
     roleCode = 'attachment_reviewer',
-    username = 'admin-test',
+    username?: string,
   ): Promise<string> {
-    await ensureAdmin(dataSource, { roleCode, permissionCode, username });
+    // ⚠️ 角色编码在这里被真正建出来（`ensureAdmin` 会 INSERT `roles`），
+    //    所以必须**在建的地方**登记，套件结束才能把它删掉。
+    if (!createdRoleCodes.includes(roleCode)) createdRoleCodes.push(roleCode);
+    // ⚠️ **管理员账号必须按角色区分**（缺陷 #158 同一族，第四轮复核发现）：
+    //    管理端的 RBAC 身份是**按管理员 id 缓存**的（`CacheKeys.adminRbac`，
+    //    TTL ≤30 秒），而 `ensureAdmin` 是**直接写库**、绕过了 API ——
+    //    写完角色**不会**让缓存失效。
+    //    所以同一个管理员先后挂上不同角色时，**先登录那次的缓存会被后续沿用**：
+    //    拿到的令牌带着**旧角色的权限点** → 明明该有的权限没有 → 403。
+    //    在**干净库**上（CI 每次都是干净库）必然踩到；
+    //    在跑脏的库上旧角色早就攒下了那个权限 → 反而通过 —— 这类
+    //    「单独跑绿、连跑红 / 干净库红、脏库绿」的偶发失败最难查。
+    //    修法：**一个角色一个管理员账号**，各���的缓存条目互不干扰。
+    const account = username ?? `admin_${roleCode}`;
+    if (!createdUsernames.includes(account)) createdUsernames.push(account);
+    await ensureAdmin(dataSource, { roleCode, permissionCode, username: account });
     const response = await request(app.getHttpServer())
       .post(`${API}/auth/admin/login`)
-      .send({ username, password: ADMIN_PASSWORD })
+      .send({ username: account, password: ADMIN_PASSWORD })
       .expect(200);
     return response.body.data.accessToken as string;
   }
@@ -302,7 +379,7 @@ describe('附件链路 (e2e)', () => {
       .expect(200);
 
     // 无关的管理员（有别的权限点）不能取别人的证明材料
-    const otherAdmin = await adminToken('resource:review', 'attachment_other', 'admin-other');
+    const otherAdmin = await adminToken('resource:review', 'attachment_other');
     await request(app.getHttpServer())
       .get(`${API}/admin/verifications/${applicationId}/attachments/${asset}/url`)
       .set('Authorization', `Bearer ${otherAdmin}`)
@@ -326,7 +403,15 @@ describe('附件链路 (e2e)', () => {
     const postId = created.body.data.id as number;
 
     // 审核员：凭 resource:review 权限 + 「附件确实挂在该资源上」→ 能取到地址
-    const token = await adminToken('resource:review');
+    //
+    // ⚠️ 这里**必须用自己的角色**（`attachment_resource`），不能沿用默认的
+    //    `attachment_reviewer`：默认角色在本套件里被 `verification:review` 用过，
+    //    而 `ensureAdmin` 是 `INSERT IGNORE` —— 角色与权限点是**多对多**，
+    //    同一个角色先后拿到哪个权限，取决于**哪个用例先跑**。
+    //    在**干净库**上（CI 每次都是干净库）默认角色只有 `verification:review`，
+    //    本用例就 403；而在跑脏的库上它早已攒下 `resource:review` → 反而通过。
+    //    这正是「单独跑绿、连跑红」那一类偶发失败的根源（缺陷 #158 同一族）。
+    const token = await adminToken('resource:review', 'attachment_resource');
     const asAdmin = await request(app.getHttpServer())
       .get(`${API}/admin/resources/${postId}/attachments/${asset}/url`)
       .set('Authorization', `Bearer ${token}`)
@@ -354,7 +439,7 @@ describe('附件链路 (e2e)', () => {
       .expect(404);
 
     // 没有 resource:review 权限的管理员 → 403
-    const otherAdmin = await adminToken('verification:review', 'attachment_no_res', 'admin-no-res');
+    const otherAdmin = await adminToken('verification:review', 'attachment_no_res');
     await request(app.getHttpServer())
       .get(`${API}/admin/resources/${postId}/attachments/${asset}/url`)
       .set('Authorization', `Bearer ${otherAdmin}`)

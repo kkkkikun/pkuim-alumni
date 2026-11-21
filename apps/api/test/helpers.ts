@@ -325,6 +325,25 @@ export const DICT = {
 } as const;
 
 /**
+ * 契约里的 **5 个内置角色编码**（`packages/contracts` 的 `AdminRole` 联合类型）。
+ *
+ * ⚠️ `roles` 是**保留表**（`resetDatabase` 不清空），测试夹具造出来的角色编码
+ *    会跨套件、跨轮次一直留在库里 → 角色目录被撑到几十上百个编码。
+ *    而 `GET /admin/users` 的响应会回显管理员实际持有的角色编码，
+ *    契约只认下面这 5 个 —— 残留的夹具角色会让**响应形状校验**直接判负。
+ *
+ *    所以测试套件在 `afterAll` 里清理自己造出来的角色编码时，
+ *    **必须先排除下面这 5 个**（它们由 seed 灌入，是产品的固定基座）。
+ */
+export const BUILT_IN_ROLE_CODES: ReadonlySet<string> = new Set([
+  'super_admin',
+  'alumni_reviewer',
+  'resource_reviewer',
+  'content_admin',
+  'event_admin',
+]);
+
+/**
  * 幂等创建测试管理员（含角色与权限），可重复调用。
  * 供需要管理员身份的用例（资源审核 / 认证审核）使用。
  */

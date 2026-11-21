@@ -6,7 +6,6 @@ import type { PageResult } from './common';
 import type {
   AdminLoginResult,
   AdminPermissionDto,
-  AdminRole,
   AdminRoleDto,
   AdminStats,
   AlumniStage,
@@ -317,7 +316,14 @@ export interface UpdateUserStatusBody {
 
 export interface UpdateAdminUserBody {
   displayName?: string;
-  roles?: AdminRole[];
+  /**
+   * 要授予该管理员的角色代码。
+   *
+   * ⚠️ 是 `string[]` 而不是 `AdminRole[]`（缺陷 #182）：角色是目录表
+   * （`roles.code` 是自由文本列），服务端按角色代码链接；
+   * `AdminRole` 描述的是「系统内置的那几个角色」，不是可授予的完整集合。
+   */
+  roles?: string[];
   status?: 'active' | 'disabled';
   password?: string;
 }

@@ -1,7 +1,7 @@
 {
   "base": "synthetic://fixtures",
   "recordedAt": "2026-01-01T00:00:00.000Z",
-  "note": "合成夹具，仅用于响应结构校验器的反向验证与「元素结构从未被校验」盲点的闭合；不含任何业务数据。附件 / 审核记录 / 报名列表等嵌套数组一律带齐元素，以便契约声明的元素结构真正被校验到。",
+  "note": "合成夹具，仅用于响应结构校验器的反向验证与「元素结构从未被校验」盲点的闭合；不含任何业务数据。附件 / 审核记录 / 报名列表等嵌套数组一律带齐元素，以便契约声明的元素结构真正被校验到。角色 / 权限点目录夹具里**故意放了非内置代码**（目录表的代码是开放集合，见 KNOWN-ISSUES #182），用来证明「开放集合」在契约里是真的按开放集合校验的。",
   "endpoints": [
     "GET /admin/users",
     "GET /admin/articles",
@@ -13,6 +13,9 @@
     "GET /admin/resources/${id}",
     "GET /admin/alumni/${id}",
     "GET /admin/events/${id}/registrations",
-    "GET /admin/verifications/${id}"
+    "GET /admin/verifications/${id}",
+    "GET /admin/roles",
+    "GET /admin/permissions",
+    "GET /admin/settings"
   ]
 }

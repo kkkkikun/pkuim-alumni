@@ -1,0 +1,303 @@
+{
+  "base": "http://127.0.0.1:4175",
+  "login": {
+    "ok": true,
+    "error": null,
+    "landedOn": "http://127.0.0.1:4175/#/dashboard"
+  },
+  "routes": [
+    {
+      "path": "/dashboard",
+      "name": "总览",
+      "status": "ok",
+      "note": null,
+      "newIssues": 0,
+      "columnReport": null
+    },
+    {
+      "path": "/alumni",
+      "name": "校友管理",
+      "status": "ok",
+      "note": null,
+      "newIssues": 0,
+      "columnReport": [
+        {
+          "column": "账号状态",
+          "found": true,
+          "rows": 20,
+          "nonEmpty": 20
+        },
+        {
+          "column": "认证状态",
+          "found": true,
+          "rows": 20,
+          "nonEmpty": 20
+        }
+      ]
+    },
+    {
+      "path": "/verification",
+      "name": "认证审核",
+      "status": "ok",
+      "note": null,
+      "newIssues": 0,
+      "columnReport": [
+        {
+          "column": "申请人",
+          "found": true,
+          "rows": 20,
+          "nonEmpty": 20
+        }
+      ]
+    },
+    {
+      "path": "/resource",
+      "name": "资源审核",
+      "status": "ok",
+      "note": "页面没有表格（空表 / 空状态），跳过列内容断言",
+      "newIssues": 0,
+      "columnReport": []
+    },
+    {
+      "path": "/events",
+      "name": "活动管理",
+      "status": "ok",
+      "note": null,
+      "newIssues": 0,
+      "columnReport": [
+        {
+          "column": "活动名称",
+          "found": true,
+          "rows": 5,
+          "nonEmpty": 5
+        }
+      ]
+    },
+    {
+      "path": "/articles",
+      "name": "资讯管理",
+      "status": "ok",
+      "note": null,
+      "newIssues": 0,
+      "columnReport": [
+        {
+          "column": "标题",
+          "found": true,
+          "rows": 8,
+          "nonEmpty": 8
+        }
+      ]
+    },
+    {
+      "path": "/notices",
+      "name": "公告管理",
+      "status": "ok",
+      "note": null,
+      "newIssues": 0,
+      "columnReport": [
+        {
+          "column": "标题",
+          "found": true,
+          "rows": 4,
+          "nonEmpty": 4
+        }
+      ]
+    },
+    {
+      "path": "/system/admins",
+      "name": "管理员账号",
+      "status": "ok",
+      "note": null,
+      "newIssues": 0,
+      "columnReport": [
+        {
+          "column": "账号",
+          "found": true,
+          "rows": 1,
+          "nonEmpty": 1
+        },
+        {
+          "column": "角色",
+          "found": true,
+          "rows": 1,
+          "nonEmpty": 1
+        }
+      ]
+    },
+    {
+      "path": "/system/roles",
+      "name": "角色权限",
+      "status": "ok",
+      "note": null,
+      "newIssues": 0,
+      "columnReport": [
+        {
+          "column": "角色",
+          "found": true,
+          "rows": 5,
+          "nonEmpty": 5
+        }
+      ]
+    },
+    {
+      "path": "/system/dictionary",
+      "name": "字典管理",
+      "status": "ok",
+      "note": null,
+      "newIssues": 0,
+      "columnReport": [
+        {
+          "column": "名称",
+          "found": true,
+          "rows": 13,
+          "nonEmpty": 13
+        }
+      ]
+    },
+    {
+      "path": "/system/logs",
+      "name": "审计日志",
+      "status": "ok",
+      "note": "页面没有表格（空表 / 空状态），跳过列内容断言",
+      "newIssues": 0,
+      "columnReport": []
+    },
+    {
+      "path": "/system/settings",
+      "name": "系统设置",
+      "status": "ok",
+      "note": null,
+      "newIssues": 0,
+      "columnReport": [
+        {
+          "column": "配置项",
+          "found": true,
+          "rows": 3,
+          "nonEmpty": 3
+        }
+      ]
+    },
+    {
+      "path": "/events/new",
+      "name": "新建活动",
+      "status": "ok",
+      "note": null,
+      "newIssues": 0,
+      "columnReport": null
+    }
+  ],
+  "checks": [
+    {
+      "area": "活动管理 → 报名名单抽屉分页",
+      "route": "/events",
+      "status": "pass",
+      "note": "抽屉已打开（报名名单 · 【虚构】通辽校友讲堂（草稿）），报名 5 行，分页控件存在（共 5 条数据 1）",
+      "details": {
+        "targetRow": {
+          "index": 0,
+          "cell": "5/20"
+        },
+        "found": true,
+        "header": "报名名单 · 【虚构】通辽校友讲堂（草稿）",
+        "rowCount": 5,
+        "sample": [
+          [
+            "校友0017",
+            "17",
+            "已报名",
+            "【虚构测试数据】预置报名记录。",
+            "2026-11-21 06:07"
+          ],
+          [
+            "校友0018",
+            "18",
+            "已报名",
+            "【虚构测试数据】预置报名记录。",
+            "2026-11-21 06:07"
+          ],
+          [
+            "校友0019",
+            "19",
+            "已报名",
+            "【虚构测试数据】预置报名记录。",
+            "2026-11-21 06:07"
+          ]
+        ],
+        "pagination": true,
+        "pagerText": "共 5 条数据 1"
+      }
+    },
+    {
+      "area": "角色权限页的目录条目结构",
+      "route": "/system/roles",
+      "status": "pass",
+      "note": "角色目录 5 行（接口 5 条）：名称化 5 行 / 裸代码 0 行，无 undefined/[object Object]",
+      "details": {
+        "catalogueRows": 5,
+        "renderedRoleRows": 5,
+        "labelledRows": 5,
+        "bareCodeRows": 0,
+        "roleCellSample": [
+          "超级管理员",
+          "校友审核员",
+          "资源审核员",
+          "内容管理员",
+          "活动管理员"
+        ],
+        "badCells": [],
+        "badLiteralOnPage": false
+      }
+    },
+    {
+      "area": "系统设置分页",
+      "route": "/system/settings",
+      "status": "pass",
+      "note": "设置表 3 行（接口 meta.total=3），分页控件存在（共 3 条数据 1）",
+      "details": {
+        "rows": 3,
+        "headers": [
+          "配置项",
+          "值",
+          "说明",
+          "更新时间",
+          "操作"
+        ],
+        "pagination": true,
+        "pagerBar": true,
+        "pagerText": "共 3 条数据 1",
+        "apiMeta": {
+          "page": 1,
+          "pageSize": 100,
+          "total": 3,
+          "totalPages": 1
+        }
+      }
+    },
+    {
+      "area": "资讯/公告列表的正文完整性",
+      "routes": [
+        "/articles",
+        "/notices"
+      ],
+      "status": "pass",
+      "note": "资讯正文长度 8:32,7:32,6:32,5:32,4:32,3:32,2:32,1:32；公告正文长度 4:18,3:18,2:18,1:18；均 ≤200 且与详情接口一致（未截断）",
+      "details": {
+        "articleCount": 8,
+        "noticeCount": 4,
+        "articleBodyLengths": "8:32,7:32,6:32,5:32,4:32,3:32,2:32,1:32",
+        "noticeBodyLengths": "4:18,3:18,2:18,1:18",
+        "maxArticleBodyLength": 32,
+        "maxNoticeBodyLength": 18,
+        "over200": 0,
+        "truncated": []
+      }
+    }
+  ],
+  "consoleErrors": [],
+  "failedRequests": [],
+  "pageErrors": [],
+  "forbiddenPage": {
+    "reachable": true,
+    "textLen": 521
+  }
+}

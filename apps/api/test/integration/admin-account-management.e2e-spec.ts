@@ -1,7 +1,7 @@
 import request from 'supertest';
 import type { INestApplication } from '@nestjs/common';
 import type { DataSource } from 'typeorm';
-import { createTestApp, ensureAdmin, login, resetDatabase } from '../helpers';
+import { BUILT_IN_ROLE_CODES, createTestApp, ensureAdmin, login, resetDatabase } from '../helpers';
 import { AdminUsersController } from '../../src/modules/admin/admin-users.controller';
 
 /**
@@ -49,10 +49,15 @@ describe('管理端账号与角色的写入完整性 (e2e)', () => {
   });
 
   afterAll(async () => {
-    await app?.close();
     // ⚠️ `admin_users` / `roles` 属**保留表**（resetDatabase 不清空），
     // 不清理的话本套件创建的管理员会挤进其它套件的分页里
     // （本轮就因此把 admin-content 用例的「第一页含 admin-test」假设挤破了）。
+    //
+    // ⚠️ 清理必须在 `app.close()` **之前**做：
+    //    `app.close()` 会连带销毁 TypeORM 的 DataSource，
+    //    之后再调 `dataSource.query()` 会直接抛「连接已关闭」，
+    //    而下面这个 catch 会把异常**静默吞掉** → 角色编码永远删不掉，
+    //    残留在库里被后续套件（以及响应形状校验）当成真角色看待。
     try {
       if (createdUsernames.length) {
         const placeholders = createdUsernames.map(() => '?').join(',');
@@ -74,8 +79,17 @@ describe('管理端账号与角色的写入完整性 (e2e)', () => {
         );
       }
       for (const code of createdRoleCodes) {
+        // ⚠️ 内置角色编码（契约 `AdminRole` 联合类型里的那 5 个）**绝不删除**。
+        if (BUILT_IN_ROLE_CODES.has(code)) continue;
+        // ⚠️ `role_permissions` / `admin_user_roles` 指向 `roles` 的外键虽是
+        //    ON DELETE CASCADE，但这里**显式**先删子表 —— 清理不依赖库的级联行为，
+        //    换库换版本也不会把删除卡住。
         await dataSource.query(
           `DELETE FROM role_permissions WHERE role_id IN (SELECT id FROM roles WHERE code = ?)`,
+          [code],
+        );
+        await dataSource.query(
+          'DELETE FROM admin_user_roles WHERE role_id IN (SELECT id FROM roles WHERE code = ?)',
           [code],
         );
         await dataSource.query('DELETE FROM roles WHERE code = ?', [code]);
@@ -83,6 +97,7 @@ describe('管理端账号与角色的写入完整性 (e2e)', () => {
     } catch {
       // 清理失败不影响测试结论（测试库每轮都会重建）
     }
+    await app?.close();
   });
 
   beforeEach(async () => {

@@ -20,17 +20,28 @@
  */
 import type { AdminPermission, AdminRole } from '@nmg/contracts';
 
-/** 角色 → 中文名 */
-export const ROLE_LABELS: Record<AdminRole, string> = {
+/**
+ * 角色代码 → 中文名。
+ *
+ * ⚠️ 键集合是**开放**的（缺陷 #182）：角色是**目录表**
+ *    （`roles.code` 是 `VARCHAR(32)` 自由文本列，服务端按库里的实际代码返回），
+ *    所以代码可能不在内置角色集合里 → 查不到时**回退到代码本身**。
+ *
+ * `satisfies Record<AdminRole, string>` 仍然在**编译期**保证
+ * 「内置的每个角色都有中文名」——内置角色 ↔ 标签的对应关系不会漏。
+ */
+export const ROLE_LABELS: Record<string, string | undefined> = {
   super_admin: '超级管理员',
   alumni_reviewer: '校友审核员',
   content_admin: '内容管理员',
   event_admin: '活动管理员',
   resource_reviewer: '资源审核员',
-};
+} satisfies Record<AdminRole, string>;
 
-/** 权限点 → 中文名 */
-export const PERMISSION_LABELS: Record<AdminPermission, string> = {
+/**
+ * 权限点代码 → 中文名。同上：权限点也是目录表（`permissions.code` 是 `VARCHAR(64)`）。
+ */
+export const PERMISSION_LABELS: Record<string, string | undefined> = {
   'dashboard:view': '查看数据总览',
   'alumni:view': '查看校友列表',
   'alumni:manage': '管理校友资料与账号状态',
@@ -43,4 +54,4 @@ export const PERMISSION_LABELS: Record<AdminPermission, string> = {
   'admin:manage': '管理员与角色管理',
   'audit:view': '查看操作日志',
   'settings:manage': '系统设置与字典维护',
-};
+} satisfies Record<AdminPermission, string>;

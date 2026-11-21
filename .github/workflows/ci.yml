@@ -220,6 +220,21 @@ jobs:
           # 迁移清单与目录是否一致（迁移漏提交 → 上线时才炸）
           bash infra/scripts/check-pending-migrations.sh --static-only
 
+      # 校验器自己的**反向验证**（第四轮新增）：
+      #   校验器恒过的话，这一层就形同虚设。
+      #   第四轮发现响应结构校验器的「字面量联合取值校验」恒过、
+      #   且第三轮改的四个端点因类型记成 `unknown` 而**从未被校验**（缺陷 #181）
+      #   —— 这类问题只有反向验证能暴露，所以把它接进 CI。
+      #   ⚠️ 只接**不依赖业务库 / .env.prod** 的那几个：
+      #   `check-test-isolation-selftest.sh` 需要 `.env.prod` 与真实数据库，
+      #   在 CI 里跑不起来（它自己的基线就过不了），故不接入。
+      - name: Checker reverse verification (selftests)
+        run: |
+          set -euo pipefail
+          bash infra/scripts/check-response-shape-selftest.sh
+          bash infra/scripts/check-enum-consistency-selftest.sh
+          bash infra/scripts/check-request-dto-selftest.sh
+
       # 依赖**跑着的 API**的那批契约校验（第三轮）。
       #
       # 这些脚本要拿真实的 Swagger 文档与真实响应体，
@@ -250,13 +265,32 @@ jobs:
           #    **不在**全局前缀 `/api/v1` 之下 —— 所以是 `/docs-json` 而不是 `/api/v1/docs-json`。
           SWAGGER=http://127.0.0.1:18099/docs-json
           BASE=http://127.0.0.1:18099/api/v1
+
+          # ⚠️ 取一个**普通校友**的令牌（第四轮新增）：
+          #    响应结构校验要覆盖「用户身份」的端点（`/me/summary` 等），
+          #    只带管理员令牌的话这些端点一律 401 → **直接被跳过**（等于没校验）。
+          #    CI 的 AUTH_MODE=both，Mock 登录可用；种子里的压测账号
+          #    `mock_k6_alumni_001`（openid）与 Mock 登录的 code 一一对应
+          #    （code `k6_alumni_001` → openid `mock_k6_alumni_001`）。
+          USER_TOKEN="$(
+            curl -sf -X POST "$BASE/auth/mock/login" \
+              -H 'Content-Type: application/json' \
+              -d '{"code":"k6_alumni_001"}' \
+            | node -e 'let s="";process.stdin.on("data",(d)=>s+=d).on("end",()=>{const p=JSON.parse(s);process.stdout.write(p?.data?.accessToken ?? "")})'
+          )"
+          if [ -z "$USER_TOKEN" ]; then
+            echo "::error::取普通校友令牌失败 —— 用户身份的端点将全部被跳过（等于没校验）"
+            exit 1
+          fi
+          echo "已取普通校友令牌"
+
           node infra/scripts/check-contract-routes.mjs --swagger "$SWAGGER"
           node infra/scripts/check-client-paths.mjs --swagger "$SWAGGER"
           node infra/scripts/check-api-spec-doc.mjs --swagger "$SWAGGER"
           node infra/scripts/check-spec-coverage.mjs --swagger "$SWAGGER"
           node infra/scripts/check-request-contract.mjs --swagger "$SWAGGER"
           # 真实响应体 vs 客户端声明的返回类型（契约与实现对不上的最后一道防线）
-          node infra/scripts/check-response-shape.mjs --base "$BASE"
+          node infra/scripts/check-response-shape.mjs --base "$BASE" --user-token "$USER_TOKEN"
 
       - name: Stop the API used for contract checks
         if: always()

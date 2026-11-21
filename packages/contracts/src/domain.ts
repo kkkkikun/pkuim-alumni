@@ -77,15 +77,21 @@ export type AdminPermission =
  * 管理端**角色目录条目**（`GET /admin/roles` 的一行）。
  *
  * ⚠️ 与上面的 `AdminRole`（角色**代码**联合类型）不是一回事：
- *    `AdminRole` 是「某个管理员拥有哪些角色」的**代码**投影（`AdminUserDto.roles`），
- *    而这里是角色目录的**整行**（含 id / 名称 / 描述 / 创建时间）。
+ *    `AdminRole` 是「系统内置的那几个角色」的**代码**集合，
+ *    而这里是**目录表的一整行**（含 id / 名称 / 描述 / 创建时间）。
  *    此前该端点直接返回数据库实体，契约却写成 `AdminRole[]` ——
  *    契约比实现窄（见 docs/KNOWN-ISSUES.md #38 那一类漂移）。
  *    第三轮起该端点改为 `{items, meta}`，这里把真实结构写清楚。
+ *
+ * ⚠️ `code` 是 **`string` 而不是 `AdminRole`**（缺陷 #182）：
+ *    `roles.code` 在库里是 `VARCHAR(32)` **自由文本列**（目录表，可扩展），
+ *    服务端也是按库里的实际代码返回的；`AdminRole` 只描述「内置角色」
+ *    （由 `check-rbac-matrix.mjs` 对账：契约联合 ≡ 种子角色 ≡ 前端矩阵）。
+ *    写死成封闭联合 → 服务端一旦返回目录里的别的代码，契约就是错的。
  */
 export interface AdminRoleDto {
   id: number;
-  code: AdminRole;
+  code: string;
   name: string;
   description: string | null;
   createdAt: string;
@@ -93,11 +99,11 @@ export interface AdminRoleDto {
 
 /**
  * 管理端**权限点目录条目**（`GET /admin/permissions` 的一行）。
- * 同上：与 `AdminPermission`（权限**代码**联合类型）不是一回事。
+ * 同上：`permissions.code` 也是 `VARCHAR(64)` 自由文本列，代码是开放集合。
  */
 export interface AdminPermissionDto {
   id: number;
-  code: AdminPermission;
+  code: string;
   name: string;
   description: string | null;
   createdAt: string;
@@ -188,7 +194,15 @@ export interface AdminUserDto {
   id: number;
   username: string;
   displayName: string;
-  roles: AdminRole[];
+  /**
+   * 该管理员**实际持有**的角色代码。
+   *
+   * ⚠️ 是 `string[]` 而不是 `AdminRole[]`（缺陷 #182）：
+   *    角色是**目录表**（`roles.code` 是 `VARCHAR(32)` 自由文本列），
+   *    服务端按库里实际链接到的角色代码返回，**不保证**落在内置角色集合里。
+   *    `AdminRole` 描述的是「系统内置的那几个角色」，两者不是一回事。
+   */
+  roles: string[];
   /**
    * 管理员账号状态。
    *

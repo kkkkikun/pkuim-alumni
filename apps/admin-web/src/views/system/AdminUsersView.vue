@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
 import { MessagePlugin } from '@/plugins/tdesign';
-import type { AdminRole, AdminRoleDto, AdminUserDto } from '@nmg/contracts';
+import type { AdminRoleDto, AdminUserDto } from '@nmg/contracts';
 import {
   createAdminUser,
   fetchAdminUsers,
@@ -67,7 +67,8 @@ const form = reactive({
   username: '',
   displayName: '',
   password: '',
-  roles: [] as AdminRole[],
+  /** 角色代码（角色是目录表 → 开放集合，见 KNOWN-ISSUES #182） */
+  roles: [] as string[],
   status: 'active' as 'active' | 'disabled',
 });
 const errors = reactive<Record<string, string>>({});

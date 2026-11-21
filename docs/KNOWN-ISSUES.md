@@ -3145,6 +3145,118 @@
   按同一条规矩不加。
   实测数字与命令见 `docs/TEST-REPORT.md` 第 8 节。
 
+### 181. 响应结构校验器的「字面量联合取值校验」**恒过**，第三轮改的四个端点**结构从未被校验**
+
+- **现象**（第四轮复核发现）：
+  - `infra/scripts/check-response-shape.mjs` 的 `splitUnion()` 按顶层 `|` 切分联合类型时
+    **不丢弃空片段**。而契约里的联合类型几乎都写成多行、**首行就是一个 `|`**：
+    ```ts
+    export type AdminRole =
+      | 'super_admin'
+      | 'alumni_reviewer'
+      ...
+    ```
+    此时第一个片段是**空字符串** → 后续逻辑把空片段当成
+    「这个值符合空类型」→ **任何取值都判定为通过**。
+    于是**所有字面量联合（枚举）的取值校验整体恒过**：
+    服务端返回 `status: 'totally_bogus_status'`、`roles: ['totally_bogus_role']`
+    也不会报错（已实测注入验证）。
+  - 同一脚本的**调用点扫描**只认 `apiGet` 的泛型。而管理后台这四个第三轮端点的
+    真实返回类型写在**包装器** `readPageResult<T>(raw, path)` 的泛型上
+    （`apiGet` 的泛型是 `unknown`）→ 这四个端点被记成 `unknown` → **结构从未被校验**。
+    第三轮改的恰恰就是这四个端点（`GET /admin/roles|permissions|settings`、
+    `GET /admin/events/:id/registrations`）。
+- **影响**：响应结构这一层**形同虚设** —— 它守的是「服务端返回的字段与契约声明对不上」
+  这一类缺陷，而这类缺陷**不抛异常**：页面照常渲染，只是列是空的、筛选项是摆设。
+- **处置（本轮）**：
+  1. `splitUnion()` 丢弃空片段 → 字面量联合的取值校验真正生效；
+  2. 调用点扫描**补扫包装器**：`readPageResult<T>` 的泛型是**条目**类型，
+     返回类型是 `PageResult<条目>`，路径在第 2 个实参上；
+  3. 同一个端点上「`unknown` + 真实类型」并存时**保留真实类型**
+     （`unknown` 不校验任何东西，留在报告里只会让人误以为该端点的声明类型就是 `unknown`）；
+  4. **反向验证**补两个用例（见 `infra/scripts/check-response-shape-selftest.sh`）：
+     注入越界的枚举取值、注入缺失字段的 `/admin/roles` 条目 → **都必须被抓出来**。
+- **顺带修正**：`infra/fixtures/response-shape/GET_admin_events_1_registrations.json`
+  这份夹具是**第三轮之前**录的（`data` 是裸数组），与第三轮改成 `{items, meta}` 后的
+  真实响应已经对不上 —— 之前校验器把它记成 `unknown` 才没暴露。
+  本轮按第三轮的真实结构重录。
+
+### 182. 角色代码是**开放集合**，但契约写成了封闭联合 `AdminRole`
+
+- **现象**：第四轮把上面的联合取值校验修好之后，响应结构校验器立刻在
+  `GET /admin/users` 上报出真实差异：
+  `items[1].roles[3]` 取值 `attachment_reviewer` 不在契约声明的 5 个角色代码里。
+- **真相**（已逐条核实）：
+  - `roles` 表的 `code` 是 **`VARCHAR(32)`**（不是 ENUM）—— **自由文本列**，
+    角色目录本就是可扩展的目录表（`DATABASE-DESIGN.md` 第 8 节把它列为目录表，
+    只有「初始角色」由 Seed 写入，见 `docs/top.md` 第 4.2 节）；
+  - 服务端**自己的入参 DTO** 就是 `roles?: string[]`
+    （`apps/api/src/modules/admin/dto/`），比契约的 `AdminRole[]` **更宽**；
+  - 服务端**出参**也是按库里实际存的代码返回的
+    （`admin-users.controller.ts` 的 `roleCodesOf()` 返回 `string[]`）；
+  - 前端早就**按开放集合**消费：`ROLE_LABELS[role] || role`、`ROLE_PERMISSIONS[role] || []`
+    —— 拿不到内置标签时**回退到代码本身**，这正是开放集合的写法；
+  - 内置的 5 个角色由 `check-rbac-matrix.mjs` 守着（契约联合 ≡ 种子角色 ≡ 前端矩阵），
+    那是**另一层**保证（内置角色不能漂移），与「管理员持有的角色代码是否封闭」无关。
+- **处置**（本轮）：契约按实现放宽（与本文件 #64 / #65 同一类漂移的既有处置方式一致）：
+  `AdminUserDto.roles` 与 `AdminRoleDto.code` 由封闭联合改为 `string` / `string[]`；
+  `AdminRole` / `AdminPermission` 两个联合**保留**（它们守的是内置角色与权限点的目录一致性）。
+  管理后台前端与契约同步（角色标签/权限矩阵对未知代码的既有回退逻辑保持不变）。
+- **同步到哪**：`packages/contracts/src/domain.ts`、`packages/contracts/src/api.ts`、
+  `apps/admin-web/src/**`（`AdminUserDto.roles` 与 `UpdateAdminUserBody.roles` 的类型）。
+
+### 183. 系统设置页**没有分页控件**：第三轮把端点改成分页后，客户端仍硬编码 `page=1&pageSize=100`
+
+- **现象**（第四轮浏览器冒烟发现）：`GET /admin/settings` 第三轮已改成分页结构，
+  但 `apps/admin-web/src/views/system/SettingsView.vue` 仍硬编码
+  `fetchSettings({ page: 1, pageSize: 100 })`（且**不渲染 `PagerBar`）
+  → **配置项超过 100 条时，后面的行永远看不到**（服务端 `pageSize` 上限就是 100）。
+  这是「契约改了、客户端没跟上」的典型漏项：端点分页了，页面却当全表用。
+- **处置**：按仓库统一约定（`usePagedList` + `PagerBar`，与「管理员账号」页一致）改写该页：
+  走 `usePagedList` 消费分页结构、渲染 `PagerBar`、换页时重建草稿
+  （否则上一页的草稿会串到下一页）。
+- **不动**「角色权限」页：那一页要把**整份目录**（角色 × 权限矩阵）一次取全才能渲染矩阵，
+  分页反而会渲染出残缺的矩阵 —— 它取整目录是有意的，不是漏项。
+
+### 184. 冒烟脚本把「空表」误报成「服务端少给了字段」
+
+- **现象**：`/resource`（资源审核）与 `/system/logs`（审计日志）两页冒烟报
+  「表格里找不到列『发布人』/『操作人』」。真相是：**这两张表在测试库里是空的**
+  （seed 不造资源与审计记录），TDesign 在空表时渲染的是**空状态、根本没有 `<table>`**，
+  列自然找不到 —— 与「服务端少给了字段」是两回事。
+- **此前的处置是绕过去的**：第三轮「补了几行测试数据后两页均通过」（见本文件第 3239 行）。
+  测试数据一撤，问题原样复现 —— **绕过去的不是修好的**。
+- **处置**：列内容断言**先看这一页有没有渲染出表格**：
+  没有表格 → 记为「空表 / 空状态，跳过列内容断言」（不算缺陷）；
+  有表格但找不到该列 → 仍然是缺陷（服务端确实少给了字段）。
+  这样「空表」与「字段缺失」不再混为一谈，且**不依赖**测试库里有没有数据。
+
+### 185. 同一个管理员先后挂不同角色 → 令牌带着**旧角色的权限点**（干净库必红、脏库必绿）
+
+> 这一条是第四轮**修 CI 时挖出来的既有缺陷**（不是本轮引入的）：
+> 在**未改动**的基线修订上，用**干净种子库**跑集成测试同样复现（1 例失败）。
+
+- **现象**：`attachments.e2e-spec.ts` 的 `#77` 用例
+  （管理员凭 `resource:review` 取资源附件地址）拿到 **403**。
+  而同一个套件在**跑脏的库**上却是绿的。
+- **机制**（两条独立的因素叠在一起）：
+  1. **RBAC 身份是按管理员 id 缓存的**（`CacheKeys.adminRbac`，TTL ≤30 秒，
+     见 `docs/SECURITY.md` 第 2.1 节）。`ensureAdmin()` 是**直接写库**、
+     **绕过了 API** → 写完角色**不会**让缓存失效
+     （只有走 API 的改角色写端点才会调 `invalidateAdminCache`）。
+  2. 该套件的 `adminToken()` 默认**同一个管理员账号**（`admin-test`）配**同一个角色**
+     （`attachment_reviewer`），却先后要它带**不同的权限点**
+     （先 `verification:review`、后 `resource:review`）。
+     角色与权限点是**多对多**（`role_permissions`）→ 同一个角色先后拿到哪个权限，
+     **取决于哪个用例先跑**。
+  于是**第一次登录时缓存下来的角色集会被后续沿用** → 令牌带着旧权限点 → 403。
+- **为什么「干净库红、脏库绿」**：脏库里那个角色**早已攒下**另一个权限点
+  （上一轮跑完残留的），所以看起来是好的。
+  **CI 每次都是干净库** → 必然踩到 → 这就是 CI 上 Integration tests 失败的原因。
+- **处置**：**一个角色一个管理员账号**（`adminToken()` 按角色派生账号名），
+  各自的缓存条目互不干扰；并把这些账号纳入套件清理。
+  另外补记：角色与权限点是多对多，**一个角色不该被用来表达两种权限**。
+
 ## 待验证 / 未完成（不得声称已通过）> 以下均为**缺少外部资质或环境**导致的未验证项，与实现质量无关。
 > 已实测完成的项（冒烟 10/10、集成测试 39/39、k6 分级压测、备份恢复演练、管理后台构建）见 `docs/TEST-REPORT.md`。
 
@@ -3173,11 +3285,13 @@
 | nginx 静态资源安全头的端到端验证 | #178 已在 `infra/nginx/admin-web.conf` 补齐 `location /assets/` 的安全头，但本机没有直连 admin-web 容器的 nginx 实例，未做真实响应头抓包 | 部署到服务器后 `curl -I http://127.0.0.1:18082/assets/xxx.js` 核对一次 |
 | ~~管理端「分类 CRUD / 系统设置写入」没有审计记录~~ | ✅ **第三轮已解决**：`ContentService` 的这 4 个方法（`createCategory` / `updateCategory` / `deleteCategory` / `upsertSetting`）现在支持传入事务 `EntityManager`，控制器（`admin-users.controller.ts`）用 `dataSource.transaction` 把「业务写 + 审计写入」放进**同一事务**（沿用缺陷 #134 的做法：审计写失败时业务写一起回滚）。审计动作名：`category.create` / `category.update` / `category.delete` / `setting.update`；`setting.update` **不记 `value`**（设置里可能放敏感配置，审计表不该成为泄密面，只记 `key` 与 `description`） | 已完成（第三轮） |
 | 通知深分页索引收益 | `(user_id, id)` 索引已建，但优化器在本次数据集上未自动改选；真实收益取决于数据分布 | 生产数据量到位后用 `EXPLAIN ANALYZE` 复测，必要时再调 |
-| 第三轮新增端点 / 契约变更的**部署顺序** | 第三轮改了对外响应结构（`GET /admin/events/:id/registrations`、`GET /alumni/verification/mine`、`GET /admin/roles|permissions|settings` 改为 `{items, meta}`；新增 `GET /me/summary`；公开列表的 `body` 变为摘要）。**服务端与两端客户端必须一起发布** —— 只升级服务端会让旧客户端取 `.items` 得到 `undefined`，只升级客户端会让新客户端解析旧响应失败 | ⚠️ **需人工安排发布顺序**：建议「先发服务端（响应结构变更）+ 紧接着发两端客户端」的**同一次发布窗口**完成，不要跨版本长时间并存。迁移说明见 `docs/API-SPEC.md` 的「第三轮的契约变更」小节 |
-| 第三轮的两条索引迁移尚未在**业务库**应用 | `AddQueryIndexesAndProtectAuditLogs1730000005000` 与 `AddRemainingQueryIndexes1730000006000` 在本机测试库已应用，但**线上业务库 `nmg_alumni` 尚未应用**（`infra/scripts/check-pending-migrations.sh` 的 R2 检查会报出来） | ⚠️ **需人工在部署窗口执行** `pnpm --filter @nmg/api db:migrate`（或走既有的迁移发布流程） |
+| 第三轮新增端点 / 契约变更的**部署顺序** | 第三轮改了对外响应结构（`GET /admin/events/:id/registrations`、`GET /alumni/verification/mine`、`GET /admin/roles|permissions|settings` 改为 `{items, meta}`；新增 `GET /me/summary`；公开列表的 `body` 变为摘要）。**服务端与两端客户端必须一起发布** —— 只升级服务端会让旧客户端取 `.items` 得到 `undefined`，只升级客户端会让新客户端解析旧响应失败 | ⚠️ **需人工安排发布顺序**：建议「先发服务端（响应结构变更）+ 紧接着发两端客户端」的**同一次发布窗口**完成，不要跨版本长时间并存。**第四轮已产出逐端点的核对清单与两个方向的破坏形态：`docs/RELEASE-ORDER.md`**（含发布前 9 项勾选清单、发布后验证命令、回滚说明；其中 `GET /alumni/verification/mine` **两个方向都坏**，唯一可行顺序是「服务端先」，切换后到小程序新版铺开前该状态会一直错，需人工告知）。迁移说明见 `docs/API-SPEC.md` 的「第三轮的契约变更」小节 |
+| 第三轮的两条索引迁移尚未在**业务库**应用 | `AddQueryIndexesAndProtectAuditLogs1730000005000` 与 `AddRemainingQueryIndexes1730000006000` 在本机测试库已应用，但**线上业务库 `nmg_alumni` 尚未应用**（`infra/scripts/check-pending-migrations.sh` 的 R2 检查会报出来） | ⚠️ **需人工在部署窗口执行** `pnpm --filter @nmg/api db:migrate`（或走既有的迁移发布流程）。**第四轮已核对**（见 `docs/TEST-REPORT.md` 第 10.3 节）：两条迁移都已登记进 `migrations/index.ts` 且**排在最后**；`check-pending-migrations.sh` 的 **R1**（清单 ↔ 文件，不连库）已通过；**R2**（清单 ↔ 库）在本机两个库上都如实报出这两条**未应用** —— 与「线上待应用」一致。CI 跑的是 `--static-only`（CI 用的是普通 MySQL **service**、不是 compose 栈，R2 在 CI 里连不上库），**线上库的实际应用仍属人工动作** |
 | ~~管理后台真实浏览器冒烟未在本机跑通~~ | ✅ **第三轮已跑通**：本机补装了 Playwright（**不写进仓库**，不引入新依赖），用已有的 Chromium 跑了 `infra/scripts/admin-ui-smoke.mjs`：**13 个路由全绿，0 条 console error，0 个未捕获异常，0 个失败请求**；定点截图见 `docs/screenshots/opt-003/` 与 `docs/TEST-REPORT.md` 第 9.7 节 | 已完成（第三轮） |
-| 冒烟脚本的两个「找不到列」是**空表**而非缺陷 | `/resource`（资源审核）与 `/system/logs`（审计日志）此前冒烟报「表格里找不到列」：原因是**这两张表在测试库里是空的**（seed 不造资源与审计记录），空表时 TDesign 渲染的是空状态、**根本没有 `<table>`**，列自然找不到。补了几行测试数据后两页均通过 | ✅ 已确认不是缺陷（第三轮） |
+| 冒烟脚本的两个「找不到列」是**空表**而非缺陷 | `/resource`（资源审核）与 `/system/logs`（审计日志）此前冒烟报「表格里找不到列」：原因是**这两张表在测试库里是空的**（seed 不造资源与审计记录），空表时 TDesign 渲染的是空状态、**根本没有 `<table>`**，列自然找不到 | ✅ **第四轮已修好**（不再靠补测试数据绕过）：列内容断言**先看这一页有没有渲染出表格** —— 没有表格 → 记为「空表 / 空状态，跳过列内容断言」（不算缺陷）；有表格但找不到该列 → 仍是缺陷。见缺陷 #184 |
 | 首屏下载量的**同机同负载**延迟对照 | 第 9.2 节只把 **SQL 条数**当作本轮的有效结论；延迟（p50/p95）本机两轮测量时机器负载不同，**不可直接比较**（公开端点一行没改，延迟却也变高了，说明是负载波动） | ⚠️ **需人工**：在专门的压测窗口（无其它任务）重跑 `perf:baseline` 两次，才能给出可比的延迟结论 |
+| RBAC / 字典缓存的 TTL **旋钮此前没有暴露** | `RBAC_CACHE_TTL_SECONDS`（默认 30、上限 60）与 `DICT_CACHE_TTL_SECONDS`（默认 60、上限 300）在代码里一直生效，但 `infra/env/env.prod.example` 与 `docker-compose.prod.yml` 的 api `environment:` 里**都没有这两个变量** → 运维**无法在不重新打镜像的前提下**调整它们，只能改代码重发 | ✅ **第四轮已补齐**：`infra/env/env.prod.example` 与 `docker-compose.prod.yml` 已写入这两个变量（含中文注释），`docs/SECURITY.md` 第 2.1 节同步写明「默认 30 秒 / 上限 60 秒」的口径与旋钮位置。已用 `docker compose config` 验证渲染结果为 30 / 60，且改环境变量能被覆盖 |
+| 小程序「我的」页四个计数与红点的**真机**复验 | 第四轮已用**单元测试**（`apps/miniprogram/test/summary.spec.ts` 等，48 例全绿）覆盖 `toSummaryView()` 的四个计数与红点判定，并核对了 `apps/miniprogram/src/pages/me/index/index.wxml` 的绑定与 `post.body` 摘要排版（`-webkit-line-clamp: 2`）。但**小程序没有浏览器冒烟脚本**（不是网页，跑不了 Playwright），真实渲染效果仍需在微信开发者工具 / 真机上看过 | ⚠️ **需人工复验**：在微信开发者工具或真机上打开「我的」页，确认四个计数与红点符合预期、资讯/公告卡片摘要排版无截断异常（体验版已上传，见下方「小程序真机 / 开发者工具验证」行） |
 
 ## 已知设计取舍
 
