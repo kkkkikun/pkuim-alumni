@@ -1,5 +1,42 @@
 import { registerAs } from '@nestjs/config';
 
+/**
+ * 共享失效总线的**基准频道名**（默认值）。
+ *
+ * 生效频道 = `<命名空间>:<环境段>:<其余>`（见 `resolveInvalidationChannel`）。
+ */
+export const DEFAULT_INVALIDATION_CHANNEL = 'nmg:rbac:invalidate';
+
+/**
+ * 把基准频道名解析成**按环境隔离**的生效频道名。
+ *
+ * 为什么要按环境隔离：
+ *   测试环境的失效事件如果和生产环境共用一个频道，
+ *   **测试实例的写操作会让生产实例清空自己的 RBAC 缓存** ——
+ *   虽然只是丢缓存（不会放行任何权限），但这是「环境之间互相干扰」，
+ *   在排障时会把人带偏。
+ *
+ * 规则：
+ *   - 环境段由 `NODE_ENV` 决定：`production` → `prod`，`test` → `test`，其余 → `dev`；
+ *   - 基准名里**已经带**该环境段（例如运维显式配了 `nmg:prod:rbac:invalidate`）→ 原样使用；
+ *   - 否则在**第一个冒号之后**插入环境段：
+ *     `nmg:rbac:invalidate` → `nmg:prod:rbac:invalidate` / `nmg:dev:...` / `nmg:test:...`。
+ *
+ * 纯函数（无副作用），便于单测。
+ */
+export function resolveInvalidationChannel(
+  base: string,
+  env: string | undefined,
+): string {
+  const scope =
+    env === 'production' ? 'prod' : env === 'test' ? 'test' : 'dev';
+  const channel = (base || DEFAULT_INVALIDATION_CHANNEL).trim();
+  if (channel.includes(`:${scope}:`)) return channel;
+  const separator = channel.indexOf(':');
+  if (separator === -1) return `${channel}:${scope}`;
+  return `${channel.slice(0, separator)}:${scope}:${channel.slice(separator + 1)}`;
+}
+
 export const appConfig = registerAs('app', () => ({
   env: process.env.NODE_ENV ?? 'development',
   port: Number(process.env.PORT ?? 8000),
@@ -34,6 +71,18 @@ export const appConfig = registerAs('app', () => ({
   rbacCacheTtlSeconds: process.env.RBAC_CACHE_TTL_SECONDS ?? '30',
   // 字典 / 分类 / 系统设置缓存的 TTL（上限 300 秒；0 = 关闭）。
   dictCacheTtlSeconds: process.env.DICT_CACHE_TTL_SECONDS ?? '60',
+  // 共享失效总线（第五轮引入；口径见 docs/SECURITY.md 第 2.1.4 / 2.1.5 节）。
+  //
+  // ⚠️ 频道名**走配置**，不写死在代码里：`RBAC_INVALIDATION_CHANNEL`
+  //    是**基准名**（默认 `nmg:rbac:invalidate`），
+  //    **生效频道**由 `resolveInvalidationChannel()` 按环境插入环境段
+  //    （prod / dev / test 各不相同）→ 测试库的事件不可能打到生产实例。
+  // ⚠️ `RBAC_INVALIDATION_ENABLED=false` = 关闭总线（退回「进程内主动失效 + TTL 兜底」），
+  //    用于排障与压测对照；关闭时**写操作照常成功**，只是撤权延迟回落到 TTL 上界。
+  rbacInvalidation: {
+    enabled: process.env.RBAC_INVALIDATION_ENABLED ?? 'true',
+    channel: process.env.RBAC_INVALIDATION_CHANNEL ?? DEFAULT_INVALIDATION_CHANNEL,
+  },
 }));
 
 /** 连接池大小的默认值（此前是 app.module.ts 里的硬编码 20）。 */
