@@ -34,7 +34,6 @@ import {
   Permission,
   Role,
 } from '../../database/entities/admin.entity';
-import type { AdminPermission, AdminRole } from '@nmg/contracts';
 import { SystemSetting } from '../../database/entities/system.entity';
 import { ConnectionRequestHistory } from '../../database/entities/connection.entity';
 import { Event, EventRegistration } from '../../database/entities/event.entity';
