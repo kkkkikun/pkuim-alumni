@@ -460,6 +460,25 @@ node infra/scripts/miniprogram-compile-check.mjs apps/miniprogram
    所以**在业务库（生产库）上跑也是安全的**（连接参数走环境变量）。
    反向验证共 **9 例**（`check-migration-schema-db-selftest.sh` 8 例 +
    `check-unique-index-db-selftest.sh` 1 例），**已接入 CI**。
+   **第十六轮起**：**静态层**（`check-error-semantics.mjs` 的 R9，实体 ↔ 迁移）
+   的判定维度也扩到与**库内实况层**（实体 ↔ 库）**一致** ——
+   **默认值 / `unsigned` / 枚举取值**三项此前只有库内实况层在判，
+   静态层报不出「迁移里的默认值与实体不一致」这一类分歧。
+   两层的判定条件**逐条相同**（只收紧、不放宽）：
+   默认值只在实体显式声明 `default:` 时判（迁移侧是 `CURRENT_TIMESTAMP(3)` 这类
+   表达式时不判）；`unsigned` 只对**非布尔位**的数值列判（布尔位那 9 处只记录不判定）；
+   枚举取值只在实体显式声明 `enum:` 且取值解析得出来时判。
+   实测**两层判的列数逐个相同**（默认值 47 列 / `unsigned` 70 列 / 枚举取值 21 列），
+   0 处不一致。错误语义校验器的反向验证由 17 类扩到 **20 类**。
+   同轮补上了**管理端 403 分界的运行时用例**
+   （`apps/api/test/integration/admin-forbidden-boundary.e2e-spec.ts`，**81 例**）：
+   登记在册的 **40 个**管理端端点**逐条**「权限点不足 → **403 `FORBIDDEN`**」
+   与「权限点给足 → **2xx**」（两半缺一不可：只验 403 会漏掉「守卫整体失效」，
+   只验 2xx 会漏掉「守卫过度拒绝」），
+   并与 `check-rbac-matrix.mjs` 的权限点矩阵**逐条对齐**。
+   同轮还修掉了 RBAC 矩阵里一条**恒过**的判定
+   （「每个管理端端点都必须有 `@RequirePermissions`」此前一次都没跑过 ——
+   路径缺前导斜杠 + 权限点解析只看路由装饰器后面的文字）。
 10. **多实例的「撤权立刻生效」可以自己演练**：`infra/scripts/invalidation-bus-drill.mjs`
     起**两个 API 进程 + 一个 Redis**（外加一个总线整条关闭的**对照实例**），
     验证「实例 A 撤权 → 实例 B 的缓存立刻失效」在**跨进程**下真的成立
