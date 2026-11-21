@@ -3257,6 +3257,30 @@
   各自的缓存条目互不干扰；并把这些账号纳入套件清理。
   另外补记：角色与权限点是多对多，**一个角色不该被用来表达两种权限**。
 
+### 186. RBAC 缓存与「撤权延迟为 0」这两条承诺**此前没有任何用例守着**
+
+- **现象**：`docs/SECURITY.md` 第 2.1 节承诺了两件事 ——
+  ① 管理端请求不再每请求重算 RBAC（缓存「这个管理员有哪些权限点」）；
+  ② 停用 / 降权时**主动失效**，本进程内「降权后仍能操作」的窗口是 **0**。
+  但集成测试里**没有一条用例**覆盖这两点：
+  - 既有用例要么用刚建好的账号（第一次请求本来就是冷的）；
+  - 要么在降权之后**重新登录**（换了新令牌，缓存里压根没有旧条目）。
+  于是把缓存改成「永不失效」、或把 `invalidateAdminCache` 那行注释掉，
+  **整个集成测试套件（46 套件 / 359 例）照样全绿**。
+- **为什么危险**：这正是「安全语义一旦回退，既有测试不会变红」的土壤 ——
+  与缺陷 #185（干净库必红、脏库必绿）属于同一类。
+- **处置**：新增 `apps/api/test/integration/rbac-cache.e2e-spec.ts`（4 条用例，本轮实测全绿）：
+  1. **缓存确实生效**：同一个令牌连续两次请求 `GET /admin/alumni` → 第二次少打 **3 条 SQL**
+     （RBAC 解析那三条：`admin_users` + `admin_user_roles` + `role_permissions`）；
+     实测**冷启动 4 条 → 命中缓存 1 条**。
+  2. **降权后立刻 403**：管理员被改角色后，**不重新登录**、用**同一张令牌**再请求 →
+     **403 `FORBIDDEN`**（若主动失效失效，这里会放行 200）。
+  3. **停用后立刻 401**：账号被停用后，**同一张令牌**再请求 → **401 `AUTH_REQUIRED`**。
+  4. **未读通知数不缓存**：`/me/summary` 的 `unreadCount` 当场反映新插入的通知（0 → 1）。
+- **顺带记一条**：`roles.code` 列是 **VARCHAR(32)**（见 `InitSchema` 迁移）——
+  角色编码超过 32 字符会被数据库**直接拒绝**（`Data too long for column 'code'`）；
+  写测试角色编码时要注意长度（本轮第一次写这个套件就踩到了）。
+
 ## 待验证 / 未完成（不得声称已通过）> 以下均为**缺少外部资质或环境**导致的未验证项，与实现质量无关。
 > 已实测完成的项（冒烟 10/10、集成测试 39/39、k6 分级压测、备份恢复演练、管理后台构建）见 `docs/TEST-REPORT.md`。
 
@@ -3277,19 +3301,19 @@
 | ~~管理后台 UI 库按需引入（首屏减负）~~ | ✅ **第三轮已解决**：`main.ts` 从 `app.use(TDesign)`（全量注册）改为 `installTDesign(app)`（`apps/admin-web/src/plugins/tdesign.ts`），只注册**模板里真正用到的 19 个组件**，且每个组件从**深路径**（`tdesign-vue-next/es/<组件>`）引入；`vite.config.ts` 里对根入口的 `manualChunks` 也一并去掉（根入口会把整个库拉进来）。**首屏实际下载量 2,011,294 B → 1,208,675 B（gzip 466,698 B → 307,167 B，-39.9%）**，`dist` 总量 2,120,742 B → 1,318,074 B（-37.8%）。真实数字与测量方法见 `docs/TEST-REPORT.md` 第 9 节 | 已完成（第三轮） |
 | ~~三个无上限列表端点~~ | ✅ **第三轮已解决**（契约变更轮）：三个端点全部改为 `{items, meta}` + `page`/`pageSize`：`GET /admin/events/:id/registrations`、`GET /alumni/verification/mine`、`GET /admin/roles|permissions|settings`。契约同步改了 `packages/contracts/src/api.ts`（并补上 `AdminRoleDto` / `AdminPermissionDto` 两个此前写窄了的目录条目类型）与 `docs/API-SPEC.md`（新增「第三轮的契约变更」迁移说明表）；两端客户端（管理后台 `EventListView.vue` 报名抽屉接 `PagerBar`、`RolesView.vue` / `AdminUsersView.vue` / `SettingsView.vue`；小程序 `services/me.ts`）与集成测试同步更新 | 已完成（第三轮） |
 | ~~列表接口把 MEDIUMTEXT 正文整列返回~~ | ✅ **第三轮已解决**（契约变更轮）：三个**公开**列表端点（`GET /articles`、`GET /notices`、`GET /resources`）的 `body` 只返回**前 200 字摘要**（`apps/api/src/common/utils/excerpt.ts`），完整正文走详情接口。**管理端列表保持全文** —— 后台编辑弹窗直接回填列表行里的正文，截断会让管理员保存时**静默截断正文**（数据损坏，不是性能优化）；这一点在契约与 API-SPEC 里都写明了 | 已完成（第三轮） |
-| ~~管理员每请求重算 RBAC（4 条 SQL）~~ | ✅ **第三轮已解决**：先在 `docs/SECURITY.md` 第 2.1 节**写明口径**（TTL ≤ 60 秒**硬上限**、降权 / 停用时**主动失效**、多实例部署下未被失效的实例最多等 TTL、缓存只存「有哪些权限点」而**不**缓存「这个请求是否被允许」），再实现 `TtlCacheService`（`apps/api/src/common/services/ttl-cache.service.ts`）+ `AuthService.resolveAdminIdentity`。管理端写端点（停用 / 改角色）在事务提交后**主动失效**该管理员的缓存条目 —— 本进程内撤权延迟为 **0**，TTL 只是多实例部署的兜底 | 已完成（第三轮）；**仍需人工**：多实例部署若要求「撤权跨实例即刻生效」，需引入共享失效总线（Redis pub/sub），本轮**未做** |
+| ~~管理员每请求重算 RBAC（4 条 SQL）~~ | ✅ **第三轮已解决**：先在 `docs/SECURITY.md` 第 2.1 节**写明口径**（TTL ≤ 60 秒**硬上限**、降权 / 停用时**主动失效**、多实例部署下未被失效的实例最多等 TTL、缓存只存「有哪些权限点」而**不**缓存「这个请求是否被允许」），再实现 `TtlCacheService`（`apps/api/src/common/services/ttl-cache.service.ts`）+ `AuthService.resolveAdminIdentity`。管理端写端点（停用 / 改角色）在事务提交后**主动失效**该管理员的缓存条目 —— 本进程内撤权延迟为 **0**，TTL 只是多实例部署的兜底 | 已完成（第三轮）；**仍需人工**：多实例部署若要求「撤权跨实例即刻生效」，需引入共享失效总线（Redis pub/sub），本轮**未做**；**本轮（复核轮）仍未做**，已作为**下一轮（opt-005，即第五轮）**的具体目标（Redis 已在依赖里，仓库侧可实现；Redis 不可用时必须**降级**而不是让写操作失败） |
 | ~~字典 / 聚合接口无缓存~~ | ✅ **第三轮已解决**：`GET /system/regions`、`/system/industries`、`/system/settings` 与 `GET /articles/categories` 走进程内 TTL 缓存（字典 / 分类 / 系统设置），写操作（分类增删改、设置写入）**主动失效**对应条目。**未读通知数绝不缓存**（`GET /me/summary` 每次实时 COUNT）—— 缓存它会让红点长期不消。口径见 `docs/SECURITY.md` 第 2.1 节 | 已完成（第三轮） |
 | ~~`view_count` 每次浏览都写一次库~~ | ✅ **第三轮已解决**：浏览改为在 **Redis** 里 `HINCRBY` 计数（`ViewCounterService`），累计 20 次或到 60 秒周期才把增量**一次性**写回数据库（仍只动 `view_count` 一列，`updated_at = updated_at`）。`viewCount` 的一致性口径由「即时一致」改为**最终一致**（详情接口返回「库里的基线值 + 未落库增量」，用户看到的数字当场就是对的，但库里的行可能滞后一个刷回周期）—— 口径写在 `docs/SECURITY.md` 第 2.2 节与 `docs/API-SPEC.md`。Redis 不可用时**降级为直接写库**（与改动前一致，计数不丢） | 已完成（第三轮） |
 | `/admin/stats` 的 `connectionTotal` 口径 | 管理端把它标成「连接总数」，服务端统计的却是**联系申请**条数（`connection_request_history`）。改查询会改变页面上显示的数字（对外可见语义），本轮只去掉了完全重复的那条 COUNT | ⚠️ **需产品/客户确认口径后再改**（第三轮**未改**：这是对外可见的业务语义，不是性能问题。已按本轮约定「只记录、不擅改」处理） |
 | 连接列表未按对方的字段可见开关裁剪 | `/me/connections` 无条件返回对方的学院 / 地区 / 行业；而 `showCollege` 等开关在小程序里的说明是「**在通讯录中**显示你的毕业院系」—— 开关的语义只覆盖通讯录 | ⚠️ **需产品确认**「解除连接 / 连接列表」是否也应受开关约束；第三轮**未改**（改了就是改业务语义）。已按本轮约定「只记录、不擅改」处理 |
-| nginx 静态资源安全头的端到端验证 | #178 已在 `infra/nginx/admin-web.conf` 补齐 `location /assets/` 的安全头，但本机没有直连 admin-web 容器的 nginx 实例，未做真实响应头抓包 | 部署到服务器后 `curl -I http://127.0.0.1:18082/assets/xxx.js` 核对一次 |
+| nginx 静态资源安全头的端到端验证 | #178 已在 `infra/nginx/admin-web.conf` 补齐 `location /assets/` 的安全头。**本轮（复核轮）已做「配置侧」端到端验证**：用仓库里的这份 conf + 本轮（复核轮）的构建产物在真实 `nginx:alpine` 里起服务，`curl -I /assets/index-*.js` → **9 个安全响应头全部到位**（`X-Content-Type-Options` / `X-Frame-Options` / `Referrer-Policy` / `Permissions-Policy` / `X-Permitted-Cross-Domain-Policies` / `Cross-Origin-Opener-Policy` / `Content-Security-Policy` / `X-XSS-Protection` / `Strict-Transport-Security`）+ `Cache-Control`。**但演示环境现场仍看不到这组头** —— 那边跑的是 4 天前的旧镜像（**部署未更新**，不是配置缺失） | ⚠️ **仍需人工**：部署到服务器后 `curl -I http://127.0.0.1:18082/assets/xxx.js` 再核对一次现场。证据见 `docs/TEST-REPORT.md` 第 11.7 节 |
 | ~~管理端「分类 CRUD / 系统设置写入」没有审计记录~~ | ✅ **第三轮已解决**：`ContentService` 的这 4 个方法（`createCategory` / `updateCategory` / `deleteCategory` / `upsertSetting`）现在支持传入事务 `EntityManager`，控制器（`admin-users.controller.ts`）用 `dataSource.transaction` 把「业务写 + 审计写入」放进**同一事务**（沿用缺陷 #134 的做法：审计写失败时业务写一起回滚）。审计动作名：`category.create` / `category.update` / `category.delete` / `setting.update`；`setting.update` **不记 `value`**（设置里可能放敏感配置，审计表不该成为泄密面，只记 `key` 与 `description`） | 已完成（第三轮） |
 | 通知深分页索引收益 | `(user_id, id)` 索引已建，但优化器在本次数据集上未自动改选；真实收益取决于数据分布 | 生产数据量到位后用 `EXPLAIN ANALYZE` 复测，必要时再调 |
-| 第三轮新增端点 / 契约变更的**部署顺序** | 第三轮改了对外响应结构（`GET /admin/events/:id/registrations`、`GET /alumni/verification/mine`、`GET /admin/roles|permissions|settings` 改为 `{items, meta}`；新增 `GET /me/summary`；公开列表的 `body` 变为摘要）。**服务端与两端客户端必须一起发布** —— 只升级服务端会让旧客户端取 `.items` 得到 `undefined`，只升级客户端会让新客户端解析旧响应失败 | ⚠️ **需人工安排发布顺序**：建议「先发服务端（响应结构变更）+ 紧接着发两端客户端」的**同一次发布窗口**完成，不要跨版本长时间并存。**第四轮已产出逐端点的核对清单与两个方向的破坏形态：`docs/RELEASE-ORDER.md`**（含发布前 9 项勾选清单、发布后验证命令、回滚说明；其中 `GET /alumni/verification/mine` **两个方向都坏**，唯一可行顺序是「服务端先」，切换后到小程序新版铺开前该状态会一直错，需人工告知）。迁移说明见 `docs/API-SPEC.md` 的「第三轮的契约变更」小节 |
+| 第三轮新增端点 / 契约变更的**部署顺序** | 第三轮改了对外响应结构（`GET /admin/events/:id/registrations`、`GET /alumni/verification/mine`、`GET /admin/roles|permissions|settings` 改为 `{items, meta}`；新增 `GET /me/summary`；公开列表的 `body` 变为摘要）。**服务端与两端客户端必须一起发布** —— 只升级服务端会让旧客户端取 `.items` 得到 `undefined`，只升级客户端会让新客户端解析旧响应失败 | ⚠️ **需人工安排发布顺序**：建议「先发服务端（响应结构变更）+ 紧接着发两端客户端」的**同一次发布窗口**完成，不要跨版本长时间并存。**第四轮已产出逐端点的核对清单与两个方向的破坏形态：`docs/RELEASE-ORDER.md`**（含发布前 9 项勾选清单、发布后验证命令、回滚说明；其中 `GET /alumni/verification/mine` **两个方向都坏**，唯一可行顺序是「服务端先」，切换后到小程序新版铺开前该状态会一直错，需人工告知）。迁移说明见 `docs/API-SPEC.md` 的「第三轮的契约变更」小节。**本轮（复核轮）实测确认**：演示环境（`127.0.0.1:18080`，对外 `http://8.160.116.34:18080`）的 API **仍是第三轮之前的构建** —— `GET /me/summary` 返回 **404**、`GET /articles` 仍返回**全文 body**、管理后台静态资源缺 CSP / HSTS（跑的是 4 天前的旧镜像）。这与本行的约束**一致**（小程序新版本未过审前不能先切服务端），属**预期状态**而非漏发布；但也意味着**第三轮的契约变更目前确实尚未上线** |
 | 第三轮的两条索引迁移尚未在**业务库**应用 | `AddQueryIndexesAndProtectAuditLogs1730000005000` 与 `AddRemainingQueryIndexes1730000006000` 在本机测试库已应用，但**线上业务库 `nmg_alumni` 尚未应用**（`infra/scripts/check-pending-migrations.sh` 的 R2 检查会报出来） | ⚠️ **需人工在部署窗口执行** `pnpm --filter @nmg/api db:migrate`（或走既有的迁移发布流程）。**第四轮已核对**（见 `docs/TEST-REPORT.md` 第 10.3 节）：两条迁移都已登记进 `migrations/index.ts` 且**排在最后**；`check-pending-migrations.sh` 的 **R1**（清单 ↔ 文件，不连库）已通过；**R2**（清单 ↔ 库）在本机两个库上都如实报出这两条**未应用** —— 与「线上待应用」一致。CI 跑的是 `--static-only`（CI 用的是普通 MySQL **service**、不是 compose 栈，R2 在 CI 里连不上库），**线上库的实际应用仍属人工动作** |
 | ~~管理后台真实浏览器冒烟未在本机跑通~~ | ✅ **第三轮已跑通**：本机补装了 Playwright（**不写进仓库**，不引入新依赖），用已有的 Chromium 跑了 `infra/scripts/admin-ui-smoke.mjs`：**13 个路由全绿，0 条 console error，0 个未捕获异常，0 个失败请求**；定点截图见 `docs/screenshots/opt-003/` 与 `docs/TEST-REPORT.md` 第 9.7 节 | 已完成（第三轮） |
 | 冒烟脚本的两个「找不到列」是**空表**而非缺陷 | `/resource`（资源审核）与 `/system/logs`（审计日志）此前冒烟报「表格里找不到列」：原因是**这两张表在测试库里是空的**（seed 不造资源与审计记录），空表时 TDesign 渲染的是空状态、**根本没有 `<table>`**，列自然找不到 | ✅ **第四轮已修好**（不再靠补测试数据绕过）：列内容断言**先看这一页有没有渲染出表格** —— 没有表格 → 记为「空表 / 空状态，跳过列内容断言」（不算缺陷）；有表格但找不到该列 → 仍是缺陷。见缺陷 #184 |
-| 首屏下载量的**同机同负载**延迟对照 | 第 9.2 节只把 **SQL 条数**当作本轮的有效结论；延迟（p50/p95）本机两轮测量时机器负载不同，**不可直接比较**（公开端点一行没改，延迟却也变高了，说明是负载波动） | ⚠️ **需人工**：在专门的压测窗口（无其它任务）重跑 `perf:baseline` 两次，才能给出可比的延迟结论 |
+| 首屏下载量的**同机同负载**延迟对照 | 第 9.2 节只把 **SQL 条数**当作本轮的有效结论；延迟（p50/p95）本机两轮测量时机器负载不同，**不可直接比较**（公开端点一行没改，延迟却也变高了，说明是负载波动）。**本轮（复核轮）已量化这个「波动」有多大**：同机、同数据集、背靠背跑了 **A（缓存开）→ B（缓存关）→ A2（缓存开）** 三组 —— A 与 A2 **配置完全相同**，但 p50 已经相差最多 **2 倍**（`管理端·数据总览` 36.3 → 72.6 ms；`首页聚合` 62.7 → 84.0 ms），且**根本没有缓存**的 `首页聚合`、`通讯录检索` 同样在波动 → **波动幅度盖过了缓存本身可能带来的差异**，本机给不出延迟结论。（确定性指标不受影响：A 与 A2 的 SQL 条数逐个相同；A 与 B 的差**恰好是 3 条**/管理端请求，即 RBAC 解析那三条） | ⚠️ **仍需人工**：在专门的压测窗口（无其它任务）重跑 `perf:baseline` 两次，才能给出可比的延迟结论。本轮（复核轮）的实测与结论见 `docs/TEST-REPORT.md` 第 11.2 / 11.8 节 |
 | RBAC / 字典缓存的 TTL **旋钮此前没有暴露** | `RBAC_CACHE_TTL_SECONDS`（默认 30、上限 60）与 `DICT_CACHE_TTL_SECONDS`（默认 60、上限 300）在代码里一直生效，但 `infra/env/env.prod.example` 与 `docker-compose.prod.yml` 的 api `environment:` 里**都没有这两个变量** → 运维**无法在不重新打镜像的前提下**调整它们，只能改代码重发 | ✅ **第四轮已补齐**：`infra/env/env.prod.example` 与 `docker-compose.prod.yml` 已写入这两个变量（含中文注释），`docs/SECURITY.md` 第 2.1 节同步写明「默认 30 秒 / 上限 60 秒」的口径与旋钮位置。已用 `docker compose config` 验证渲染结果为 30 / 60，且改环境变量能被覆盖 |
 | 小程序「我的」页四个计数与红点的**真机**复验 | 第四轮已用**单元测试**（`apps/miniprogram/test/summary.spec.ts` 等，48 例全绿）覆盖 `toSummaryView()` 的四个计数与红点判定，并核对了 `apps/miniprogram/src/pages/me/index/index.wxml` 的绑定与 `post.body` 摘要排版（`-webkit-line-clamp: 2`）。但**小程序没有浏览器冒烟脚本**（不是网页，跑不了 Playwright），真实渲染效果仍需在微信开发者工具 / 真机上看过 | ⚠️ **需人工复验**：在微信开发者工具或真机上打开「我的」页，确认四个计数与红点符合预期、资讯/公告卡片摘要排版无截断异常（体验版已上传，见下方「小程序真机 / 开发者工具验证」行） |
 
