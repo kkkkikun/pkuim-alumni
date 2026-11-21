@@ -34,6 +34,12 @@
 #   error-semantics-migration-unique-not-declared → R5：迁移建了实体没声明的唯一约束
 #   error-semantics-doc-index-not-in-migration    → R6：文档索引清单写了迁移里没有的索引
 #   error-semantics-migration-index-not-in-doc    → R6：迁移建了文档索引清单里没写的索引
+#   error-semantics-entity-index-missing-in-migration
+#                                                 → R7：实体声明了、迁移里**没建**的索引
+#   error-semantics-migration-index-not-declared → R7：迁移建了、实体**没声明**的索引
+#   error-semantics-column-length-mismatch       → R9：同一列的**长度**不一致
+#   error-semantics-entity-foreign-key-missing   → R8：实体声明了、迁移里没有的外键
+#   error-semantics-foreign-key-target-mismatch  → R8：外键的**指向**不一致
 #
 # 第九轮新增的四个用例针对**用户侧**：这一轮把唯一键登记表扩到了用户侧
 # （连接申请 / 联系方式授权 / 活动报名 / 资源附件 / 认证附件 / openid / unionid /
@@ -199,6 +205,16 @@ run_case "error-semantics-migration-unique-not-declared" "MIGRATION_UNIQUE_NOT_D
 run_case "error-semantics-doc-index-not-in-migration" "DOC_INDEX_NOT_IN_MIGRATION"
 # 文档索引清单：迁移建了文档里没写的索引（清单不完整）
 run_case "error-semantics-migration-index-not-in-doc" "MIGRATION_INDEX_NOT_IN_DOC"
+# 实体 ↔ 迁移（第十二轮扩面）：实体声明了、迁移里**没建**的索引（生产库上那个索引不存在）
+run_case "error-semantics-entity-index-missing-in-migration" "MIGRATION_INDEX_MISSING"
+# 实体 ↔ 迁移（第十二轮扩面）：迁移建了、实体**没声明**的索引（库比实体多一道索引）
+run_case "error-semantics-migration-index-not-declared" "MIGRATION_INDEX_NOT_DECLARED"
+# 实体 ↔ 迁移（第十二轮扩面）：同一列的**长度**不一致（写入会被静默截断）
+run_case "error-semantics-column-length-mismatch" "MIGRATION_COLUMN_DEF_MISMATCH"
+# 实体 ↔ 迁移（第十二轮扩面）：实体声明了、迁移里没有的外键（引用完整性不被保证）
+run_case "error-semantics-entity-foreign-key-missing" "ENTITY_FOREIGN_KEY_MISSING"
+# 实体 ↔ 迁移（第十二轮扩面）：外键的**指向**不一致（两边说的不是一回事）
+run_case "error-semantics-foreign-key-target-mismatch" "FOREIGN_KEY_TARGET_MISMATCH"
 
 # --- 2. 清理 ---------------------------------------------------------------
 log "[2/2] 清理临时副本……"
@@ -209,5 +225,5 @@ if [ "$FAILED" -ne 0 ]; then
   die "错误语义对账校验器反向验证失败 ❌"
 fi
 
-log "=== 反向验证通过 ✅（12 类「错误语义失配」缺陷全部被抓出，校验器非恒过）==="
+log "=== 反向验证通过 ✅（17 类「错误语义失配」缺陷全部被抓出，校验器非恒过）==="
 log "错误语义对账校验器反向验证通过 ✅"

@@ -5265,3 +5265,124 @@ Swagger（`http://127.0.0.1:18100/docs-json`）。）
 - **线上业务库应用**两条索引迁移（#5000 / #6000）、发布窗口排期、
   正式密钥轮转、`AUTH_MODE=wechat` 切换、域名与 HTTPS、WAF 与备份定时任务、
   小程序真机复验：延续的人工项。
+
+## 18. 第十二轮（opt-012）：迁移层对账扩到「实体 ↔ 迁移」三层 + 已登录端点的可见性口径
+
+本轮是「扩面 + 收口」轮：**对外行为一个字没改**（#197 / #198 仍等产品拍板），
+全部产出是**把此前只被人工抽查过的口径做成自动化对账**。
+
+### 18.1 实体 ↔ 迁移的三层对账（`check-error-semantics.mjs` 新增 R7 / R8 / R9）
+
+生产库 `synchronize: false`，跑的是 `apps/api/src/database/migrations/*` ——
+**真正约束生产数据的是迁移，不是实体声明**。此前只核了**唯一键**（R5）与
+**文档索引清单**（R6），本轮把对账扩到完整三层：
+
+| 层 | 判定 | 报出的问题 |
+|---|---|---|
+| **R7 全部索引**（含非唯一 `idx_*`） | 实体类级 `@Index` ↔ 迁移里创建的索引 | 实体有迁移没有（`MIGRATION_INDEX_MISSING`）、迁移有实体没有（`MIGRATION_INDEX_NOT_DECLARED`）、列集合不一致（`MIGRATION_INDEX_COLUMN_MISMATCH`）、唯一性不一致（`MIGRATION_INDEX_UNIQUENESS_MISMATCH`）、表对不上（`MIGRATION_INDEX_TABLE_MISMATCH`） |
+| **R8 外键** | 实体 `@ManyToOne` / `@OneToOne` + `@JoinColumn` ↔ 迁移 `FOREIGN KEY` | 实体有迁移没有（`ENTITY_FOREIGN_KEY_MISSING`）、迁移有实体没有（`MIGRATION_FOREIGN_KEY_NOT_DECLARED`）、指向不一致（`FOREIGN_KEY_TARGET_MISMATCH`） |
+| **R9 全部列的定义** | 实体每一列 ↔ 迁移里的列定义 | 类型 / 长度 / 可空性不一致（`MIGRATION_COLUMN_DEF_MISMATCH`）、实体有迁移没有（`MIGRATION_COLUMN_MISSING`）、迁移有实体没有（`MIGRATION_COLUMN_NOT_DECLARED`）、表不存在（`MIGRATION_TABLE_MISSING`） |
+
+⚠️ **口径（只报能直接判定的分歧）**：枚举**取值**、精度、`unsigned`、
+`ON DELETE` 行为、默认值一律**不判**（要么查不到，要么判了会动到业务语义）。
+⚠️ **主键等价不算缺陷**：唯一索引的列就是主键时，主键天然唯一，
+不必再建一条同列的唯一索引（重复约束 = 写放大）—— `admin_user_roles` /
+`role_permissions` 两条即属此类。
+
+### 18.2 先把实体侧的解析做准（否则门禁假红）
+
+「假缺口」比不做更糟（门禁一旦假红，团队只会去关掉它）。本轮先修解析，再上对账：
+
+| 坑 | 处置 |
+|---|---|
+| 类级 `@Index` 的**类归属** | 只向上扫描到**空行**为止的装饰器块（`admin.entity.ts` 一个文件里有 5 个实体） |
+| **属性名 → 列名**映射 | 复合索引里写的是属性名（`['userAId','userBId']`），库里是列名（`user_a_id`） |
+| 关系列的**列名来自 `@JoinColumn`** | `adminUser?: AdminUser` 的列名是 `admin_user_id`，不是属性名 |
+| 外键的**目标列** | 没写 `referencedColumnName` 就是**目标表的主键**（`regions.code` 是自然键主键） |
+| 「改外键指向」的迁移 | `DROP FOREIGN KEY` 之后再 `ADD CONSTRAINT`（迁移 1000 / 2000）—— 必须**按文件内先后顺序**处理，只看「最后有没有 ADD」会把改指向算成「两个外键并存」 |
+| 模板字符串里的反引号 | 源码里是「反斜杠 + 反引号」，直接按 `` ` `` 匹配会一个都匹配不上 |
+
+### 18.3 实测：逐条对齐，并修掉 1 处真实分叉
+
+| 项 | 数量 |
+|---|---|
+| 实体表 / 迁移表 | **32 ↔ 32**（无孤儿表） |
+| 实体索引 / 迁移索引 | **40 / 42**（38 条按名字逐条对上；2 条属「主键等价」；4 条 `uk_*` 对应实体里的 `unique: true` 列声明） |
+| 实体外键 / 迁移外键 | **46 ↔ 46**（逐条对上，含迁移 1000 / 2000 改过指向的 5 条） |
+| 实体列 | **271 列**逐条核了类型 / 长度 / 可空性 |
+
+**发现并修掉 1 处真实分叉**：`notification_deliveries` 的
+`idx_notification_deliveries_notification (notification_id, status)` ——
+迁移里**真实存在**（`InitSchema`），文档清单里也写了，但**实体侧漏了声明**。
+处置按仓库既定口径「**以迁移为准**」（同缺陷 #196 的处置）：
+把类级 `@Index` 声明补进 `notification.entity.ts`，**不动库、不加迁移**
+（该索引在生产库上本来就有）。
+
+### 18.4 反向验证：12 例 → **17 例**
+
+`check-error-semantics-selftest.sh` 新增 5 个注入用例（全部被抓出、退出码非 0，
+基线退出码 0）：
+
+| 用例 | 期望判定码 |
+|---|---|
+| `error-semantics-entity-index-missing-in-migration` | `MIGRATION_INDEX_MISSING` |
+| `error-semantics-migration-index-not-declared` | `MIGRATION_INDEX_NOT_DECLARED` |
+| `error-semantics-column-length-mismatch` | `MIGRATION_COLUMN_DEF_MISMATCH` |
+| `error-semantics-entity-foreign-key-missing` | `ENTITY_FOREIGN_KEY_MISSING` |
+| `error-semantics-foreign-key-target-mismatch` | `FOREIGN_KEY_TARGET_MISMATCH` |
+
+### 18.5 已登录端点的可见性口径（`check-read-visibility.mjs` 新增 R6 / R7 / R8）
+
+第十一轮只核了**公开**读端点；本轮把同一支脚本的覆盖面扩到**已登录**端点 ——
+`docs/API-SPEC.md` 第 13.2 节写明的「**无权 → 403**」与「**不可见 → 404**」分界：
+
+| 规则 | 内容 |
+|---|---|
+| **R6 覆盖** | 用户侧（`/me`、`/connections`、`/directory`、`/alumni/verification`、`/notifications`、`/uploads`、`/resources`）的已登录端点，凡是实现里**会抛 403 / 404** 的，都必须登记分界口径（**19 个**已登记）；只返回自己数据的（**25 个**）记为「无可见性分界」 |
+| **R7 落地** | 登记项写明的状态码痕迹必须真的出现在实现里（`NotFoundException` / `ForbiddenException`）；控制器上的 `@RequireAlumniStage('verified')` 守卫被摘掉也要报 |
+| **R8 文档** | `docs/API-SPEC.md` 第 13.2 节必须**逐条**点名（19 行表格） |
+
+⚠️ `/admin/*` **不在本脚本范围内**：管理端「权限点不足 → 403」由
+`infra/scripts/check-rbac-matrix.mjs`（端点 ↔ 权限点）对账守着 —— 两张表各管一段。
+⚠️ **第三种 403**：`VERIFICATION_REQUIRED`（HTTP 仍 403，未完成校友认证被守卫拦下）
+已在文档里写明，客户端要靠它把用户引导到认证页。
+
+### 18.6 反向验证：6 例 → **9 例**
+
+| 用例 | 期望判定码 |
+|---|---|
+| `read-visibility-auth-403-changed-to-404` | `AUTH_VISIBILITY_STATUS_MISSING` |
+| `read-visibility-auth-endpoint-unregistered` | `AUTH_VISIBILITY_NOT_REGISTERED` |
+| `read-visibility-auth-doc-row-removed` | `AUTH_VISIBILITY_UNDOCUMENTED` |
+
+### 18.7 本轮实跑清单
+
+| 项 | 结果 |
+|---|---|
+| `node infra/scripts/check-error-semantics.mjs` | 退出码 **0**（21 个唯一键 + 32 张表的三层对账全部一致） |
+| `node infra/scripts/check-read-visibility.mjs` | 退出码 **0**（16 个公开读端点 + 19 个已登录端点的口径全部对齐） |
+| `bash infra/scripts/check-error-semantics-selftest.sh` | 退出码 **0**（**17 类**缺陷全部被抓出） |
+| `bash infra/scripts/check-read-visibility-selftest.sh` | 退出码 **0**（**9 类**缺陷全部被抓出） |
+| `pnpm typecheck` | 退出码 **0** |
+| `pnpm lint` | 退出码 **0** |
+| 其余静态校验器（枚举一致性 / RBAC 矩阵 / 契约镜像 / 死码 / 状态码断言 / 请求 DTO / Swagger 参数消费 / 事务逃逸 / 并发 upsert / 规格覆盖） | 退出码 **0** |
+| `check-api-spec-doc` / `check-response-shape` | 本机**无跑着的 API 与录制夹具**，这两个校验器与本轮改动**无关**（改动前同样失败，报错内容逐条相同） |
+
+⚠️ **集成测试本机未跑**：本机没有 MySQL（`127.0.0.1:3306` 不通），
+而本轮的改动**全部是静态校验器 + 文档 + 一处实体声明**
+（`@Index` 声明，`synchronize: false` 下不产生任何 DDL），
+不触及运行时行为；集成测试留待 CI / 有库的环境跑。
+
+### 18.8 本轮未做完 / 仍需人工
+
+- **#197 / #198**（公开活动详情的可见性与 `myRegistration`）：仍**无产品结论**，
+  本轮**一个字没改对外行为**，只把「已登录端点」那一半的口径也做成了自动化。
+- **#194 / #195**（认证申请并发提交、连接解除后重建）：延续项，需产品 / 架构确认。
+- **#189**（游标分页）、**`/admin/stats` 的 `connectionTotal` 口径**、
+  **连接列表是否受对方可见开关约束**：延续项，需产品 / 客户拍板。
+- **上线环境**跑一次 `node infra/scripts/check-unique-index-db.mjs`（只读）、
+  `bash infra/scripts/healthcheck.sh`、`node infra/scripts/invalidation-bus-drill.mjs`：
+  部署侧动作（**本轮已把「库内对账脚本尚未在上线环境跑过」写进 KNOWN-ISSUES 的待验证表**）。
+- **专用压测窗口**排期、线上业务库应用两条索引迁移、发布窗口排期、
+  正式密钥轮转、`AUTH_MODE=wechat` 切换、域名与 HTTPS、WAF 与备份定时任务、
+  小程序真机复验：延续的人工项。

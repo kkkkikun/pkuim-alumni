@@ -7,7 +7,9 @@
 # 目的：证明 `check-read-visibility.mjs` **不是恒过**——
 #       当「某个公开读端点的可见性过滤被删掉」「不可见被改成 403」
 #       「新增公开读端点却没人登记口径」「文档里的口径被删掉」
-#       「待拍板的条目被从 KNOWN-ISSUES 里抹掉」时，它必须报错并返回非 0。
+#       「待拍板的条目被从 KNOWN-ISSUES 里抹掉」
+#       「已登录端点的 403 被改成 404」「新增已登录端点却没人登记可见性分界」
+#       「已登录端点的那一行文档被删掉」时，它必须报错并返回非 0。
 #
 # 为什么这个校验器值得单测：
 #   它守的是「公开读端点的可见性口径」这一层 ——
@@ -29,6 +31,12 @@
 #   read-visibility-doc-row-removed     → R4：API-SPEC 里的可见性口径被删掉
 #   read-visibility-known-issue-removed → R5：待拍板条目被从 KNOWN-ISSUES 抹掉
 #   read-visibility-pending-resolved    → R5：待拍板端点的行为被改掉（登记表过期）
+#   read-visibility-auth-403-changed-to-404
+#                                   → R7：已登录端点的「无权 → 403」被改成 404
+#   read-visibility-auth-endpoint-unregistered
+#                                   → R6：新增已登录端点却没登记可见性分界
+#   read-visibility-auth-doc-row-removed
+#                                   → R8：已登录端点的那一行文档被删掉
 #
 # 流程：
 #   0. 正向基线：干净副本上必须 0 不一致、退出码 0；
@@ -166,6 +174,12 @@ run_case "read-visibility-doc-row-removed" "READ_VISIBILITY_UNDOCUMENTED"
 run_case "read-visibility-known-issue-removed" "READ_VISIBILITY_KNOWN_ISSUE_MISSING"
 # 待拍板端点的行为被改掉（登记表与文档过期）
 run_case "read-visibility-pending-resolved" "READ_VISIBILITY_REGISTRY_STALE"
+# 已登录端点（第十二轮）：「无权 → 403」被改成 404（客户端分不清两种引导）
+run_case "read-visibility-auth-403-changed-to-404" "AUTH_VISIBILITY_STATUS_MISSING"
+# 已登录端点（第十二轮）：新增端点却没登记可见性分界
+run_case "read-visibility-auth-endpoint-unregistered" "AUTH_VISIBILITY_NOT_REGISTERED"
+# 已登录端点（第十二轮）：API-SPEC 里的那一行被删掉
+run_case "read-visibility-auth-doc-row-removed" "AUTH_VISIBILITY_UNDOCUMENTED"
 
 # --- 2. 清理 ---------------------------------------------------------------
 log "[2/2] 清理临时副本……"
@@ -176,5 +190,5 @@ if [ "$FAILED" -ne 0 ]; then
   die "公开读端点可见性对账校验器反向验证失败 ❌"
 fi
 
-log "=== 反向验证通过 ✅（6 类「可见性口径失配」缺陷全部被抓出，校验器非恒过）==="
+log "=== 反向验证通过 ✅（9 类「可见性口径失配」缺陷全部被抓出，校验器非恒过）==="
 log "公开读端点可见性对账校验器反向验证通过 ✅"

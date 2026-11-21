@@ -51,6 +51,24 @@
  *   5) **反向验证**（`check-error-semantics-selftest.sh`）：
  *      本脚本自己也被反向验证过 —— 各类「语义失配」缺陷都必须被抓出、退出码非 0。
  *
+ * 第十二轮把「迁移层对账」（R5）从**唯一键**扩到「**实体 ↔ 迁移**」的完整三层：
+ *   R7 **全部索引**（含非唯一 `idx_*`）：实体声明了、迁移里没建 → 报；
+ *      迁移里建了、实体没声明 → **也报**（库比实体多一道索引）；
+ *      索引的**列集合**或**唯一性**对不上 → 报。
+ *      ⚠️ 「主键等价」不算缺陷：唯一索引的列就是主键时，主键天然唯一，
+ *         不必再建一条同列的唯一索引（重复约束 = 写放大）。
+ *   R8 **外键**：实体的 `@ManyToOne` / `@OneToOne` + `@JoinColumn`
+ *      ↔ 迁移里的 `FOREIGN KEY`；缺一边 → 报；**指向**（目标表 / 目标列）不一致 → 报。
+ *      ⚠️ `ON DELETE` 行为**不判**（CASCADE / SET NULL / RESTRICT 不在口径里）。
+ *   R9 **全部列的定义**：类型 / 长度 / 可空性，逐列与迁移对账；
+ *      实体有迁移没有的列、迁移有实体没有的列 → 都报。
+ *      ⚠️ 枚举**取值**、精度、`unsigned`、默认值一律**不判**
+ *         （那些要么查不到、要么判了会动到业务语义）。
+ *
+ * ⚠️ 这一层**必须解析得准**，否则会凭空报出「假缺口」（门禁假红比不做更糟）：
+ *    类级 `@Index` 的**类归属**、**属性名 → 列名**映射、关系列的列名来自
+ *    `@JoinColumn` —— 三处只要错一处，就会报出一堆并不存在的缺口。
+ *
  * ⚠️ 口径与判定的局限（写在这里，免得被当成万能护栏）：
  *   - 判定是**静态**的：只看源码里有没有「捕获重复键 + 转成可预期错误码」的形态，
  *     不执行代码，也不连数据库；真值由集成测试
@@ -655,6 +673,14 @@ function discoverMigrationSchema() {
   const tables = new Map();
   /** 真正被创建的唯一约束 */
   const uniques = [];
+  /** 真正被创建的**全部**索引（唯一与非唯一，第十一轮起） */
+  const indexes = [];
+  /** 表 → 主键列 */
+  const primaryKeys = new Map();
+  /** 「表.列」 → 外键（后一条迁移覆盖前一条） */
+  const foreignKeys = new Map();
+  /** 外键名 → 「表.列」（`DROP FOREIGN KEY` 要靠它删） */
+  const foreignKeyNames = new Map();
 
   const tableOf = (name) => {
     if (!tables.has(name)) tables.set(name, new Map());
@@ -668,7 +694,10 @@ function discoverMigrationSchema() {
     //    把它也算进来会把「最终结构」算反 ——
     //    例如 `WidenIdempotencyScope` 的 down() 里有
     //    `MODIFY COLUMN scope VARCHAR(64)`，算进去就成了 64。
-    const body = withoutDownMethod(src);
+    // ⚠️ 模板字符串里的反引号在**源码**里是「反斜杠 + 反引号」，
+    //    直接按 `` ` `` 去匹配会一个都匹配不上 ——
+    //    先把转义去掉，剩下的才是能读懂的那份 SQL 文本。
+    const body = withoutDownMethod(src).replace(/\\`/g, '`');
 
     // --- 建表：this.createTable(queryRunner, 'table', '列定义...') ---------
     const callRe = /\bcreateTable\s*\(/g;
@@ -691,9 +720,11 @@ function discoverMigrationSchema() {
       }
       const primaryMatch = /PRIMARY\s+KEY\s*\(([^)]*)\)/i.exec(defs);
       if (primaryMatch) {
+        const primaryColumns = parseColumnList(primaryMatch[1]);
+        primaryKeys.set(table, primaryColumns);
         uniques.push({
           table,
-          columns: parseColumnList(primaryMatch[1]),
+          columns: primaryColumns,
           name: 'PRIMARY',
           kind: 'primary',
           source: name,
@@ -706,44 +737,53 @@ function discoverMigrationSchema() {
       /\{\s*table:\s*'([A-Za-z0-9_]+)'\s*,\s*name:\s*'([^']+)'\s*,\s*columns:\s*(?:'([^']*)'|\[([^\]]*)\])\s*([^{}]*)\}/g;
     while ((match = descriptorRe.exec(body)) !== null) {
       const tail = match[5] ?? '';
-      if (!/unique:\s*true/.test(tail)) continue;
+      const unique = /unique:\s*true/.test(tail);
       const columns = match[3] !== undefined
         ? parseColumnList(match[3])
         : splitTopLevel(match[4] ?? '', ',')
             .map((item) => item.trim().replace(/^['"]|['"]$/g, '').toLowerCase())
             .filter(Boolean);
       if (!columns.length) continue;
-      uniques.push({
+      const entry = {
         table: match[1].toLowerCase(),
         columns,
         name: match[2],
         kind: 'index',
+        unique,
         source: name,
-      });
+      };
+      indexes.push(entry);
+      if (unique) uniques.push(entry);
     }
 
-    // --- 裸 SQL：CREATE UNIQUE INDEX / ADD CONSTRAINT ... UNIQUE ----------
+    // --- 裸 SQL：CREATE [UNIQUE] INDEX / ADD CONSTRAINT ... UNIQUE -------
     const createIndexRe =
-      /CREATE\s+UNIQUE\s+INDEX\s+`?([A-Za-z0-9_]+)`?\s+ON\s+`?([A-Za-z0-9_]+)`?\s*\(([^)]*)\)/gi;
+      /CREATE\s+(UNIQUE\s+)?INDEX\s+`?([A-Za-z0-9_]+)`?\s+ON\s+`?([A-Za-z0-9_]+)`?\s*\(([^)]*)\)/gi;
     while ((match = createIndexRe.exec(body)) !== null) {
-      uniques.push({
-        table: match[2].toLowerCase(),
-        columns: parseColumnList(match[3]),
-        name: match[1],
+      const entry = {
+        table: match[3].toLowerCase(),
+        columns: parseColumnList(match[4]),
+        name: match[2],
         kind: 'index',
+        unique: Boolean(match[1]),
         source: name,
-      });
+      };
+      indexes.push(entry);
+      if (entry.unique) uniques.push(entry);
     }
     const constraintRe =
       /ALTER\s+TABLE\s+`?([A-Za-z0-9_]+)`?\s+ADD\s+(?:CONSTRAINT\s+`?([A-Za-z0-9_]+)`?\s+)?UNIQUE(?:\s+KEY)?\s*\(([^)]*)\)/gi;
     while ((match = constraintRe.exec(body)) !== null) {
-      uniques.push({
+      const entry = {
         table: match[1].toLowerCase(),
         columns: parseColumnList(match[3]),
         name: match[2] ?? 'UNIQUE',
         kind: 'constraint',
+        unique: true,
         source: name,
-      });
+      };
+      indexes.push(entry);
+      uniques.push(entry);
     }
 
     // --- 裸 SQL：CREATE TABLE ... (列定义) --------------------------------
@@ -764,9 +804,11 @@ function discoverMigrationSchema() {
       }
       const primaryMatch = /PRIMARY\s+KEY\s*\(([^)]*)\)/i.exec(defs);
       if (primaryMatch) {
+        const primaryColumns = parseColumnList(primaryMatch[1]);
+        primaryKeys.set(table, primaryColumns);
         uniques.push({
           table,
-          columns: parseColumnList(primaryMatch[1]),
+          columns: primaryColumns,
           name: 'PRIMARY',
           kind: 'primary',
           source: name,
@@ -778,6 +820,11 @@ function discoverMigrationSchema() {
     const alterRe =
       /ALTER\s+TABLE\s+`?([A-Za-z0-9_]+)`?\s+(MODIFY|CHANGE|ADD)\s+(?:COLUMN\s+)?`?([A-Za-z0-9_]+)`?\s+([^,;]+)/gi;
     while ((match = alterRe.exec(body)) !== null) {
+      // ⚠️ `ADD CONSTRAINT ... FOREIGN KEY ...` 也是 `ALTER TABLE ... ADD` ——
+      //    但它**不是加列**。不排除掉就会凭空多出一列叫 `constraint`。
+      if (/^(constraint|primary|unique|key|index|foreign|fulltext|spatial)$/i.test(match[3])) {
+        continue;
+      }
       const table = match[1].toLowerCase();
       const column = match[3].toLowerCase();
       const definition = match[4].trim().replace(/['"`]+$/, '').trim();
@@ -787,6 +834,67 @@ function discoverMigrationSchema() {
         : definition;
       if (renamed === null) continue;
       tableOf(table).set(column, renamed);
+    }
+
+    // --- 外键（第十一轮起对账这一层） -------------------------------------
+    // ⚠️ 必须**按文件内的先后顺序**处理：`DROP FOREIGN KEY` 之后再
+    //    `ADD CONSTRAINT ... FOREIGN KEY` 是「改指向」（迁移 1000 / 2000 就是这么干的），
+    //    只看「最后有没有 ADD」会把改指向算成「两个外键并存」。
+    const events = [];
+    const fkDescriptorRe =
+      /\{\s*table:\s*'([A-Za-z0-9_]+)'\s*,\s*name:\s*'([^']+)'\s*,\s*column:\s*'([^']+)'\s*,\s*refTable:\s*'([^']+)'\s*,\s*refColumn:\s*'([^']+)'/g;
+    while ((match = fkDescriptorRe.exec(body)) !== null) {
+      events.push({
+        pos: match.index,
+        kind: 'add',
+        table: match[1].toLowerCase(),
+        name: match[2],
+        column: match[3].toLowerCase(),
+        refTable: match[4].toLowerCase(),
+        refColumn: match[5].toLowerCase(),
+      });
+    }
+    // ⚠️ 表名必须从 `ALTER TABLE` 里一起取 ——
+    //    「改外键指向」的迁移（1000 / 2000）只写 `ADD CONSTRAINT ... FOREIGN KEY`，
+    //    表名在**前一句**的 `ALTER TABLE` 上；不一起取就不知道这条外键属于哪张表。
+    const fkAddRe =
+      /ALTER\s+TABLE\s+`?([A-Za-z0-9_]+)`?\s+ADD\s+(?:CONSTRAINT\s+`?([A-Za-z0-9_]+)`?\s+)?FOREIGN\s+KEY\s*\(([^)]*)\)\s*REFERENCES\s+`?([A-Za-z0-9_]+)`?\s*\(([^)]*)\)/gi;
+    while ((match = fkAddRe.exec(body)) !== null) {
+      const columns = parseColumnList(match[3]);
+      if (!columns.length) continue;
+      const refs = parseColumnList(match[5]);
+      events.push({
+        pos: match.index,
+        kind: 'add',
+        table: match[1].toLowerCase(),
+        name: match[2] ?? 'FOREIGN',
+        column: columns[0],
+        refTable: match[4].toLowerCase(),
+        refColumn: refs[0] ?? null,
+      });
+    }
+    const fkDropRe = /DROP\s+FOREIGN\s+KEY\s+`?([A-Za-z0-9_]+)`?/gi;
+    while ((match = fkDropRe.exec(body)) !== null) {
+      events.push({ pos: match.index, kind: 'drop', name: match[1] });
+    }
+    events.sort((left, right) => left.pos - right.pos);
+    for (const event of events) {
+      if (event.kind === 'drop') {
+        const key = foreignKeyNames.get(event.name);
+        if (key) foreignKeys.delete(key);
+        continue;
+      }
+      if (!event.table) continue;
+      const key = `${event.table}.${event.column}`;
+      foreignKeys.set(key, {
+        table: event.table,
+        column: event.column,
+        name: event.name,
+        refTable: event.refTable,
+        refColumn: event.refColumn,
+        source: name,
+      });
+      foreignKeyNames.set(event.name, key);
     }
   }
 
@@ -799,7 +907,29 @@ function discoverMigrationSchema() {
     item.identity = Boolean(def && analyzeDdlColumnDef(def).autoIncrement);
   }
 
-  return { tables, uniques };
+  // ⚠️ 同一条索引可能被**描述两遍**（迁移里的「描述对象」+ 真正执行的
+  //    `CREATE INDEX` 语句）—— 去重，否则同一条差异会被报两次。
+  const uniqueIndexes = new Map();
+  for (const item of indexes) {
+    const key = `${item.table}.${item.name}`;
+    if (!uniqueIndexes.has(key)) uniqueIndexes.set(key, item);
+  }
+  const dedupedUniques = [];
+  const seenUniques = new Set();
+  for (const item of uniques) {
+    const key = `${item.table}.${item.kind === 'primary' ? 'PRIMARY' : item.name}.${keyOf(item.columns)}`;
+    if (seenUniques.has(key)) continue;
+    seenUniques.add(key);
+    dedupedUniques.push(item);
+  }
+
+  return {
+    tables,
+    uniques: dedupedUniques,
+    indexes: [...uniqueIndexes.values()],
+    primaryKeys,
+    foreignKeys,
+  };
 }
 
 /* ------------------------------ 工具 ------------------------------ */
@@ -882,6 +1012,32 @@ function analyzeEntityColumnArgs(args) {
     length: lengthMatch ? Number(lengthMatch[1]) : null,
     nullable: nullableMatch ? nullableMatch[1] === 'true' : false,
   };
+}
+
+/**
+ * 类型名的**别名归一**（实体声明 ↔ 迁移 DDL）。
+ *
+ * ⚠️ 只归一**同义**写法，不做「族」的合并 ——
+ *    `varchar` 与 `char` 是不同的类型（定长 vs 变长），
+ *    `text` 与 `mediumtext` 的上限差了几万倍 ——
+ *    这些必须**报出来**，不能被归一成同一个。
+ */
+function normalizeType(type) {
+  if (!type) return null;
+  const normalized = String(type).toLowerCase().trim();
+  const aliases = {
+    integer: 'int',
+    numeric: 'decimal',
+    bool: 'tinyint',
+    boolean: 'tinyint',
+    datetime: 'datetime',
+  };
+  return aliases[normalized] ?? normalized;
+}
+
+/** 是否是**字符串族**（有「长度」这个概念，可以比长度）。 */
+function isStringType(type) {
+  return Boolean(type) && ['varchar', 'char', 'varbinary', 'binary'].includes(String(type).toLowerCase());
 }
 
 /**
@@ -1002,6 +1158,283 @@ function discoverUniqueKeys() {
     }
   }
   return discovered;
+}
+
+/* --------------------------- 实体侧 schema --------------------------- */
+
+/**
+ * 实体侧的结构声明（第十二轮新增）。
+ *
+ * 第十轮只把**唯一键**这一层对到了迁移层；第十二轮把对账扩到**三层**：
+ *   1) 全部索引（含非唯一 `idx_*`）；
+ *   2) 外键（`@ManyToOne` / `@OneToOne` + `@JoinColumn`）；
+ *   3) 全部列的类型 / 长度 / 可空性。
+ *
+ * ⚠️ 这一层**必须解析得准**，否则会凭空报出「假缺口」——
+ *    门禁假红比不做更糟（真正的新缺口会被淹没在噪声里）。
+ *    三个最容易踩空的地方：
+ *      a) **类级 `@Index` 装饰器的类归属**：
+ *         一个文件里可能有多个实体，装饰器必须**归属到它下面那个类**
+ *         （`classDecorators` 只向上扫描到空行为止）；
+ *      b) **属性名 → 列名映射**：
+ *         复合索引里写的是**属性名**（`['userAId','userBId']`），
+ *         库里是**列名**（`user_a_id`）—— 不映射就一定对不上；
+ *      c) **关系列的列名来自 `@JoinColumn`**：
+ *         `adminUser?: AdminUser` 的列名是 `admin_user_id`，
+ *         不是属性名，也不是 `adminUserId`。
+ */
+
+/** 装饰器里可能出现的「标量列」装饰器。 */
+const COLUMN_DECORATORS = new Set([
+  'Column',
+  'PrimaryColumn',
+  'PrimaryGeneratedColumn',
+  'CreateDateColumn',
+  'UpdateDateColumn',
+  'DeleteDateColumn',
+]);
+
+/** 关系装饰器（会生成外键）。 */
+const RELATION_DECORATORS = new Set(['ManyToOne', 'OneToOne']);
+
+/** 文本里的括号是否配平（用于跨行装饰器的拼接）。 */
+function isBalancedParens(text) {
+  let depth = 0;
+  let quote = null;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (quote) {
+      if (ch === '\\') {
+        i += 1;
+        continue;
+      }
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === '`') {
+      quote = ch;
+      continue;
+    }
+    if (ch === '(') depth += 1;
+    else if (ch === ')') depth -= 1;
+  }
+  return depth <= 0;
+}
+
+/**
+ * 把一个类的**属性**与其装饰器对应起来。
+ *
+ * ⚠️ 为什么不用正则一把梭：
+ *   装饰器**可能跨行**（`@Column({` 换行再写参数），
+ *   而属性名在装饰器**之后**那一行；
+ *   逐行扫描才能知道「这些装饰器属于哪个属性」。
+ */
+function parseClassProperties(block) {
+  const props = [];
+  let pending = [];
+  let buffer = '';
+  for (const raw of block.split('\n')) {
+    const line = raw.trim();
+    if (buffer) {
+      buffer += ` ${line}`;
+      if (isBalancedParens(buffer)) {
+        pending.push(buffer);
+        buffer = '';
+      }
+      continue;
+    }
+    if (line === '') continue;
+    if (line.startsWith('//') || line.startsWith('*') || line.startsWith('/*')) continue;
+    if (line.startsWith('@')) {
+      buffer = line;
+      if (isBalancedParens(buffer)) {
+        pending.push(buffer);
+        buffer = '';
+      }
+      continue;
+    }
+    const property = /^([A-Za-z_$][\w$]*)\s*[?!]?:/.exec(line);
+    if (property) {
+      props.push({ prop: property[1], decorators: pending });
+      pending = [];
+      continue;
+    }
+    pending = [];
+  }
+  return props;
+}
+
+/** 拆出装饰器的名字与参数表。 */
+function parseDecorator(text) {
+  const trimmed = text.trim();
+  const matched = /^@([A-Za-z_$][\w$]*)\s*\(([\s\S]*)\)$/.exec(trimmed);
+  if (!matched) return { name: trimmed.replace(/^@/, ''), args: '' };
+  return { name: matched[1], args: matched[2] };
+}
+
+/**
+ * 扫**全部实体文件**，抽出每张表的：
+ *   - **列**（列名 → 类型 / 长度 / 可空性 / 是否唯一 / 主键）；
+ *   - **索引**（类级 `@Index` 的名字、列、是否唯一）；
+ *   - **关系**（外键：列 → 目标表 / 目标列）。
+ *
+ * @returns {{tables: Map, classToTable: Map}}
+ */
+function discoverEntitySchema() {
+  const dir = path.join(root(), 'apps/api/src/database/entities');
+  const files = fs.existsSync(dir)
+    ? fs.readdirSync(dir).filter((name) => name.endsWith('.ts')).sort()
+    : [];
+  /** 实体类清单 */
+  const classes = [];
+  for (const name of files) {
+    const rel = `apps/api/src/database/entities/${name}`;
+    const src = readTextSafe(path.join(root(), rel));
+    if (!src) continue;
+    for (const match of src.matchAll(/export class ([A-Za-z_$][\w$]*)/g)) {
+      const className = match[1];
+      const entityMatch = /@Entity\(\{\s*name:\s*'([^']+)'/.exec(
+        classDecorators(src, className),
+      );
+      if (!entityMatch) continue;
+      classes.push({
+        className,
+        table: entityMatch[1].toLowerCase(),
+        file: rel,
+        src,
+      });
+    }
+  }
+  const classToTable = new Map(classes.map((item) => [item.className, item.table]));
+
+  /** 表 → 声明 */
+  const tables = new Map();
+  for (const item of classes) {
+    const block = classBlock(item.src, item.className);
+    if (!block) continue;
+    /** 列名 → 声明 */
+    const columns = new Map();
+    /** 类级 `@Index` 声明 */
+    const indexes = [];
+    /** 关系（外键）声明 */
+    const relations = [];
+
+    for (const property of parseClassProperties(block)) {
+      const decorators = property.decorators.map(parseDecorator);
+      const columnDecorator = decorators.find((item) =>
+        COLUMN_DECORATORS.has(item.name),
+      );
+      const relationDecorator = decorators.find((item) =>
+        RELATION_DECORATORS.has(item.name),
+      );
+      const joinDecorator = decorators.find((item) => item.name === 'JoinColumn');
+
+      let columnName = null;
+      let columnDef = null;
+      if (columnDecorator) {
+        const nameMatch = /name:\s*'([^']+)'/.exec(columnDecorator.args);
+        columnName = (nameMatch ? nameMatch[1] : property.prop).toLowerCase();
+        const analyzed = analyzeEntityColumnArgs(columnDecorator.args);
+        columnDef = {
+          column: columnName,
+          prop: property.prop,
+          kind: columnDecorator.name,
+          type: analyzed.type,
+          length: analyzed.length,
+          // ⚠️ TypeORM 的 `nullable` 默认是 **false**（NOT NULL）
+          nullable: analyzed.nullable,
+          unique: /unique:\s*true/.test(columnDecorator.args),
+          primary:
+            columnDecorator.name === 'PrimaryColumn' ||
+            columnDecorator.name === 'PrimaryGeneratedColumn',
+        };
+        columns.set(columnName, columnDef);
+      }
+
+      if (relationDecorator) {
+        // ⚠️ 目标类是 `() => X`（**一对**括号，紧跟 `=>`）——
+        //    写成 `\(\(\)` 会一个都匹配不到（外层 `@ManyToOne(` 的括号不在 args 里）。
+        const target = /\(\s*\)\s*=>\s*([A-Za-z_$][\w$]*)/.exec(
+          relationDecorator.args,
+        );
+        const relationNullable = /nullable:\s*(true|false)/.exec(
+          relationDecorator.args,
+        );
+        const joinName = joinDecorator
+          ? (/name:\s*'([^']+)'/.exec(joinDecorator.args)?.[1] ?? null)
+          : null;
+        const referenced = joinDecorator
+          ? (/referencedColumnName:\s*'([^']+)'/.exec(joinDecorator.args)?.[1] ?? null)
+          : null;
+        const column = (joinName ?? columnName ?? '').toLowerCase();
+        if (!column || !target) continue;
+        relations.push({
+          prop: property.prop,
+          column,
+          kind: relationDecorator.name,
+          targetClass: target[1],
+          targetTable: classToTable.get(target[1]) ?? null,
+          // ⚠️ `referencedColumnName` 没写就是**目标表的主键** —— 留空，
+          //    后面按目标表的主键列补齐（`regions.code` 是自然键主键）。
+          referencedColumn: referenced ? referenced.toLowerCase() : null,
+          // 可空性以**列声明**为准；关系列没有列声明时才用关系上的选项。
+          nullable: columnDef
+            ? columnDef.nullable
+            : relationNullable
+              ? relationNullable[1] === 'true'
+              : false,
+        });
+      }
+    }
+
+    // 类级 `@Index` —— **类归属**由 `classDecorators` 保证（只向上扫到空行为止）
+    const decorators = classDecorators(item.src, item.className);
+    const indexRe = /@Index\(\s*'([^']+)'\s*,\s*\[([^\]]*)\]\s*(?:,\s*(\{[^{}]*\}))?\s*\)/g;
+    let indexMatch;
+    while ((indexMatch = indexRe.exec(decorators)) !== null) {
+      const props = indexMatch[2]
+        .split(',')
+        .map((entry) => entry.trim().replace(/^['"]|['"]$/g, ''))
+        .filter(Boolean);
+      if (!props.length) continue;
+      const unique = /unique:\s*true/.test(indexMatch[3] ?? '');
+      const columnsOfIndex = props.map((prop) => {
+        for (const column of columns.values()) {
+          if (column.prop === prop) return column.column;
+        }
+        // ⚠️ 属性名找不到对应列声明 → 退回属性名本身（多半是关系列）
+        return prop.toLowerCase();
+      });
+      indexes.push({
+        name: indexMatch[1],
+        props,
+        columns: columnsOfIndex,
+        unique,
+      });
+    }
+
+    tables.set(item.table, {
+      table: item.table,
+      className: item.className,
+      file: item.file,
+      columns,
+      indexes,
+      relations,
+      primaryKey: [...columns.values()].filter((column) => column.primary).map((column) => column.column),
+    });
+  }
+
+  // 关系的外键目标列：没写 `referencedColumnName` 就是**目标表的主键**
+  for (const table of tables.values()) {
+    for (const relation of table.relations) {
+      if (relation.referencedColumn) continue;
+      const target = relation.targetTable ? tables.get(relation.targetTable) : null;
+      relation.referencedColumn = target?.primaryKey?.[0] ?? null;
+      relation.targetPrimaryKey = target?.primaryKey ?? [];
+    }
+  }
+
+  return { tables, classToTable };
 }
 
 /**
@@ -1609,12 +2042,278 @@ function main() {
     });
   }
 
+  // --- 6) 实体 ↔ 迁移：三层对账（第十二轮新增，R5 扩面） --------------------
+  //
+  // 第十轮只核了**唯一键**这一层；第十二轮把对账扩到完整三层：
+  //   1) 全部索引（含非唯一 `idx_*`）：实体有迁移没有 / 迁移有实体没有，**都报**；
+  //   2) 外键：实体的 `@ManyToOne` / `@OneToOne` + `@JoinColumn` ↔ 迁移的 FOREIGN KEY；
+  //   3) 全部列的类型 / 长度 / 可空性（不止唯一键的列）。
+  //
+  // ⚠️ **口径**：只报**能由迁移与实体直接判定**的分歧 ——
+  //    枚举取值、精度、`unsigned`、`ON DELETE` 行为、默认值一律**不判**
+  //    （那些要么查不到、要么改了会动到业务语义）。
+  const entitySchema = discoverEntitySchema();
+  const migrationIndexes = migrationSchema.indexes;
+  const migrationForeignKeys = migrationSchema.foreignKeys;
+
+  // --- 6.1 全部索引：实体声明了、迁移里没建 --------------------------------
+  for (const table of entitySchema.tables.values()) {
+    const primaryKey = migrationSchema.primaryKeys.get(table.table) ?? [];
+    for (const index of table.indexes) {
+      const found = migrationIndexes.find((item) => item.name === index.name);
+      if (!found) {
+        // ⚠️ **主键等价**：唯一索引的列就是主键 → 主键天然唯一，
+        //    不必再建一条同列的唯一索引（重复约束 = 写放大）。
+        if (index.unique && primaryKey.length && keyOf(index.columns) === keyOf(primaryKey)) {
+          notes.push({
+            kind: 'MIGRATION_INDEX_BY_PRIMARY_KEY',
+            where: `${table.table}.${index.name}`,
+            detail:
+              `迁移里由**主键**（PRIMARY KEY (${primaryKey.join(',')})）提供唯一性 —— ` +
+              '等价于这条唯一索引，不需要再建一条同列的（重复约束 = 写放大）',
+          });
+          continue;
+        }
+        issues.push({
+          kind: 'MIGRATION_INDEX_MISSING',
+          where: `${table.table}.${index.name}`,
+          detail:
+            `实体声明了索引 \`${index.name}\`（${index.columns.join(',')}${index.unique ? '，唯一' : ''}），` +
+            '但**迁移里没有创建它** —— 生产库 `synchronize: false`，跑的是迁移：' +
+            '生产库上**这个索引不存在**，按该列的查询会退化成全表扫。' +
+            '修法二选一（**必须逐条判断**）：补一条 TypeORM 迁移，或去掉实体里的声明',
+        });
+        continue;
+      }
+      if (found.table !== table.table) {
+        issues.push({
+          kind: 'MIGRATION_INDEX_TABLE_MISMATCH',
+          where: `${table.table}.${index.name}`,
+          detail:
+            `实体在 \`${table.table}\` 上声明了索引 \`${index.name}\`，` +
+            `迁移却把它建在了 \`${found.table}\` 上（迁移 \`${found.source}\`）—— ` +
+            '这张表上**没有**那个索引',
+        });
+        continue;
+      }
+      if (keyOf(found.columns) !== keyOf(index.columns)) {
+        issues.push({
+          kind: 'MIGRATION_INDEX_COLUMN_MISMATCH',
+          where: `${table.table}.${index.name}`,
+          detail:
+            `实体声明的索引 \`${index.name}\` 是（${index.columns.join(',')}），` +
+            `迁移里建的却是（${found.columns.join(',')}）—— 列集合不一致：` +
+            '按哪个列组合建的索引，决定了哪些查询能用上它',
+        });
+        continue;
+      }
+      if (Boolean(found.unique) !== Boolean(index.unique)) {
+        issues.push({
+          kind: 'MIGRATION_INDEX_UNIQUENESS_MISMATCH',
+          where: `${table.table}.${index.name}`,
+          detail:
+            `实体声明的索引 \`${index.name}\` 是${index.unique ? '**唯一**' : '非唯一'}索引，` +
+            `迁移里建的却是${found.unique ? '**唯一**' : '非唯一'}索引 —— ` +
+            '唯一性不同 → 约束强度不同（唯一索引会让撞键直接报错）',
+        });
+        continue;
+      }
+      notes.push({
+        kind: 'MIGRATION_INDEX_OK',
+        where: `${table.table}.${index.name}`,
+        detail: `迁移 \`${found.source}\` 里创建了索引 \`${index.name}\`（${found.columns.join(',')}）`,
+      });
+    }
+  }
+
+  // --- 6.2 反向：迁移里建了、实体没声明的索引 ------------------------------
+  for (const index of migrationIndexes) {
+    const table = entitySchema.tables.get(index.table);
+    if (!table) continue; // 没有实体类的表不判（无法判定）
+    if (table.indexes.some((item) => item.name === index.name)) continue;
+    // 唯一索引可能由实体里的 `unique: true` 声明（R5 已按**列集合**对账）
+    if (index.unique) {
+      const declared = [...table.columns.values()].some(
+        (column) => column.unique && column.column === index.columns[0],
+      );
+      if (declared) {
+        notes.push({
+          kind: 'MIGRATION_INDEX_BY_UNIQUE_COLUMN',
+          where: `${index.table}.${index.name}`,
+          detail:
+            `迁移里的唯一索引 \`${index.name}\`（${index.columns.join(',')}）` +
+            '对应实体里的 `unique: true` 列声明 —— 唯一性已由 R5 的列集合对账覆盖',
+        });
+        continue;
+      }
+    }
+    issues.push({
+      kind: 'MIGRATION_INDEX_NOT_DECLARED',
+      where: `${index.table}.${index.name}`,
+      detail:
+        `迁移 \`${index.source}\` 里创建了索引 \`${index.name}\`（${index.columns.join(',')}${index.unique ? '，唯一' : ''}），` +
+        '但**实体里没有对应的索引声明** —— 库比实体多一道索引：' +
+        '（唯一的那些会直接让写入撞键；非唯一的会让查询计划与实体声明对不上）',
+    });
+  }
+
+  // --- 6.3 外键：实体声明了、迁移里没建 ------------------------------------
+  for (const table of entitySchema.tables.values()) {
+    for (const relation of table.relations) {
+      const key = `${table.table}.${relation.column}`;
+      const found = migrationForeignKeys.get(key);
+      if (!found) {
+        issues.push({
+          kind: 'ENTITY_FOREIGN_KEY_MISSING',
+          where: `${table.table}.${relation.column}`,
+          detail:
+            `实体把 \`${relation.column}\` 声明成指向 \`${relation.targetTable}\` 的关系` +
+            `（${relation.kind}，属性 ${relation.prop}），但**迁移里没有对应的外键** —— ` +
+            '生产库上**引用完整性不被数据库保证**：写入可以指向不存在的行，' +
+            '删除被引用的行也不会被拦下',
+        });
+        continue;
+      }
+      if (
+        found.refTable !== relation.targetTable ||
+        found.refColumn !== relation.referencedColumn
+      ) {
+        issues.push({
+          kind: 'FOREIGN_KEY_TARGET_MISMATCH',
+          where: `${table.table}.${relation.column}`,
+          detail:
+            `实体声明 \`${relation.column}\` 指向 \`${relation.targetTable}\`（${relation.referencedColumn ?? '?'}），` +
+            `迁移里的外键 \`${found.name}\` 却指向 \`${found.refTable}\`（${found.refColumn ?? '?'}）—— ` +
+            '指向不同的表/列：实体与生产库说的不是一回事',
+        });
+        continue;
+      }
+      notes.push({
+        kind: 'FOREIGN_KEY_OK',
+        where: `${table.table}.${relation.column}`,
+        detail:
+          `迁移 \`${found.source}\` 里 \`${found.name}\` 指向 ` +
+          `\`${found.refTable}\`（${found.refColumn}）`,
+      });
+    }
+  }
+
+  // --- 6.4 反向：迁移里建了、实体没声明的外键 ------------------------------
+  for (const foreignKey of migrationForeignKeys.values()) {
+    const table = entitySchema.tables.get(foreignKey.table);
+    if (!table) continue;
+    if (table.relations.some((item) => item.column === foreignKey.column)) continue;
+    issues.push({
+      kind: 'MIGRATION_FOREIGN_KEY_NOT_DECLARED',
+      where: `${foreignKey.table}.${foreignKey.column}`,
+      detail:
+        `迁移 \`${foreignKey.source}\` 里 \`${foreignKey.name}\` 把 \`${foreignKey.column}\`` +
+        `约束到 \`${foreignKey.refTable}\`（${foreignKey.refColumn}），` +
+        '但**实体里没有对应的关系声明** —— 库比实体多一道外键：' +
+        '写入会被库挡下（外键失败），而实体与业务代码没准备这个约束',
+    });
+  }
+
+  // --- 6.5 全部列的定义（类型 / 长度 / 可空性） ----------------------------
+  for (const table of entitySchema.tables.values()) {
+    const migrationColumns = migrationSchema.tables.get(table.table);
+    if (!migrationColumns) {
+      issues.push({
+        kind: 'MIGRATION_TABLE_MISSING',
+        where: table.table,
+        detail:
+          `实体声明了表 \`${table.table}\`（${table.className}），但**迁移里没有建这张表** —— ` +
+          '生产库 `synchronize: false`，跑的是迁移：这张表在生产库上根本不存在',
+      });
+      continue;
+    }
+    for (const column of table.columns.values()) {
+      const ddlText = migrationColumns.get(column.column);
+      if (!ddlText) {
+        issues.push({
+          kind: 'MIGRATION_COLUMN_MISSING',
+          where: `${table.table}.${column.column}`,
+          detail:
+            `实体声明了列 \`${column.column}\`（${table.className}.${column.prop}），` +
+            '但**迁移里没有这一列** —— 生产库上读写这一列会直接报「未知列」',
+        });
+        continue;
+      }
+      const ddl = analyzeDdlColumnDef(ddlText);
+      // 类型
+      if (column.type && ddl.type && normalizeType(column.type) !== normalizeType(ddl.type)) {
+        issues.push({
+          kind: 'MIGRATION_COLUMN_DEF_MISMATCH',
+          where: `${table.table}.${column.column}`,
+          detail:
+            `实体声明 \`${column.column}\` 是 ${column.type}，` +
+            `迁移里却是 ${ddl.type} —— 类型不一致：` +
+            '读出来的值类型会变（日期变成字符串、数值精度丢失……），' +
+            '长度上限不同还会导致写入被截断',
+        });
+        continue;
+      }
+      // 长度（只对**字符串族**判：整数族的「长度」是显示宽度，不是容量）
+      if (
+        isStringType(column.type) &&
+        isStringType(ddl.type) &&
+        column.length !== null &&
+        ddl.length !== null &&
+        column.length !== ddl.length
+      ) {
+        issues.push({
+          kind: 'MIGRATION_COLUMN_DEF_MISMATCH',
+          where: `${table.table}.${column.column}`,
+          detail:
+            `实体声明 \`${column.column}\` 是 ${column.type}(${column.length})，` +
+            `迁移里却是 ${ddl.type}(${ddl.length}) —— 长度不一致：` +
+            '库里的上限更小的话，超长写入会被**静默截断**（数据丢失）',
+        });
+        continue;
+      }
+      // 可空性
+      if (column.nullable !== ddl.nullable) {
+        issues.push({
+          kind: 'MIGRATION_COLUMN_DEF_MISMATCH',
+          where: `${table.table}.${column.column}`,
+          detail:
+            `实体声明 \`${column.column}\` ${column.nullable ? '可空' : 'NOT NULL'}，` +
+            `迁移里却是 ${ddl.nullable ? '可空' : 'NOT NULL'} —— 可空性不一致：` +
+            'NOT NULL 的列写进 NULL 会直接报错，可空的列在实体里却被当成一定有值',
+        });
+      }
+    }
+    // 反向：迁移里多出来的列
+    for (const column of migrationColumns.keys()) {
+      if (table.columns.has(column)) continue;
+      issues.push({
+        kind: 'MIGRATION_COLUMN_NOT_DECLARED',
+        where: `${table.table}.${column}`,
+        detail:
+          `迁移里 \`${table.table}\` 有列 \`${column}\`，但**实体里没有这一列** —— ` +
+          '库比实体多一列：任何 `synchronize: true` 的环境都会把它删掉，' +
+          '而生产库上它一直在（两边对这一列的理解不一致）',
+      });
+    }
+  }
+
   const report = {
     reviewedUniqueKeys: UNIQUE_KEY_REGISTRY.length,
     discoveredUniqueKeys: discovered.length,
     migrationUniqueConstraints: migrationUniques.length,
     docIndexNames: docIndexNames.size,
     migrationIndexNames: migrationIndexNames.size,
+    entityTables: entitySchema.tables.size,
+    entityIndexes: [...entitySchema.tables.values()].reduce(
+      (total, table) => total + table.indexes.length,
+      0,
+    ),
+    migrationIndexes: migrationIndexes.length,
+    entityForeignKeys: [...entitySchema.tables.values()].reduce(
+      (total, table) => total + table.relations.length,
+      0,
+    ),
+    migrationForeignKeys: migrationForeignKeys.size,
     issues: issues.length,
     notes: notes.length,
     detail: issues,
@@ -1652,7 +2351,12 @@ function main() {
  * 供别的脚本复用（`check-unique-index-db.mjs` 要拿**同一份**登记表与
  * **同一套**迁移解析 —— 两边各算各的就会出现「静态说有、库里没有」的假绿）。
  */
-export { UNIQUE_KEY_REGISTRY, discoverUniqueKeys, discoverMigrationSchema };
+export {
+  UNIQUE_KEY_REGISTRY,
+  discoverUniqueKeys,
+  discoverMigrationSchema,
+  discoverEntitySchema,
+};
 
 /**
  * 只有**被直接执行**时才跑主流程。

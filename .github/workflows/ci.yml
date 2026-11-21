@@ -272,9 +272,14 @@ jobs:
           # 管理端写操作的**失败语义**对账（第八轮新增）：
           #   唯一键冲突必须落到 409，不能把数据库异常直接抛成 500
           #   （缺陷 #190：资讯分类 slug 重复此前返回 500）。
+          # 第十二轮：同一支脚本把「实体 ↔ 迁移」的对账扩到三层 ——
+          #   全部索引（含非唯一 idx_*）、外键、全部列的类型/长度/可空性。
+          #   生产库 synchronize:false，跑的是迁移：实体声明了而迁移没建，
+          #   那道索引 / 外键 / 列在生产库上**根本不存在**（#199）。
           node infra/scripts/check-error-semantics.mjs
-          # 公开读端点的**可见性口径**对账（第十一轮新增）：
-          #   逐个公开读端点核对「不可见 → 404」（不用 403，避免泄露存在性）。
+          # 读端点的**可见性口径**对账（第十一轮新增，第十二轮扩到已登录端点）：
+          #   逐个公开读端点核对「不可见 → 404」（不用 403，避免泄露存在性）；
+          #   第十二轮起同核**已登录端点**的「无权 → 403」与「不可见 → 404」分界。
           #   此前这条口径只被人工抽查过（第十轮抽查出 GET /events/:id 漏了过滤，
           #   记为 #197）—— 人工抽查必然漏：新增端点 / 改坏过滤都没有机制报警。
           node infra/scripts/check-read-visibility.mjs
@@ -312,7 +317,8 @@ jobs:
           bash infra/scripts/check-request-dto-selftest.sh
           # 第八轮：错误语义对账（唯一键冲突 → 409）
           bash infra/scripts/check-error-semantics-selftest.sh
-          # 第十一轮：公开读端点的可见性口径对账（不可见 → 404）
+          # 第十一轮：公开读端点的可见性口径对账（不可见 → 404）；
+          # 第十二轮：同一支脚本的反向验证扩到 9 例（新增已登录端点的三类缺陷）
           bash infra/scripts/check-read-visibility-selftest.sh
           # 第八轮：前端 / 契约 / RBAC 四个**纯静态**校验器的反向验证
           bash infra/scripts/check-rbac-matrix-selftest.sh
