@@ -66,6 +66,9 @@
  *   read-visibility-auth-403-changed-to-404 → 已登录端点：「无权 → 403」被改成 404
  *   read-visibility-auth-endpoint-unregistered → 已登录端点：新增端点却**没登记可见性分界**
  *   read-visibility-auth-doc-row-removed → 已登录端点：API-SPEC 里的那一行被删掉
+ *   read-visibility-admin-404-removed → 管理端：「资源不存在 → 404」的处置被删掉
+ *   read-visibility-admin-endpoint-unregistered → 管理端：新增端点却**没登记可见性分界**
+ *   read-visibility-admin-doc-row-removed → 管理端：API-SPEC 里的那一行被删掉
  */
 
 import fs from 'node:fs';
@@ -1075,6 +1078,72 @@ export class InjectedSafeUpsertService {
       );
     });
     if (index < 0) throw new Error('注入失败：API-SPEC 里找不到 /connections/:id 的可见性口径那一行');
+    lines.splice(index, 1);
+    writeText(file, lines.join('\n'));
+  },
+
+  /*
+   * 可见性对账（第十三轮，管理端）：把「活动不存在 → 404」的处置删掉 ——
+   * 删一条**不存在**的活动会返回「已删除」，管理后台于是提示成功，
+   * 而库里那条活动**根本不存在**。
+   * 期望：ADMIN_VISIBILITY_STATUS_MISSING 点名 DELETE /admin/events/:id。
+   */
+  'read-visibility-admin-404-removed'() {
+    const file = path.join(copyRoot, 'apps/api/src/modules/events/events.service.ts');
+    replaceOnce(
+      file,
+      /if \(!result\.affected\) throw new NotFoundException\('活动不存在'\);/,
+      'if (!result.affected) return { deleted: false };',
+    );
+  },
+
+  /*
+   * 可见性对账（第十三轮，管理端）：新增一个**管理端端点**，
+   * 它的实现会抛 404，却没人登记「资源不存在 → 404」的分界 ——
+   * 管理端于是分不清「资源不存在（404）」与「权限点不足（403）」。
+   * 期望：ADMIN_VISIBILITY_NOT_REGISTERED 点名 GET /admin/injected-preview。
+   */
+  'read-visibility-admin-endpoint-unregistered'() {
+    const file = path.join(copyRoot, 'apps/api/src/modules/admin/admin.controller.ts');
+    replaceOnce(
+      file,
+      /\n\}\n$/,
+      `
+  @Get('injected-preview')
+  @RequirePermissions('alumni:view')
+  @ApiOperation({ summary: '自测注入：没登记可见性分界的管理端端点' })
+  async injectedPreview(@Param('id', ParseIntPipe) id: number) {
+    return this.directoryService.adminDetail(id);
+  }
+}
+`,
+    );
+  },
+
+  /*
+   * 可见性对账（第十三轮，管理端）：把 API-SPEC 第 13.4 节里
+   * \`DELETE /admin/events/:id\` 那一行删掉 ——
+   * 管理端两种失败语义的分界只存在于代码里，后台无从得知该怎么提示。
+   * 期望：ADMIN_VISIBILITY_UNDOCUMENTED 点名 DELETE /admin/events/:id。
+   */
+  'read-visibility-admin-doc-row-removed'() {
+    const file = path.join(copyRoot, 'docs/API-SPEC.md');
+    const lines = readText(file).split('\n');
+    // ⚠️ 必须锁定**第 13.4 节那张表**里的那一行（5 列以上、含 404 / 403 两列）：
+    //    API-SPEC 第 11 节还有一张「端点清单」表，它也有「DELETE | `/admin/events/:id`」，
+    //    删那一行不算缺陷（只是清单少了一行），删错地方会让注入白注。
+    const index = lines.findIndex((line) => {
+      if (!line.trim().startsWith('|')) return false;
+      const cells = line.split('|').map((cell) => cell.trim());
+      return (
+        cells[1] === 'DELETE' &&
+        cells[2] === '`/admin/events/:id`' &&
+        cells.length >= 7 &&
+        cells[3] === '**404**' &&
+        cells[4] === '**403**'
+      );
+    });
+    if (index < 0) throw new Error('注入失败：API-SPEC 里找不到 /admin/events/:id 的可见性口径那一行');
     lines.splice(index, 1);
     writeText(file, lines.join('\n'));
   },

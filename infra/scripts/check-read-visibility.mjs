@@ -35,8 +35,22 @@
  *   R7 **落地**：登记项写明的状态码痕迹必须真的出现在实现里
  *      （「不可见 → 404」「无权 → 403」用反了就是对外契约的错）；
  *   R8 **文档**：`docs/API-SPEC.md` 第 13.2 节必须**逐条**点名每个已登录端点。
- *   ⚠️ `/admin/*` 不在本脚本范围内：管理端「权限点不足 → 403」由
- *      `infra/scripts/check-rbac-matrix.mjs`（端点 ↔ 权限点）对账守着。
+ *
+ * 第十三轮把覆盖面从**用户侧**扩到**管理端**（同一支脚本、同一份「分界」口径）：
+ *   R9 **覆盖**：`/admin/*` 的端点，凡是实现里**会抛 404**（资源不存在）的，
+ *      都必须登记它的分界 —— 口径没人想过 = 漏登记 → 报错；
+ *   R10 **落地**：登记项写明的 404 痕迹必须真的出现在实现里
+ *      （资源不存在却返回 200 / 500 = 管理端拿到的不是「不存在」而是「服务端坏了」）；
+ *   R11 **文档**：`docs/API-SPEC.md` 第 13.4 节必须**逐条**点名每个管理端点；
+ *   R12 **不重复登记**：同一个端点不许在「用户侧表」与「管理端表」里各登记一次。
+ *
+ * ⚠️ **与 `check-rbac-matrix.mjs` 的分工**（两张表不许重复登记）：
+ *   管理端的两种失败语义**分属两张表、各守一半**：
+ *     - 「**权限点不足 → 403**」= 端点 ↔ 权限点（端点有没有守卫、权限点拼写对不对、
+ *       有没有角色被授予）→ 由 `infra/scripts/check-rbac-matrix.mjs` 守着；
+ *     - 「**资源不存在 → 404**」= 端点 ↔ 资源（对象查不到时返回什么）→ 由**本表**守着。
+ *   本表**不再**重复登记「端点要哪些权限点」——那是 RBAC 矩阵那一行的活；
+ *   两张表各管一段，**同一端点**只会在其中一张表里出现。
  *
  * ⚠️ 口径与局限（写在这里，免得被当成万能护栏）：
  *   - 判定是**静态**的：看源码里有没有「可见性过滤 + 抛 404」的形态，
@@ -593,6 +607,225 @@ const AUTHENTICATED_VISIBILITY_REGISTRY = [
   },
 ];
 
+/* --------------------- 管理端端点的可见性口径（第十三轮） --------------------- */
+
+/**
+ * **管理端端点**的「资源不存在 → 404」登记表 —— 第十三轮新增。
+ *
+ * 为什么要把口径扩到**管理端**（第十二轮只核了用户侧）：
+ *   管理端的两种失败语义必须**分清**，否则管理后台的处理就会走错分支：
+ *     - 「**权限点不足 → 403**」：对象存在，但这个管理员**没有权限**管它
+ *       → 由 `@RequirePermissions` 守卫拦下（**RBAC 矩阵**那一侧）；
+ *     - 「**资源不存在 → 404**」：这个 id **根本没有对应的行**
+ *       → 由业务实现抛 `NotFoundException`。
+ *   此前这一层**从未被任何脚本核过**：管理端把「资源不存在」写成 200
+ *   （删一条不存在的活动返回「已删除」）、或者写成 500（数据库异常直接冒泡），
+ *   都没有任何机制会报警 —— 管理后台据此提示的文案就会是错的。
+ *
+ * 每条必须写清：
+ *   - `impl`：抛 404 的那个方法（在哪个文件的哪个方法里）；
+ *   - `boundary`：这个端点的 404 到底代表什么（一句话）；
+ *   - `docTokens`：文档那一行里必须出现的口径词。
+ *
+ * ⚠️ **与 `check-rbac-matrix.mjs` 的分工**（两张表不许重复登记）：
+ *   「端点 ↔ 权限点」由 RBAC 矩阵守着；**本表只管「端点 ↔ 资源」那一半**
+ *   （资源不存在 → 404）。所以本表**不登记**权限点，
+ *   R12 也会断言两张表没有登记同一个端点。
+ */
+const ADMIN_VISIBILITY_REGISTRY = [
+  /* ------------------------------ 校友 ------------------------------ */
+  {
+    method: 'GET',
+    path: '/admin/alumni/:id',
+    controller: 'apps/api/src/modules/admin/admin.controller.ts',
+    handler: 'alumniDetail',
+    impl: { file: 'apps/api/src/modules/directory/directory.service.ts', method: 'adminDetail' },
+    boundary: '校友不存在 → **404**（管理端按 id 取不到档案即 404，不返回空对象）',
+    docTokens: ['404'],
+  },
+  {
+    method: 'GET',
+    path: '/admin/users/:id',
+    controller: 'apps/api/src/modules/admin/admin-users.controller.ts',
+    handler: 'getUser',
+    impl: { file: 'apps/api/src/modules/admin/admin-users.controller.ts', method: 'getUser' },
+    boundary: '账号不存在 → **404**',
+    docTokens: ['404'],
+  },
+  {
+    method: 'PATCH',
+    path: '/admin/users/:id',
+    controller: 'apps/api/src/modules/admin/admin-users.controller.ts',
+    handler: 'updateAdmin',
+    impl: { file: 'apps/api/src/modules/admin/admin-users.controller.ts', method: 'updateAdmin' },
+    boundary: '管理员不存在 → **404**（在事务内判定，不会改到别的行）',
+    docTokens: ['404'],
+  },
+  {
+    method: 'PATCH',
+    path: '/admin/users/:id/status',
+    controller: 'apps/api/src/modules/admin/admin-users.controller.ts',
+    handler: 'patchUserStatus',
+    impl: { file: 'apps/api/src/modules/admin/admin-users.controller.ts', method: 'setUserStatus' },
+    boundary: '账号不存在 → **404**（改状态与写审计同事务）',
+    docTokens: ['404'],
+  },
+  {
+    method: 'POST',
+    path: '/admin/users/:id/status',
+    controller: 'apps/api/src/modules/admin/admin-users.controller.ts',
+    handler: 'updateUserStatus',
+    impl: { file: 'apps/api/src/modules/admin/admin-users.controller.ts', method: 'setUserStatus' },
+    boundary: '账号不存在 → **404**（与 `PATCH /admin/users/:id/status` 同一处置）',
+    docTokens: ['404'],
+  },
+
+  /* ---------------------------- 认证审核 ---------------------------- */
+  {
+    method: 'GET',
+    path: '/admin/verifications/:id',
+    controller: 'apps/api/src/modules/admin/admin.controller.ts',
+    handler: 'verificationDetail',
+    impl: { file: 'apps/api/src/modules/alumni/alumni.service.ts', method: 'detail' },
+    boundary: '认证申请不存在 → **404**',
+    docTokens: ['404'],
+  },
+  {
+    method: 'POST',
+    path: '/admin/verifications/:id/decision',
+    controller: 'apps/api/src/modules/admin/admin.controller.ts',
+    handler: 'verificationDecision',
+    impl: { file: 'apps/api/src/modules/alumni/alumni.service.ts', method: 'decide' },
+    boundary: '认证申请不存在 → **404**；动作不被支持 → **409**',
+    docTokens: ['404'],
+  },
+  {
+    method: 'GET',
+    path: '/admin/verifications/:id/attachments/:mediaId/url',
+    controller: 'apps/api/src/modules/admin/admin.controller.ts',
+    handler: 'verificationAttachmentUrl',
+    impl: { file: 'apps/api/src/modules/admin/admin.controller.ts', method: 'verificationAttachmentUrl' },
+    boundary: '附件不存在**或**不属于该申请 → **404**（不泄露「该文件存在」）',
+    docTokens: ['404'],
+  },
+
+  /* ---------------------------- 资源审核 ---------------------------- */
+  {
+    method: 'GET',
+    path: '/admin/resources/:id',
+    controller: 'apps/api/src/modules/admin/admin.controller.ts',
+    handler: 'resourceDetail',
+    impl: { file: 'apps/api/src/modules/resources/resources.service.ts', method: 'detail' },
+    boundary: '内容不存在 → **404**',
+    docTokens: ['404'],
+  },
+  {
+    method: 'POST',
+    path: '/admin/resources/:id/decision',
+    controller: 'apps/api/src/modules/admin/admin.controller.ts',
+    handler: 'resourceDecision',
+    impl: { file: 'apps/api/src/modules/resources/resources.service.ts', method: 'decide' },
+    boundary: '内容不存在 → **404**',
+    docTokens: ['404'],
+  },
+  {
+    method: 'GET',
+    path: '/admin/resources/:id/attachments/:mediaId/url',
+    controller: 'apps/api/src/modules/admin/admin.controller.ts',
+    handler: 'resourceAttachmentUrl',
+    impl: { file: 'apps/api/src/modules/admin/admin.controller.ts', method: 'resourceAttachmentUrl' },
+    boundary: '附件不存在**或**不属于该内容 → **404**（不泄露「该文件存在」）',
+    docTokens: ['404'],
+  },
+
+  /* ------------------------------ 活动 ------------------------------ */
+  {
+    method: 'GET',
+    path: '/admin/events/:id',
+    controller: 'apps/api/src/modules/admin/admin.controller.ts',
+    handler: 'eventDetail',
+    impl: { file: 'apps/api/src/modules/events/events.service.ts', method: 'detail' },
+    boundary: '活动不存在 → **404**',
+    docTokens: ['404'],
+  },
+  {
+    method: 'PATCH',
+    path: '/admin/events/:id',
+    controller: 'apps/api/src/modules/admin/admin.controller.ts',
+    handler: 'updateEvent',
+    impl: { file: 'apps/api/src/modules/events/events.service.ts', method: 'update' },
+    boundary: '活动不存在 → **404**',
+    docTokens: ['404'],
+  },
+  {
+    method: 'DELETE',
+    path: '/admin/events/:id',
+    controller: 'apps/api/src/modules/admin/admin.controller.ts',
+    handler: 'deleteEvent',
+    impl: { file: 'apps/api/src/modules/events/events.service.ts', method: 'remove' },
+    boundary: '活动不存在 → **404**（删不到就报「不存在」，不假装删成功）',
+    docTokens: ['404'],
+  },
+
+  /* --------------------------- 资讯与公告 --------------------------- */
+  {
+    method: 'PATCH',
+    path: '/admin/articles/:id',
+    controller: 'apps/api/src/modules/admin/admin.controller.ts',
+    handler: 'updateArticle',
+    impl: { file: 'apps/api/src/modules/content/content.service.ts', method: 'adminUpdateArticle' },
+    boundary: '内容不存在 → **404**',
+    docTokens: ['404'],
+  },
+  {
+    method: 'DELETE',
+    path: '/admin/articles/:id',
+    controller: 'apps/api/src/modules/admin/admin.controller.ts',
+    handler: 'deleteArticle',
+    impl: { file: 'apps/api/src/modules/content/content.service.ts', method: 'adminDeleteArticle' },
+    boundary: '内容不存在 → **404**',
+    docTokens: ['404'],
+  },
+  {
+    method: 'PATCH',
+    path: '/admin/notices/:id',
+    controller: 'apps/api/src/modules/admin/admin.controller.ts',
+    handler: 'updateNotice',
+    impl: { file: 'apps/api/src/modules/content/content.service.ts', method: 'adminUpdateNotice' },
+    boundary: '公告不存在 → **404**',
+    docTokens: ['404'],
+  },
+  {
+    method: 'DELETE',
+    path: '/admin/notices/:id',
+    controller: 'apps/api/src/modules/admin/admin.controller.ts',
+    handler: 'deleteNotice',
+    impl: { file: 'apps/api/src/modules/content/content.service.ts', method: 'adminDeleteNotice' },
+    boundary: '公告不存在 → **404**',
+    docTokens: ['404'],
+  },
+
+  /* ---------------------------- 资讯分类 ---------------------------- */
+  {
+    method: 'PATCH',
+    path: '/admin/articles/categories/:id',
+    controller: 'apps/api/src/modules/admin/admin-users.controller.ts',
+    handler: 'updateCategory',
+    impl: { file: 'apps/api/src/modules/content/content.service.ts', method: 'updateCategory' },
+    boundary: '分类不存在 → **404**',
+    docTokens: ['404'],
+  },
+  {
+    method: 'DELETE',
+    path: '/admin/articles/categories/:id',
+    controller: 'apps/api/src/modules/admin/admin-users.controller.ts',
+    handler: 'deleteCategory',
+    impl: { file: 'apps/api/src/modules/content/content.service.ts', method: 'deleteCategory' },
+    boundary: '分类不存在 → **404**',
+    docTokens: ['404'],
+  },
+];
+
 /* ------------------------------ 工具 ------------------------------ */
 
 function readTextSafe(file) {
@@ -849,6 +1082,88 @@ function endpointImplBodies(controllerFile, handlerName) {
       if (!called.has(method.name)) continue;
       bodies.push({ where: `${file} · ${method.name}`, body: method.body });
     }
+  }
+  return { ok: true, bodies };
+}
+
+/**
+ * 控制器里**注入的服务**（属性名 → 服务文件）。
+ *
+ * ⚠️ 为什么不能按「方法名」满仓库找（第十二轮用户侧那套做法）：
+ *    `detail` / `list` / `update` 这类方法名在**各个模块里都有**
+ *    （`content.service.ts` 有 `detail`、`events.service.ts` 也有 `detail`），
+ *    满仓库按名字找会把**别的模块**的方法体也算进来 ——
+ *    于是「这个端点会不会抛 404」判错，报出一堆假缺口。
+ *    管理端这一侧改用**注入点**解析：`this.eventsService.detail(...)`
+ *    → 构造器里 `eventsService: EventsService` → `import { EventsService } from '../events/events.service'`
+ *    → 文件路径 + 方法名，**精确到那一个方法**。
+ *
+ * @returns {Map<string, string>} 属性名 → 服务文件的仓库相对路径
+ */
+function injectedServiceFiles(controllerFile) {
+  const src = readTextSafe(path.join(root(), controllerFile));
+  const map = new Map();
+  if (!src) return map;
+
+  /** 类名 → 文件路径 */
+  const classToFile = new Map();
+  for (const match of src.matchAll(/import\s*\{([^}]+)\}\s*from\s*'([^']+)'/g)) {
+    const names = match[1]
+      .split(',')
+      .map((entry) => entry.trim().split(/\s+as\s+/)[0].trim())
+      .filter(Boolean);
+    const target = match[2];
+    if (!target.startsWith('.')) continue; // 只解析仓库内的相对导入
+    for (const name of names) {
+      const file = `${path
+        .normalize(path.join(path.dirname(controllerFile), target))
+        .split(path.sep)
+        .join('/')}.ts`;
+      classToFile.set(name, file);
+    }
+  }
+
+  // 构造器：`private readonly eventsService: EventsService`
+  const constructor = /constructor\(([\s\S]*?)\)\s*\{\s*\}/.exec(src);
+  if (!constructor) return map;
+  for (const match of constructor[1].matchAll(
+    /private\s+readonly\s+([A-Za-z_$][\w$]*)\s*:\s*([A-Za-z_$][\w$]*)/g,
+  )) {
+    const file = classToFile.get(match[2]);
+    if (file) map.set(match[1], file);
+  }
+  return map;
+}
+
+/**
+ * 管理端端点的**实现体**：控制器的方法（含它调用的同类私有方法）
+ *   + 它调用到的**注入服务**的方法（含该服务文件里被它调用的方法）。
+ *
+ * 用途：判断「资源不存在时，这个端点到底返回什么」。
+ */
+function adminImplBodies(controllerFile, handlerName) {
+  const own = effectiveBody(controllerFile, handlerName);
+  if (!own.ok) return { ok: false, reason: own.reason };
+  const bodies = [{ where: own.where, body: own.body }];
+
+  const src = readTextSafe(path.join(root(), controllerFile));
+  const methods = collectMethods(src);
+  const handler = methods.find((method) => method.name === handlerName);
+  if (!handler) return { ok: true, bodies };
+
+  const services = injectedServiceFiles(controllerFile);
+  const called = new Set(
+    [...handler.body.matchAll(/this\.([A-Za-z_$][\w$]*)\.([A-Za-z_$][\w$]*)\s*\(/g)].map(
+      (match) => `${match[1]}.${match[2]}`,
+    ),
+  );
+  for (const call of called) {
+    const [prop, method] = call.split('.');
+    const file = services.get(prop);
+    if (!file) continue;
+    const service = effectiveBody(file, method);
+    if (!service.ok) continue;
+    bodies.push({ where: service.where, body: service.body });
   }
   return { ok: true, bodies };
 }
@@ -1289,11 +1604,165 @@ function main() {
     }
   }
 
+  /* --- R9 / R10 / R11 / R12：管理端端点的 404 分界（第十三轮新增） ----------- */
+  //
+  // 第十二轮只核了**用户侧**的已登录端点；管理端这一侧此前**从未被核过**。
+  // 管理端的两种失败语义分属两张表：
+  //   「权限点不足 → 403」= 端点 ↔ 权限点 → `check-rbac-matrix.mjs` 守着；
+  //   「资源不存在 → 404」= 端点 ↔ 资源   → **本表**守着。
+  // R12 断言两张表**没有登记同一个端点**（避免重复登记 = 两处都要跟着改）。
+  const adminRegistryKeys = new Set(
+    ADMIN_VISIBILITY_REGISTRY.map((entry) => `${entry.method} ${entry.path}`),
+  );
+
+  // R12：同一个端点不许在两张表里各登记一次
+  for (const entry of AUTHENTICATED_VISIBILITY_REGISTRY) {
+    const key = `${entry.method} ${entry.path}`;
+    if (!adminRegistryKeys.has(key)) continue;
+    issues.push({
+      kind: 'ADMIN_VISIBILITY_DUPLICATE',
+      where: key,
+      detail:
+        `这个端点同时登记在「用户侧表」与「管理端表」里 —— ` +
+        '两张表各管一段（用户侧管「无权 → 403 / 不可见 → 404」，管理端管「资源不存在 → 404」），' +
+        '同一个端点只该出现在其中一张表里，否则改口径时要改两处、漏一处就分叉',
+    });
+  }
+  for (const [name, registry] of [
+    ['用户侧表', AUTHENTICATED_VISIBILITY_REGISTRY],
+    ['管理端表', ADMIN_VISIBILITY_REGISTRY],
+  ]) {
+    const seen = new Set();
+    for (const entry of registry) {
+      const key = `${entry.method} ${entry.path}`;
+      if (seen.has(key)) {
+        issues.push({
+          kind: 'ADMIN_VISIBILITY_DUPLICATE',
+          where: key,
+          detail: `${name}里同一个端点登记了两次`,
+        });
+      }
+      seen.add(key);
+    }
+  }
+
+  // R9：管理端端点凡是会抛 404（资源不存在）的，都必须登记分界
+  for (const item of allEndpoints) {
+    if (item.isPublic) continue;
+    if (!item.path.startsWith('/admin')) continue;
+    const key = `${item.method} ${item.path}`;
+    if (adminRegistryKeys.has(key)) continue;
+    if (!item.handler) continue;
+    const impl = adminImplBodies(item.file, item.handler);
+    if (!impl.ok) continue; // 解析不了就不判（宁可漏报，也不要误报）
+    const notFound = impl.bodies.some((body) => body.body.includes('NotFoundException'));
+    if (!notFound) {
+      notes.push({
+        kind: 'ADMIN_VISIBILITY_NO_BOUNDARY',
+        where: key,
+        detail: '该端点的实现里不抛 404（要么只返回列表，要么资源不存在也不报错）—— 无「资源不存在」分界',
+      });
+      continue;
+    }
+    issues.push({
+      kind: 'ADMIN_VISIBILITY_NOT_REGISTERED',
+      where: key,
+      detail:
+        `这是一个**管理端端点**（${item.file}:${item.line}），它的实现里会抛 **404**` +
+        `（${impl.bodies
+          .filter((body) => body.body.includes('NotFoundException'))
+          .map((body) => body.where)
+          .join('、')}），但**「资源不存在 → 404」的分界没有登记** —— ` +
+        '「资源不存在」与「权限点不足（403）」必须分清：' +
+        '前者是「这个 id 没有对应的行」，后者是「有，但你没权限管」',
+    });
+  }
+
+  // R10 / R11：登记项必须落地、必须写进文档
+  for (const entry of ADMIN_VISIBILITY_REGISTRY) {
+    const key = `${entry.method} ${entry.path}`;
+    const found = allEndpoints.find(
+      (item) => item.method === entry.method && item.path === entry.path && !item.isPublic,
+    );
+    if (!found) {
+      issues.push({
+        kind: 'ADMIN_VISIBILITY_ROUTE_MISSING',
+        where: key,
+        detail:
+          `登记表里的管理端端点 ${key} 在代码里**找不到了** —— ` +
+          '要么端点被删 / 改名（登记表该更新），要么它不再需要「资源不存在 → 404」的分界',
+      });
+      continue;
+    }
+    if (entry.controller && found.file !== entry.controller) {
+      issues.push({
+        kind: 'ADMIN_VISIBILITY_CONTROLLER_MISMATCH',
+        where: key,
+        detail:
+          `登记表说它在 \`${entry.controller}\`，实际却在 \`${found.file}\`（第 ${found.line} 行）—— ` +
+          '端点被挪了位置，登记表该跟着更新',
+      });
+    }
+
+    const impl = effectiveBody(entry.impl.file, entry.impl.method);
+    if (!impl.ok) {
+      issues.push({
+        kind: 'ADMIN_VISIBILITY_IMPL_MISSING',
+        where: key,
+        detail: `${impl.reason} —— 「资源不存在 → 404」无处核对`,
+      });
+      continue;
+    }
+    if (!impl.body.includes('NotFoundException')) {
+      issues.push({
+        kind: 'ADMIN_VISIBILITY_STATUS_MISSING',
+        where: key,
+        detail:
+          `${impl.where} 里**没有** \`NotFoundException\` —— ` +
+          '「资源不存在」必须落到 **404**（返回 200 等于假装删成功；' +
+          '让数据库异常冒泡成 500 则会被管理后台当成「服务端故障」）。' +
+          entry.boundary,
+      });
+    }
+
+    // R11：文档
+    if (docRows) {
+      const rows = docRows.filter((row) => row.method === entry.method && row.path === entry.path);
+      if (!rows.length) {
+        issues.push({
+          kind: 'ADMIN_VISIBILITY_UNDOCUMENTED',
+          where: key,
+          detail:
+            `「读端点的可见性口径」小节里没有点名 ${key} —— ` +
+            '管理后台要靠它分清「资源不存在（404）」与「权限点不足（403）」',
+        });
+      } else {
+        const union = rows.map((row) => row.text).join('\n');
+        const missingTokens = (entry.docTokens ?? []).filter((token) => !union.includes(token));
+        if (missingTokens.length) {
+          issues.push({
+            kind: 'ADMIN_VISIBILITY_UNDOCUMENTED',
+            where: key,
+            detail:
+              `文档里没有写明「${missingTokens.join(' / ')}」：${rows.map((row) => row.trim()).join(' / ')}`,
+          });
+        } else {
+          notes.push({
+            kind: 'ADMIN_VISIBILITY_OK',
+            where: key,
+            detail: entry.boundary,
+          });
+        }
+      }
+    }
+  }
+
   const report = {
     publicReadEndpoints: discovered.length,
     registered: READ_VISIBILITY_REGISTRY.length,
     pending: READ_VISIBILITY_REGISTRY.filter((entry) => entry.pending).length,
     authenticatedRegistered: AUTHENTICATED_VISIBILITY_REGISTRY.length,
+    adminRegistered: ADMIN_VISIBILITY_REGISTRY.length,
     issues: issues.length,
     notes: notes.length,
     detail: issues,
@@ -1313,7 +1782,9 @@ function main() {
           `每个都能在实现里看到对应的过滤与状态码，文档也逐条写明` +
           `（其中 ${report.pending} 个口径**待产品拍板**，已记在 KNOWN-ISSUES）；` +
           `另有 ${report.authenticatedRegistered} 个**已登录端点**登记了 403 / 404 的分界，` +
-          `实现与文档同样逐条对齐\n`,
+          `实现与文档同样逐条对齐；` +
+          `管理端另有 ${report.adminRegistered} 个端点登记了「资源不存在 → 404」的分界` +
+          `（「权限点不足 → 403」那一半由 check-rbac-matrix.mjs 守着，两张表不重复登记）\n`,
       );
     } else {
       for (const issue of issues) {

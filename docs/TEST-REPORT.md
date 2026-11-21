@@ -5414,3 +5414,121 @@ Swagger（`http://127.0.0.1:18100/docs-json`）。）
 - **专用压测窗口**排期、线上业务库应用两条索引迁移、发布窗口排期、
   正式密钥轮转、`AUTH_MODE=wechat` 切换、域名与 HTTPS、WAF 与备份定时任务、
   小程序真机复验：延续的人工项。
+
+## 19. 第十三轮（opt-013）：复核第十二轮产出（误报率与文案）+ 已登录端点的口径扩到**管理端**
+
+本轮是「复核 + 扩面」轮：**对外行为一个字没改**
+（#197 / #198 / #194 / #195 / #189 等仍等产品拍板），
+产出是把**管理端**的失败语义分界也做成了自动化对账，
+并把第十二轮那两支校验器的**误报率**与**文案**抽查了一遍。
+
+### 19.1 复核第十二轮产出：逐条实跑
+
+| 项 | 结果 |
+|---|---|
+| `bash infra/scripts/check-error-semantics-selftest.sh` | 退出码 **0** —— 基线绿、**17 类**退化形态全部被抓出、退出码非 0 |
+| `bash infra/scripts/check-read-visibility-selftest.sh` | 退出码 **0** —— 基线绿、**9 类**（本轮扩到 12 类）退化形态全部被抓出、退出码非 0 |
+| `node infra/scripts/check-error-semantics.mjs` | 退出码 **0**（21 个唯一键 + 32 张表 / 40 条实体索引 / 46 条实体外键 / 271 列逐条对齐） |
+| `node infra/scripts/check-read-visibility.mjs` | 退出码 **0**（16 个公开读端点 + 19 个已登录端点 + 20 个管理端端点） |
+
+### 19.2 误报率抽查：故意在实体里加一个「合法但迁移未建」的索引
+
+按派活单的做法，在 `alumni_profiles` 上加一条**合法**的索引声明
+（TypeORM 语法正确、列也存在，只是迁移里没有建）：
+
+```
+@Index('idx_alumni_profiles_probe_college', ['college'])
+```
+
+结果：
+
+- 校验器**只**报出这一条（`MIGRATION_INDEX_MISSING`），
+  其余 32 张表 / 40 条索引 / 46 条外键 / 271 列**仍然逐条对齐** → **没有假红**；
+- 报出的文案点名了**实体类、文件、索引名与列名**，修法二选一（补迁移 / 去掉声明），
+  一眼能看懂：
+  > 实体类 `AlumniProfile`（apps/api/src/database/entities/alumni.entity.ts）
+  > 声明了索引 `idx_alumni_profiles_probe_college`（列：college），
+  > 但**迁移里没有创建它** —— 生产库 `synchronize: false`，跑的是迁移：
+  > 生产库上**这个索引不存在**，按该列的查询会退化成全表扫。
+
+### 19.3 抽查中发现并修掉 1 处**实体侧解析缺陷**（不是误报，是**报错报错了**）
+
+把索引建在**关系属性**上时（`@Index('idx_x', ['region'])`，
+真实列名取自 `@JoinColumn` 的 `region_code`），解析曾退回「属性名小写」，
+于是报出的列名是**错的**：
+
+```
+❌ [MIGRATION_INDEX_MISSING] alumni_profiles.idx_alumni_profiles_probe_region
+   … 声明了索引 `idx_alumni_profiles_probe_region`（列：region）…   ← 错，应该是 region_code
+```
+
+⚠️ 照着它补迁移会建出一个**不存在的列**。
+已改为：关系属性的列名一律取自 `@JoinColumn`（与 R8 外键对账用同一份解析），
+修正后同一注入报的是 `region_code`。
+**口径未放宽**：R7 / R8 / R9 的判定条件一字未改，只把「解析得更准」。
+
+### 19.4 管理端的可见性口径（`check-read-visibility.mjs` 新增 R9 / R10 / R11 / R12）
+
+管理端的两种失败语义必须分清，第十三轮把**「资源不存在 → 404」**那一半也做成了自动化：
+
+| 规则 | 内容 |
+|---|---|
+| **R9 覆盖** | `/admin/*` 端点凡是实现里**会抛 404**（资源不存在）的，都必须登记分界口径；实测 **41** 个管理端端点里 **20** 个有这一说、**21** 个是列表 / 新建 / 统计类（不抛，记为「无分界」） |
+| **R10 落地** | 登记项写明的 404 痕迹必须真的出现在实现里（`NotFoundException`）—— 把处置删掉（删一条不存在的活动却说「已删除」）必须被抓出 |
+| **R11 文档** | `docs/API-SPEC.md` 第 13.4 节必须**逐条**点名（20 行表格 + 一份「哪些管理端端点**没有**这一说」的清单） |
+| **R12 不重复登记** | 同一个端点不许在「用户侧表」与「管理端表」里各登记一次 |
+
+⚠️ **与 `check-rbac-matrix.mjs` 的分工（两张表各管一段）**：
+
+| 失败语义 | 由谁守着 |
+|---|---|
+| **权限点不足 → 403**（端点 ↔ 权限点：有没有守卫、拼写对不对、有没有角色被授予） | `infra/scripts/check-rbac-matrix.mjs` |
+| **资源不存在 → 404**（端点 ↔ 资源：对象查不到时返回什么） | **本表**（`check-read-visibility.mjs` 第 13.4 节） |
+
+本表**不再**登记「端点要哪些权限点」，R12 也会断言两张表没有登记同一个端点。
+
+⚠️ **管理端端点的实现解析**：管理端的控制器调用的是**别的模块**的服务
+（`this.eventsService.detail(...)`），而 `detail` / `list` / `update`
+这类方法名在各个模块里**都有** —— 满仓库按名字找会把别的模块的方法体也算进来，
+于是「这个端点会不会抛 404」判错。故改用**注入点**解析：
+构造器里的 `eventsService: EventsService` → `import` 的文件路径 → 方法名，
+**精确到那一个方法**。
+
+### 19.5 反向验证：9 例 → **12 例**
+
+| 用例 | 期望判定码 |
+|---|---|
+| `read-visibility-admin-404-removed` | `ADMIN_VISIBILITY_STATUS_MISSING` |
+| `read-visibility-admin-endpoint-unregistered` | `ADMIN_VISIBILITY_NOT_REGISTERED` |
+| `read-visibility-admin-doc-row-removed` | `ADMIN_VISIBILITY_UNDOCUMENTED` |
+
+### 19.6 本轮实跑清单
+
+| 项 | 结果 |
+|---|---|
+| `node infra/scripts/check-error-semantics.mjs` | 退出码 **0** |
+| `node infra/scripts/check-read-visibility.mjs` | 退出码 **0**（16 + 19 + 20 个端点的口径全部对齐） |
+| `bash infra/scripts/check-error-semantics-selftest.sh` | 退出码 **0**（**17 类**缺陷全部被抓出） |
+| `bash infra/scripts/check-read-visibility-selftest.sh` | 退出码 **0**（**12 类**缺陷全部被抓出） |
+| `node infra/scripts/check-rbac-matrix.mjs` | 退出码 **0**（权限点 / 角色 / 端点矩阵一致） |
+| `pnpm typecheck` / `pnpm lint` | 退出码 **0** |
+| 其余纯静态校验器（枚举一致性 / 契约镜像 / 死码 / 状态码断言 / 请求 DTO / Swagger 参数消费 / 事务逃逸 / 并发 upsert / 迁移清单） | 退出码 **0** |
+
+⚠️ **集成测试本机未跑**：本轮的改动**全部是静态校验器 + 文档 + 派活队列**
+（不触及任何运行时行为），集成测试留待 CI 跑。
+
+### 19.7 本轮未做完 / 仍需人工
+
+- **#197 / #198**（公开活动详情的可见性与 `myRegistration`）：仍**无产品结论**，
+  本轮**一个字没改对外行为**。
+- **#194 / #195**（认证申请并发提交、连接解除后重建）、**#189**（游标分页）、
+  **`/admin/stats` 的 `connectionTotal` 口径**、**连接列表是否受对方可见开关约束**：
+  延续项，需产品 / 客户拍板。
+- **#200（新增）**：`GET /admin/events/:id/registrations` 在**活动不存在**时返回
+  **200 + 空名单**（而不是 404）—— 属**对外行为变更**，本轮只记录不改。
+- **上线环境**跑一次 `node infra/scripts/check-unique-index-db.mjs`（只读）、
+  `bash infra/scripts/healthcheck.sh`、`node infra/scripts/invalidation-bus-drill.mjs`：
+  部署侧动作（已写进 KNOWN-ISSUES 的待验证表）。
+- **专用压测窗口**排期、线上业务库应用两条索引迁移、发布窗口排期、
+  正式密钥轮转、`AUTH_MODE=wechat` 切换、域名与 HTTPS、WAF 与备份定时任务、
+  小程序真机复验：延续的人工项。

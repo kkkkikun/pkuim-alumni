@@ -419,8 +419,9 @@
 | GET | `/notifications` | 我的站内通知 |
 | GET | `/notifications/unread-count` | 我的未读通知数（实时，不缓存） |
 
-⚠️ `/admin/*` **不在本表**：管理端「权限点不足 → 403」由
-`infra/scripts/check-rbac-matrix.mjs`（端点 ↔ 权限点）对账守着。
+⚠️ `/admin/*` **不在本表**：管理端的两种失败语义**分属两张表、各守一半** ——
+「权限点不足 → 403」由 `infra/scripts/check-rbac-matrix.mjs`（端点 ↔ 权限点）对账守着，
+「资源不存在 → 404」见下一节（13.4）。
 
 ### 13.3 对账与守护
 
@@ -431,11 +432,72 @@
   第十二轮起**同一支脚本**还核**已登录端点**（第 13.2 节）：
   凡是会抛 403 / 404 的用户侧端点，都必须登记它的分界口径，
   且实现里必须看得见对应的状态码、文档里必须逐条写明。
+  第十三轮起**同一支脚本**还核**管理端端点**（第 13.4 节）：
+  凡是实现里会抛 404（资源不存在）的管理端端点，都必须登记它的分界口径，
+  且实现里必须看得见 `NotFoundException`、文档里必须逐条写明；
+  并断言**管理端表与用户侧表不重复登记同一个端点**。
   **反向验证**：`bash infra/scripts/check-read-visibility-selftest.sh`
   （把某个端点的可见性过滤删掉 / 把 404 改成 403 / 新增一个没登记的公开读端点 /
   删掉文档那一行 / 抹掉 KNOWN-ISSUES 里的待拍板条目 / 擅自改掉待拍板端点的行为 ——
   **六类缺陷**都必须被抓出、退出码非 0，基线退出码 0；
   第十二轮再加**三类已登录端点的缺陷**：把 403 改成 404 /
-  新增一个没登记分界的已登录端点 / 删掉已登录端点的那一行文档）。
+  新增一个没登记分界的已登录端点 / 删掉已登录端点的那一行文档；
+  第十三轮再加**三类管理端缺陷**：把管理端的 404 处置删掉 /
+  新增一个会抛 404 却没登记分界的管理端端点 / 删掉管理端的那一行文档）。
+  ⚠️ **与 `check-rbac-matrix.mjs` 的分工**：管理端「权限点不足 → 403」
+  （端点 ↔ 权限点）由 RBAC 矩阵守着，本节只管「资源不存在 → 404」那一半，
+  两张表**各管一段、不重复登记**。
 - ⚠️ **口径待拍板**的端点（#197；#198 同属这一批待拍板项）**只记录、不擅改**：
   对外契约变更先经产品确认再动（见 `docs/KNOWN-ISSUES.md`）。
+
+
+### 13.4 管理端端点：资源不存在 → 404（第十三轮新增）
+
+管理端的失败语义同样分两种，**分界比用户侧更硬**：
+
+- **权限点不足 → 403 `FORBIDDEN`**：这个管理员**没有**管这类对象的权限点
+  （`@RequirePermissions` 守卫拦下）—— 端点与权限点的对应关系由
+  `infra/scripts/check-rbac-matrix.mjs`（RBAC 矩阵）守着，**本节不重复登记**；
+- **资源不存在 → 404 `NOT_FOUND`**：这个 id **根本没有对应的行**
+  （业务实现抛 `NotFoundException`）—— 由本节守着。
+
+⚠️ **两张表不许重复登记**（`check-read-visibility.mjs` 的 R12 会断言）：
+同一个端点只出现在其中一张表里；改口径时只改一处，不会漏改另一处。
+
+| 方法 | 路径 | 资源不存在 → | 权限不足 → | 说明 |
+|---|---|---|---|---|
+| GET | `/admin/alumni/:id` | **404** | **403** | 校友不存在 → 404（不返回空对象）；无 `alumni:view` → 403 |
+| GET | `/admin/users/:id` | **404** | **403** | 账号不存在 → 404；无 `alumni:view` → 403 |
+| PATCH | `/admin/users/:id` | **404** | **403** | 管理员不存在 → 404（事务内判定，不会改到别的行）；无 `admin:manage` → 403 |
+| PATCH | `/admin/users/:id/status` | **404** | **403** | 账号不存在 → 404（改状态与写审计同事务）；无 `alumni:manage` → 403 |
+| POST | `/admin/users/:id/status` | **404** | **403** | 同上（`PATCH` 的兼容路径，处置完全一致） |
+| GET | `/admin/verifications/:id` | **404** | **403** | 认证申请不存在 → 404；无 `verification:review` → 403 |
+| POST | `/admin/verifications/:id/decision` | **404** | **403** | 认证申请不存在 → 404；动作不被支持 → 409；无 `verification:review` → 403 |
+| GET | `/admin/verifications/:id/attachments/:mediaId/url` | **404** | **403** | 附件不存在**或**不属于该申请 → 404（不泄露「该文件存在」）；无 `verification:review` → 403 |
+| GET | `/admin/resources/:id` | **404** | **403** | 内容不存在 → 404；无 `resource:review` → 403 |
+| POST | `/admin/resources/:id/decision` | **404** | **403** | 内容不存在 → 404；无 `resource:review` → 403 |
+| GET | `/admin/resources/:id/attachments/:mediaId/url` | **404** | **403** | 附件不存在**或**不属于该内容 → 404（不泄露「该文件存在」）；无 `resource:review` → 403 |
+| GET | `/admin/events/:id` | **404** | **403** | 活动不存在 → 404；无 `event:manage` → 403 |
+| PATCH | `/admin/events/:id` | **404** | **403** | 活动不存在 → 404；无 `event:manage` → 403 |
+| DELETE | `/admin/events/:id` | **404** | **403** | 活动不存在 → 404（删不到就报「不存在」，不假装删成功）；无 `event:manage` → 403 |
+| PATCH | `/admin/articles/:id` | **404** | **403** | 内容不存在 → 404；无 `content:manage` → 403 |
+| DELETE | `/admin/articles/:id` | **404** | **403** | 内容不存在 → 404；无 `content:manage` → 403 |
+| PATCH | `/admin/notices/:id` | **404** | **403** | 公告不存在 → 404；无 `content:manage` → 403 |
+| DELETE | `/admin/notices/:id` | **404** | **403** | 公告不存在 → 404；无 `content:manage` → 403 |
+| PATCH | `/admin/articles/categories/:id` | **404** | **403** | 分类不存在 → 404；无 `content:manage` → 403 |
+| DELETE | `/admin/articles/categories/:id` | **404** | **403** | 分类不存在 → 404；无 `content:manage` → 403 |
+
+**没有「资源不存在」这一说的管理端端点**（列表 / 新建 / 统计类，
+实现里**不抛** `NotFoundException`）：`GET /admin/stats`、`/admin/alumni`、
+`/admin/verifications`、`/admin/resources`、`/admin/events`、`/admin/articles`、
+`/admin/notices`、`/admin/users`、`/admin/roles`、`/admin/permissions`、
+`/admin/action-logs`、`/admin/settings`、`/admin/ops/invalidation-bus`，
+以及 `POST /admin/users`、`/admin/events`、`/admin/articles`、`/admin/notices`、
+`/admin/articles/categories`、`PUT /admin/settings`。
+
+⚠️ **一处已知的口径缺口**（第十三轮记录，**未改**）：
+`GET /admin/events/:id/registrations` 在**活动不存在**时返回 **200 + 空名单**
+（而不是 404）—— 它按 `event_id` 过滤报名记录，不校验活动本身是否存在。
+这与本节「资源不存在 → 404」的口径不一致，但**改它就是改对外行为**
+（管理后台据此提示的文案会变），需产品确认后再动
+（见 `docs/KNOWN-ISSUES.md`）。
