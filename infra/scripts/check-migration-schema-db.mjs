@@ -576,7 +576,11 @@ async function main() {
   if (AS_JSON) {
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
   } else {
+    // ⚠️ 只打印**值得人看**的提示（「等价形态」的说明），
+    //    逐条对齐的 `*_OK` 提示有几百条，全打出来会把 CI 日志淹掉 ——
+    //    它们的数量在下面的汇总行里。
     for (const note of notes) {
+      if (note.kind.endsWith('_OK')) continue;
       process.stdout.write(`  [提示] ${note.where}：${note.detail}\n`);
     }
     if (issues.length === 0) {
