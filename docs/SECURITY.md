@@ -175,6 +175,88 @@ TTL 只是**兜底**，不是唯一手段。以下写操作在**同一事务提�
 - 缓存**不跨用户共享**：键是管理员 id，不含通配。
 - 缓存**不含任何业务数据**（不含联系方式、不含隐私字段），进程重启即清空。
 
+#### 2.1.8 口径 ↔ 用例 ↔ 断言点 对账表（第七轮）
+
+> 本表把本节（2.1）里的每一条**行为承诺**逐条与「守它的用例」「断言点」对上。
+> 口径先定 → 代码后写 → **用例守门**，三者缺一不可；
+> 补不到的行**写明原因**，不许用一句「已覆盖」糊过去。
+>
+> 用例文件名里的 `rbac-cache` / `rbac-invalidation-bus` / `dict-invalidation-bus` /
+> `ops-invalidation-bus` 均在 `apps/api/test/integration/` 下。
+
+| # | 行为承诺（出处） | 守它的用例 | 断言点 |
+|---|---|---|---|
+| 1 | RBAC 解析结果进**进程内 TTL 缓存**（2.1.1） | `rbac-cache.e2e-spec.ts`「同一个令牌连续两次请求：第二次少打 RBAC 解析的 3 条 SQL」 | `cold - warm >= 3`（少掉的正是 `admin_users` / `admin_user_roles` / `role_permissions`） |
+| 2 | 字典 / 分类 / 设置进**进程内 TTL 缓存**（2.1.1） | `rbac-cache.e2e-spec.ts`「字典缓存**确实生效**」 | 第二次读 `/articles/categories` 的 SQL 条数**少于**第一次 |
+| 3 | **未读通知数绝不缓存**（2.1.1 / 2.1.5） | `rbac-cache.e2e-spec.ts`「未读通知数**不缓存**」 | 插入一条通知后 `/me/summary` 的 `unreadCount` **当场 +1** |
+| 4 | RBAC TTL **硬上限 60 秒**（2.1.2） | `rbac-cache.e2e-spec.ts`「TTL 硬上限」 | 配置 9999 → `rbacTtlSeconds === 60` |
+| 5 | 字典 TTL **硬上限 300 秒**（2.1.2） | 同上 | 配置 9999 → `dictionaryTtlSeconds === 300` |
+| 6 | TTL 设为 0 = **关闭缓存**（2.1.2） | 同上 | 配置 0 → 两个 TTL 都是 `0`（不是「立即过期」，也不是「用兜底值」） |
+| 7 | TTL 缺省 30 秒 / 60 秒（2.1.2） | 同上 | 不配环境变量 → `30` / `60` |
+| 8 | 停用 → 本进程**立刻 401**（2.1.3） | `rbac-cache.e2e-spec.ts`「停用账号后**同一个令牌**立刻 401」 | 同一张令牌 → 401 且 `code === 'AUTH_REQUIRED'` |
+| 9 | 降权 → 本进程**立刻 403**（2.1.3 / 2.1.4 单实例档） | `rbac-cache.e2e-spec.ts`「降权后**同一个令牌**立刻 403」 | 同一张令牌 → 403 且 `code === 'FORBIDDEN'` |
+| 10 | 多实例 + 总线可用 → 撤权延迟 **0**（2.1.4 第二档） | `rbac-invalidation-bus.e2e-spec.ts`「实例 A 降权 → 实例 B 的缓存**立刻**失效（不等 TTL）」 | 实例 B 在 **2 秒内**返回 403，且 `stats.received > 0`（不是「碰巧」403） |
+| 11 | 多实例 + 总线不可用 → 延迟 **≤ TTL**（2.1.4 第三档） | `rbac-invalidation-bus.e2e-spec.ts`「总线不可用：写操作**仍 200**…」 | 写操作 200、`published === 0`、`subscribed === false`；TTL 窗口内仍 200、**过 TTL 后 403** |
+| 12 | 总线上**只有失效事件**，无权限内容（2.1.5） | `rbac-invalidation-bus.e2e-spec.ts`「总线上只有**失效事件**…」 | 载荷 `=== {kind:'admin', adminId}`；序列化结果**不含** permission / role / token / openid / phone / password |
+| 13 | 频道名**走配置**且**按环境隔离**（2.1.5） | `rbac-invalidation-bus.e2e-spec.ts`「频道名走配置，并按环境隔离」 | prod / dev / test 三个频道**互不相同**；套件实际订阅的频道 = 配置值 |
+| 14 | 事件**只在事务提交之后**发布（2.1.5 / 2.1.6） | `rbac-invalidation-bus.e2e-spec.ts`「写操作**失败**时不发布失效事件」；`dict-invalidation-bus.e2e-spec.ts` 同名用例 | 写操作 404 / 409 之后，`stats.published` **不变** |
+| 15 | Redis 不可用时**写操作照常成功**（不抛错、不回滚）（2.1.5 / 2.1.6） | `rbac-invalidation-bus` / `dict-invalidation-bus` 的「总线不可用」两条 | 降权 200 / 建分类 **201**（不是 5xx） |
+| 16 | 总线恢复后**自动重新订阅**（不重启进程）（2.1.5） | `rbac-invalidation-bus.e2e-spec.ts`「总线恢复后**自动重新订阅**」 | 恢复前 `subscribed === false` 且 `lastError` 有值；恢复后（**不重启进程**）`subscribed === true` |
+| 17 | 失效事件的 `kind` 是**白名单**（不认未知取值）（2.1.5） | `rbac-invalidation-bus.e2e-spec.ts`「未知 / 畸形的失效事件被**忽略**」 | 往频道里塞未知 `kind` 与畸形 `adminId` → `stats.received` **不增加**，且**不**清掉任何缓存 |
+| 18 | 字典事件**只传失效事件、不传内容**（2.1.6） | `dict-invalidation-bus.e2e-spec.ts`「总线上只有**失效事件**，没有任何字典内容」 | 载荷含 `{kind:'dict', dict:'categories'|'settings'}`；**不含**分类名 / 设置项 key / value |
+| 19 | 分类变更只作废**分类字典**、设置写入只作废**设置字典**（2.1.6） | `dict-invalidation-bus.e2e-spec.ts`「实例 A 改分类 → …」「实例 A 写系统设置 → …」 | 两条用例各自只断言**对应**那本字典立刻变新 |
+| 20 | **同一个频道**同时承载 RBAC 与字典事件（2.1.6） | `dict-invalidation-bus.e2e-spec.ts`「**同一个频道**同时承载 RBAC 与字典类失效事件」 | 实例 B 的 `stats.received` **至少 +2**；且 RBAC 那一半也立刻生效（403） |
+| 21 | 字典陈旧上界三档（2.1.6） | `dict-invalidation-bus.e2e-spec.ts`「总线不可用：写操作**仍 201**…」 | 写 201、TTL 窗口内**看不到**新分类、过 TTL 后**看得到** |
+| 22 | `RBAC_INVALIDATION_ENABLED=false` 能**整条关闭**总线（2.1.6） | `rbac-invalidation-bus.e2e-spec.ts`「开关关闭…时总线**整条**关闭」 | `stats.enabled === false`、`subscribed === false`、`published === 0`；写操作**仍 200** |
+| 23 | 缓存**不跨管理员共享**（2.1.7） | `rbac-cache.e2e-spec.ts`「缓存**不跨管理员共享**」 | 降权 A 后 A → 403、**B 仍 200** |
+| 24 | 缓存**不缓存「是否被允许」**（每次仍走权限守卫）（2.1.7） | `rbac-cache.e2e-spec.ts`「权限不足的请求**两次都 403**」 | 缓存热起来之后，缺权限点的请求**仍然**403（两次都是） |
+| 25 | 总线状态可被运维**自证**（2.1.9） | `ops-invalidation-bus.e2e-spec.ts`「管理员令牌 → 200，字段齐全」等 5 例 | 匿名 401、校友 403、管理员 200 且字段齐全；返回值与 `InvalidationBusService.stats` **同源** |
+| 26 | 既有对外健康检查的**响应形状不变**（2.1.9） | `ops-invalidation-bus.e2e-spec.ts`「既有对外健康检查端点的**响应形状不变**」 | `/system/health` 的字段**恰好**是 `checks` / `status` / `timestamp`，且 `checks` 里**没有** `invalidationBus` |
+
+**补不到 / 只能靠人工核对的承诺（写明原因，不假装覆盖）**：
+
+| 承诺 | 为什么补不到用例 |
+|---|---|
+| 缓存里**不含任何业务数据**（2.1.7） | 缓存是**进程内**的私有 `Map`，外部无法读出它的内容 —— 只能靠代码评审保证「只存权限点数组」。本轮**不**为此新增对外读缓存的接口（那会新增暴露面，违反第 5 节）。 |
+| 「进程重启即清空」 | 需要真的重启进程并观察；集成测试里重启进程等于另起一个应用实例（缓存自然是新的），**证明不了「重启会清空」**这件事本身 —— 它是内存结构的固有性质。 |
+| 多实例部署下的**真实**跨实例失效 | 本仓库的集成测试是**同进程两个 Nest 应用实例 + 一个 Redis**（进程内总线语义完全一致，但没有跨进程 / 跨容器的网络分区）。**真正的多实例**要靠部署环境验证 —— 已写入 `docs/KNOWN-ISSUES.md`（待人工项）。 |
+
+#### 2.1.9 多实例部署的「总线自证」（第七轮）
+
+> 多实例部署时，「跨实例失效**到底生效没有**」此前只能靠**逐个实例翻日志**：
+> 要在每个实例上分别确认「订阅上频道了没有」「收到过事件没有」，
+> 出问题时定位很慢，而且**翻日志看不出「这个实例压根没订阅上」**。
+
+**口径（先定口径、再写代码）**：
+
+- **另开一个只读运维端点**：`GET /api/v1/admin/ops/invalidation-bus`，
+  只对**管理员**（`admin:manage` 权限点）开放，**只读**、**不提供任何写操作**
+  （不提供「强制重订阅」「清缓存」—— 那是实现自己的责任，见 2.1.5 节）。
+- 出参：`enabled`（总线是否开启）、`channel`（**生效频道**）、`subscribed`（本实例是否订阅上）、
+  `published` / `received`（本进程累计发布 / 收到的失效事件数）、
+  `lastError`（最近一次总线错误，无则 `null`）、`degraded`（`enabled && !subscribed`，
+  即**正处于 TTL 兜底那一档**）。
+- ⚠️ **既有对外契约不变**：`/healthz` 与 `/api/v1/system/health` 的响应形状**原样不动**。
+  理由（这是本轮**评估**过的结论，不是拍脑袋）：
+  1. 那两个端点是**公开**的 —— 把频道名、事件计数与错误信息挂上去，
+     等于把内部拓扑与内部错误**对外暴露**（与第 5 节「传输与暴露面」冲突）；
+  2. 它们的响应形状是**对外契约**（`packages/contracts` + `docs/API-SPEC.md`），
+     改形状要连带评估两端客户端（契约镜像 / 响应结构校验器）；
+  3. 语义也不对：健康检查回答的是「**这个实例还活着吗**」，
+     总线状态回答的是「**跨实例失效链路通不通**」，混在一起会让 `degraded` 的含义变含糊。
+- 契约同步：`packages/contracts/src/api.ts` 新增 `adminOpsInvalidationBus` 路径键与
+  `AdminInvalidationBusStatus` 类型；`docs/API-SPEC.md` 第 11 节补端点与出参表。
+
+**运维怎么读**：
+
+| 现象 | 含义 | 该做什么 |
+|---|---|---|
+| `enabled: false` | 总线被 `RBAC_INVALIDATION_ENABLED=false` 整条关闭 | 撤权 / 字典失效延迟**回落到 TTL 上界**；确认是不是压测或排障时关的 |
+| `subscribed: false` 且 `enabled: true` | **本实例没订阅上**（Redis 不可达 / 频道名不一致） | 查 `lastError`；多实例下这一档的撤权延迟是 **≤ TTL**，不是 0 |
+| 各实例 `channel` 不一致 | 频道名按环境隔离生效，但**实例之间配得不一样** | 事件互相打不到 —— 统一 `RBAC_INVALIDATION_CHANNEL` 与环境 |
+| `published` 一直是 0 | 本实例没有**发布**过事件 | 查是否有写操作走过；也可能是订阅端（`received`）正常但发布端挂了 |
+| `received` 一直是 0 | 本实例**没收到**过事件 | 查订阅状态（`subscribed`）与频道名 |
+
 ### 2.2 浏览计数（`viewCount`）的最终一致口径
 
 > 第三轮引入（**先定口径、再写代码**）。

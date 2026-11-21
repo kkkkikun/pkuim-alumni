@@ -219,6 +219,29 @@
 | GET | `/admin/roles`、`/admin/permissions` | `admin:manage`（**分页**：`page` / `pageSize`，出参 `{items, meta}`） |
 | GET | `/admin/action-logs` | `audit:view` |
 | GET/PUT | `/admin/settings` | `settings:manage`（GET **分页**：`page` / `pageSize`，出参 `{items, meta}`） |
+| GET | `/admin/ops/invalidation-bus` | `admin:manage`（**只读运维端点**：共享失效总线状态，见下） |
+
+### 只读运维端点：`GET /admin/ops/invalidation-bus`（第七轮新增）
+
+多实例部署时，运维要能**一眼确认「跨实例失效链路通不通」**，
+而不是只能逐个实例翻日志。本端点只返回总线状态，**不提供任何写操作**。
+
+出参（`data`）：
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `enabled` | boolean | 总线是否开启（`RBAC_INVALIDATION_ENABLED=false` 时为 `false`） |
+| `channel` | string | **生效频道**（按环境隔离；所有实例必须一致） |
+| `subscribed` | boolean | **本实例**是否订阅上了频道 |
+| `published` | number | 本进程累计发布的失效事件数 |
+| `received` | number | 本进程累计收到的失效事件数 |
+| `lastError` | string \| null | 最近一次总线错误（`null` = 没有） |
+| `degraded` | boolean | `true` = 总线开着但**没订阅上**（= 撤权延迟回落到 TTL 上界那一档） |
+
+- ⚠️ **既有对外契约不变**：`/healthz` 与 `/system/health` 的响应形状**原样不动**
+  （它们是公开端点，把频道名与错误信息挂上去等于对外暴露内部拓扑）；
+  本端点另开，只对**管理员**（`admin:manage`）开放。
+- 口径与读法见 `docs/SECURITY.md` 第 2.1.9 节与 `docs/SERVER-OPERATIONS.md`。
 
 角色与权限点见 `docs/DATABASE-DESIGN.md` §8。
 

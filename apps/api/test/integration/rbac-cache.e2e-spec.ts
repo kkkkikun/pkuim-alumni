@@ -20,6 +20,7 @@ import request from 'supertest';
 import type { INestApplication } from '@nestjs/common';
 import type { DataSource, Logger } from 'typeorm';
 import { BUILT_IN_ROLE_CODES, createTestApp, ensureAdmin, login, resetDatabase } from '../helpers';
+import { TtlCacheService } from '../../src/common/services/ttl-cache.service';
 
 const API = '/api/v1';
 
@@ -255,5 +256,166 @@ describe('RBAC 缓存 · 撤权延迟守卫', () => {
       `[RBAC 缓存] /me/summary 未读数 ${before.body.data.unreadCount} → ${after.body.data.unreadCount}`,
     );
     expect(after.body.data.unreadCount).toBe(before.body.data.unreadCount + 1);
+  });
+
+  it('缓存**不跨管理员共享**：降权 A 不会把 B 的权限一起收走', async () => {
+    // ⚠️ 守的是 `docs/SECURITY.md` 第 2.1.7 节「缓存不跨用户共享（键是管理员 id，不含通配）」。
+    //    如果缓存键写成了「按角色」或「按权限集合」这种**共享**的键，
+    //    降权一个管理员就会把**所有**用同一角色的管理员一起清掉（功能上「过度失效」，
+    //    看着没坏，但缓存语义已经错了）。
+    const actor = `rbac_actor_iso_${uniq}`;
+    const targetA = `rbac_target_iso_a_${uniq}`;
+    const targetB = `rbac_target_iso_b_${uniq}`;
+    const highRole = `role_rbac_iso_high_${uniq}`;
+    const lowRole = `role_rbac_iso_low_${uniq}`;
+
+    await makeAdmin(actor, `role_rbac_iso_actor_${uniq}`, 'admin:manage');
+    const idA = await makeAdmin(targetA, highRole, 'alumni:view');
+    await makeAdmin(targetB, highRole, 'alumni:view');
+    await makeAdmin(targetA, lowRole, 'resource:review');
+
+    // A 与 B 先各自用过一次 → 两个实例的缓存里各有他们的权限集。
+    const tokenA = await adminLogin(targetA);
+    const tokenB = await adminLogin(targetB);
+    await request(app.getHttpServer())
+      .get(`${API}/admin/alumni?page=1&pageSize=5`)
+      .set('Authorization', `Bearer ${tokenA}`)
+      .expect(200);
+    await request(app.getHttpServer())
+      .get(`${API}/admin/alumni?page=1&pageSize=5`)
+      .set('Authorization', `Bearer ${tokenB}`)
+      .expect(200);
+
+    // 把 A 降权（撤掉 alumni:view）。
+    const actorToken = await adminLogin(actor);
+    await request(app.getHttpServer())
+      .patch(`${API}/admin/users/${idA}`)
+      .set('Authorization', `Bearer ${actorToken}`)
+      .send({ roles: [lowRole] })
+      .expect(200);
+
+    // A 立刻 403（撤权即时生效）。
+    await request(app.getHttpServer())
+      .get(`${API}/admin/alumni?page=1&pageSize=5`)
+      .set('Authorization', `Bearer ${tokenA}`)
+      .expect(403);
+
+    // B **不受影响** —— A 的降权没有把 B 的缓存一起清掉。
+    const stillOk = await request(app.getHttpServer())
+      .get(`${API}/admin/alumni?page=1&pageSize=5`)
+      .set('Authorization', `Bearer ${tokenB}`);
+    expect(stillOk.status).toBe(200);
+  });
+
+  it('字典缓存**确实生效**：分类字典第二次读不打 SQL', async () => {
+    // ⚠️ 守的是 `docs/SECURITY.md` 第 2.1.1 节「资讯分类、系统设置 → 进程内 TTL 缓存」。
+    //    这条此前**没有任何用例守着** ——
+    //    把字典缓存整个去掉（每次都查库），套件照样全绿
+    //    （功能上「更正确」，但小程序冷启动会重新变成全表聚合）。
+    // ⚠️ 先清一次缓存：前面的用例可能已经把分类字典读热了，
+    //    那会让「第一次」的基线不准。
+    app.get(TtlCacheService).clear();
+
+    counter.start();
+    await request(app.getHttpServer()).get(`${API}/articles/categories`).expect(200);
+    const cold = counter.stop();
+
+    counter.start();
+    await request(app.getHttpServer()).get(`${API}/articles/categories`).expect(200);
+    const warm = counter.stop();
+
+    // eslint-disable-next-line no-console
+    console.log(`[RBAC 缓存] 分类字典冷启动 ${cold} 条 SQL → 命中缓存 ${warm} 条`);
+    expect(cold).toBeGreaterThan(0);
+    expect(warm).toBeLessThan(cold);
+  });
+
+  it('权限不足的请求**两次都 403**（缓存里存的是「有哪些权限点」，不是「是否放行」）', async () => {
+    // ⚠️ 守的是 `docs/SECURITY.md` 第 2.1.7 节「**不缓存**「这个请求是否被允许」——
+    //    每次请求仍然要走 `PermissionsGuard` 逐个权限点比对」。
+    //    如果有人把「这个请求是否被允许」也缓存下来，
+    //    降权后的第一次 403 就会被缓存成 200 —— 这条用例会红。
+    const limited = `rbac_limited_${uniq}`;
+    await makeAdmin(limited, `role_rbac_limited_${uniq}`, 'resource:review');
+
+    const token = await adminLogin(limited);
+    // `alumni:view` 这个权限点**没有** → 应当 403。
+    for (const round of [1, 2]) {
+      const response = await request(app.getHttpServer())
+        .get(`${API}/admin/alumni?page=1&pageSize=5`)
+        .set('Authorization', `Bearer ${token}`);
+      // eslint-disable-next-line no-console
+      console.log(`[RBAC 缓存] 权限不足的第 ${round} 次请求 → ${response.status}`);
+      expect(response.status).toBe(403);
+      expect(response.body.code).toBe('FORBIDDEN');
+    }
+  });
+});
+
+/**
+ * 进程内 TTL 缓存的**硬上限**（第七轮补上）。
+ *
+ * ⚠️ 为什么单独一个 describe：
+ *    TTL 是**启动期**从环境变量读进配置的（`ConfigModule.forRoot` 在建应用时求值），
+ *    所以要验证「配置写大了会被夹回来」，必须**按不同的环境变量各起一个应用**。
+ *
+ * ⚠️ 守的是 `docs/SECURITY.md` 第 2.1.2 节的两条承诺：
+ *    - RBAC 缓存的 TTL **硬上限 60 秒**（降权后最长 60 秒内仍可操作 = 安全语义的上界）；
+ *    - 字典 / 分类 / 系统设置的 TTL **硬上限 300 秒**；
+ *    - TTL 设为 0 = **关闭缓存**（回到每请求重算，便于排障与压测对照）。
+ *
+ *    这三条此前**没有任何用例守着** ——
+ *    把 `Math.min(60, ...)` 改成 `Math.min(600, ...)`，整个集成测试套件照样全绿。
+ */
+describe('进程内 TTL 缓存 · TTL 硬上限', () => {
+  const TTL_KEYS = ['RBAC_CACHE_TTL_SECONDS', 'DICT_CACHE_TTL_SECONDS'] as const;
+  const originalEnv: Record<string, string | undefined> = {};
+  for (const key of TTL_KEYS) originalEnv[key] = process.env[key];
+
+  afterAll(() => {
+    for (const key of TTL_KEYS) {
+      const original = originalEnv[key];
+      if (original === undefined) delete process.env[key];
+      else process.env[key] = original;
+    }
+  });
+
+  /** 按给定的环境变量起一个应用（TTL 在**建应用时**被读进配置）。 */
+  async function appWithTtl(rbacTtl: string, dictTtl: string): Promise<TtlCacheService> {
+    process.env.RBAC_CACHE_TTL_SECONDS = rbacTtl;
+    process.env.DICT_CACHE_TTL_SECONDS = dictTtl;
+    const { app } = await createTestApp();
+    const cache = app.get(TtlCacheService);
+    // 用完立刻关掉（否则会留下多余的 Redis 连接与事件循环句柄）。
+    apps.push(app);
+    return cache;
+  }
+
+  const apps: INestApplication[] = [];
+
+  afterAll(async () => {
+    for (const app of apps) {
+      await app.close();
+    }
+  });
+
+  it('RBAC 的 TTL 被夹到 **60 秒**、字典被夹到 **300 秒**（配置写大也不行）', async () => {
+    const cache = await appWithTtl('9999', '9999');
+    expect(cache.rbacTtlSeconds).toBe(60);
+    expect(cache.dictionaryTtlSeconds).toBe(300);
+  });
+
+  it('TTL 配成 0 = **关闭缓存**（不是「立即过期」，也不是「用兜底值」）', async () => {
+    const cache = await appWithTtl('0', '0');
+    expect(cache.rbacTtlSeconds).toBe(0);
+    expect(cache.dictionaryTtlSeconds).toBe(0);
+  });
+
+  it('缺省值与文档一致（RBAC 30 秒 / 字典 60 秒）', async () => {
+    delete process.env.RBAC_CACHE_TTL_SECONDS;
+    delete process.env.DICT_CACHE_TTL_SECONDS;
+    const cache = await appWithTtl('30', '60');
+    expect(cache.rbacTtlSeconds).toBe(30);
+    expect(cache.dictionaryTtlSeconds).toBe(60);
   });
 });
