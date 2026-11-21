@@ -71,14 +71,15 @@ export const appConfig = registerAs('app', () => ({
   rbacCacheTtlSeconds: process.env.RBAC_CACHE_TTL_SECONDS ?? '30',
   // 字典 / 分类 / 系统设置缓存的 TTL（上限 300 秒；0 = 关闭）。
   dictCacheTtlSeconds: process.env.DICT_CACHE_TTL_SECONDS ?? '60',
-  // 共享失效总线（第五轮引入；口径见 docs/SECURITY.md 第 2.1.4 / 2.1.5 节）。
+  // 共享失效总线（第五轮引入；第六轮扩展到字典类；口径见 docs/SECURITY.md 第 2.1.4 / 2.1.5 / 2.1.6 节）。
   //
   // ⚠️ 频道名**走配置**，不写死在代码里：`RBAC_INVALIDATION_CHANNEL`
   //    是**基准名**（默认 `nmg:rbac:invalidate`），
   //    **生效频道**由 `resolveInvalidationChannel()` 按环境插入环境段
   //    （prod / dev / test 各不相同）→ 测试库的事件不可能打到生产实例。
   // ⚠️ `RBAC_INVALIDATION_ENABLED=false` = 关闭总线（退回「进程内主动失效 + TTL 兜底」），
-  //    用于排障与压测对照；关闭时**写操作照常成功**，只是撤权延迟回落到 TTL 上界。
+  //    用于排障与压测对照；关闭时**写操作照常成功**，只是撤权延迟回落到 TTL 上界、
+  //    字典陈旧回落到 TTL 上界。
   rbacInvalidation: {
     enabled: process.env.RBAC_INVALIDATION_ENABLED ?? 'true',
     channel: process.env.RBAC_INVALIDATION_CHANNEL ?? DEFAULT_INVALIDATION_CHANNEL,

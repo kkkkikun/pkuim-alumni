@@ -6,17 +6,35 @@ import { CacheKeys } from '../constants';
 import { TtlCacheService } from './ttl-cache.service';
 
 /**
+ * 字典类失效事件的**作用范围**（第六轮引入）。
+ *
+ * - `categories`：资讯分类字典（`CacheKeys.categories` = `dict:categories`）；
+ * - `settings`：公开系统设置（`CacheKeys.publicSettings` = `dict:settings`）；
+ * - `all`：全部 `dict:*` 条目（一次性作废所有字典缓存）。
+ *
+ * ⚠️ 地区 / 行业字典（`dict:regions` / `dict:industries`）由校友资料聚合而来，
+ *    **没有写端点**，因此不在字典类事件的取值里 —— 本轮只作废「确实被改了」的那本字典。
+ */
+export type DictInvalidationScope = 'categories' | 'settings' | 'all';
+
+/**
  * 总线上流动的**失效事件**。
  *
  * ⚠️ 这里**只有「谁的缓存该作废」**，没有任何权限内容：
  *    - `admin`：某个管理员的 RBAC 缓存作废（停用 / 降权）；
- *    - `rbac-all`：全部管理员的 RBAC 缓存作废（角色目录整体变更时用）。
+ *    - `rbac-all`：全部管理员的 RBAC 缓存作废（角色目录整体变更时用）；
+ *    - `dict`：某本字典 / 分类 / 系统设置缓存作废（第六轮引入，
+ *      带 `dict` 字段区分作用范围）。
  *    权限点、角色名、联系方式等**一律不上总线** ——
  *    权限点仍然由每个实例自己从库里算（口径见 docs/SECURITY.md 第 2.1.5 节）。
+ *
+ * ⚠️ 字典类事件同样**只传「哪个字典该作废」**，不传字典内容：
+ *    不传分类名、不传设置项的值（口径见 docs/SECURITY.md 第 2.1.7 节）。
  */
 export type InvalidationEvent =
   | { kind: 'admin'; adminId: number }
-  | { kind: 'rbac-all' };
+  | { kind: 'rbac-all' }
+  | { kind: 'dict'; dict: DictInvalidationScope };
 
 /** 订阅失败后的重试间隔（毫秒）。 */
 const SUBSCRIBE_RETRY_MS = 5_000;
@@ -30,11 +48,20 @@ const SUBSCRIBE_RETRY_MS = 5_000;
  */
 const PUBLISH_TIMEOUT_MS = 500;
 
+/** 字典类失效事件的作用范围白名单（不认未知取值）。 */
+const DICT_SCOPES: readonly DictInvalidationScope[] = ['categories', 'settings', 'all'];
+
 /** 判断解析出来的东西是不是一条**已知**的失效事件（白名单，不认未知字段）。 */
 function isInvalidationEvent(value: unknown): value is InvalidationEvent {
   if (!value || typeof value !== 'object') return false;
-  const event = value as { kind?: unknown; adminId?: unknown };
+  const event = value as { kind?: unknown; adminId?: unknown; dict?: unknown };
   if (event.kind === 'rbac-all') return true;
+  if (event.kind === 'dict') {
+    return (
+      typeof event.dict === 'string' &&
+      DICT_SCOPES.includes(event.dict as DictInvalidationScope)
+    );
+  }
   if (event.kind !== 'admin') return false;
   return (
     typeof event.adminId === 'number' &&
@@ -44,7 +71,7 @@ function isInvalidationEvent(value: unknown): value is InvalidationEvent {
 }
 
 /**
- * 共享失效总线（第五轮引入；Redis pub/sub）。
+ * 共享失效总线（第五轮引入；Redis pub/sub；第六轮扩展到字典类）。
  *
  * ## 目的
  *
@@ -53,19 +80,23 @@ function isInvalidationEvent(value: unknown): value is InvalidationEvent {
  * 本服务把「**谁的缓存该作废**」这条消息广播到所有实例，
  * 于是「停用 / 降权」在**任何实例**上都立刻生效。
  *
- * ## 口径（先定口径、再写代码；见 docs/SECURITY.md 第 2.1.4 / 2.1.5 节）
+ * 第六轮把**同一套总线、同一套降级路径**扩展到字典 / 分类 / 系统设置：
+ * 它们的跨实例陈旧上界也从「≤ TTL」变成「0」（总线可用时）。
  *
- * | 部署形态 | 总线状态 | 撤权延迟上界 |
- * |---|---|---:|
- * | 单实例 | 不适用 | 0 |
- * | 多实例 | 总线可用 | 0 |
- * | 多实例 | 总线不可用 | ≤ TTL（≤60 秒） |
+ * ## 口径（先定口径、再写代码；见 docs/SECURITY.md 第 2.1.4 / 2.1.5 / 2.1.7 节）
+ *
+ * | 部署形态 | 总线状态 | 撤权延迟上界 | 字典陈旧上界 |
+ * |---|---|---:|---:|
+ * | 单实例 | 不适用 | 0 | 0 |
+ * | 多实例 | 总线可用 | 0 | 0 |
+ * | 多实例 | 总线不可用 | ≤ TTL（≤60 秒） | ≤ TTL（字典默认 ≤60 秒，硬上限 ≤300 秒） |
  *
  * ## 降级路径是硬要求
  *
  * Redis 不可用 / 订阅断开时：
  *   - **管理端写操作照常成功**（不抛错、不回滚业务写）；
  *   - 撤权延迟回落到 **TTL 上界**，**不是永久放行**；
+ *   - 字典陈旧延迟同样回落到 **TTL 上界**，**不是永久陈旧**；
  *   - 总线恢复后自动重新订阅（不重启进程）。
  *
  * ## 不缓存需要实时性的数据
@@ -167,7 +198,8 @@ export class InvalidationBusService implements OnModuleInit, OnModuleDestroy {
     if (!this.enabled) {
       this.logger.warn(
         '共享失效总线已关闭（RBAC_INVALIDATION_ENABLED=false）：' +
-          '多实例部署时撤权延迟回落到 TTL 上界（≤60 秒）。',
+          '多实例部署时撤权延迟回落到 TTL 上界（≤60 秒），' +
+          '字典 / 分类 / 系统设置的跨实例陈旧也回落到 TTL 上界（≤300 秒）。',
       );
       return;
     }
@@ -211,7 +243,8 @@ export class InvalidationBusService implements OnModuleInit, OnModuleDestroy {
       this.lastError = error instanceof Error ? error.message : String(error);
       this.logger.warn(
         `失效事件发布失败（${this.channel}）：${this.lastError}。` +
-          '已降级：管理端写操作照常成功，撤权延迟回落到 TTL 上界（≤60 秒）。',
+          '已降级：管理端写操作照常成功，撤权延迟回落到 TTL 上界（≤60 秒），' +
+          '字典陈旧回落到 TTL 上界（≤300 秒）。',
       );
       return false;
     }
@@ -264,9 +297,30 @@ export class InvalidationBusService implements OnModuleInit, OnModuleDestroy {
     this.receivedCount += 1;
     if (parsed.kind === 'admin') {
       this.cache.delete(CacheKeys.adminRbac(parsed.adminId));
+    } else if (parsed.kind === 'dict') {
+      this.applyDictEvent(parsed.dict);
     } else {
       this.cache.deleteByPrefix('rbac:');
     }
+  }
+
+  /**
+   * 字典类失效事件：清掉本地对应的 `dict:*` 条目。
+   *
+   * ⚠️ **只作废「确实被改了」的那本字典**：
+   *    分类变更不该把地区 / 行业字典也一起清掉（那会让无关端点多吃一次查询）。
+   *    `all` 才会一次清掉全部 `dict:*` 条目。
+   */
+  private applyDictEvent(scope: DictInvalidationScope): void {
+    if (scope === 'categories') {
+      this.cache.delete(CacheKeys.categories);
+      return;
+    }
+    if (scope === 'settings') {
+      this.cache.delete(CacheKeys.publicSettings);
+      return;
+    }
+    this.cache.deleteByPrefix('dict:');
   }
 
   /** 给命令加超时上限：Redis「连得上但很慢」时不能把写操作拖住。 */
