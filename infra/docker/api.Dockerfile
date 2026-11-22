@@ -50,6 +50,21 @@ RUN --mount=type=cache,id=nmg-pnpm-store,target=/pnpm/store \
     pnpm config set store-dir /pnpm/store \
  && pnpm install ${INSTALL_FLAGS} --store-dir /pnpm/store
 
+# ⚠️ 缺陷 #162：集成测试里有 5 个套件要**读仓库里的部署产物与文档**：
+#      - infra/scripts/check-rbac-matrix.mjs（权限点矩阵静态对账）
+#      - infra/scripts/check-read-visibility.mjs（可见性口径静态对账）
+#      - infra/env/env.prod.example、docker-compose.prod.yml（部署模板自检）
+#      - docs/API-SPEC.md、docs/KNOWN-ISSUES.md、docs/DATABASE-DESIGN.md（口径 ↔ 文档对账）
+#    回归链是**在容器里**跑 jest 的 → 镜像里没有这些文件，这些用例会假红
+#    （ENOENT / 找不到小节，跟实现无关）。镜像本来就带 apps/ 与 packages/ 的源码，
+#    再带上 infra/、compose 模板与 docs/ 是同一套思路，且这些文件里**没有密钥**
+#    （.env.prod 不在仓库里，env.prod.example 只有占位值）。
+#    ⚠️ 这三行必须放在 `pnpm install` **之后**：放在前面会把 install 层缓存冲掉，
+#    每次改文档都要重装依赖（多花好几分钟）。
+COPY infra ./infra
+COPY docker-compose.prod.yml ./docker-compose.prod.yml
+COPY docs ./docs
+
 # -----------------------------------------------------------------------------
 # builder：编译 @nmg/api（含其 workspace 依赖）
 # -----------------------------------------------------------------------------

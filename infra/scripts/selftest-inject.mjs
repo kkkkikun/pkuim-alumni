@@ -276,15 +276,31 @@ const injectors = {
 
   /* 端点覆盖：把某个测试里的调用点改掉，让对应端点不再被触达 */
   'coverage-remove-call'() {
-    const file = path.join(
-      copyRoot,
-      'apps/api/test/integration/read-coverage.e2e-spec.ts',
-    );
-    replaceOnce(
-      file,
-      /\$\{API\}\/system\/health`/,
-      '${API}/system/health-disabled`',
-    );
+    // ⚠️ 必须把**所有**调用点都改掉：
+    //    `GET /system/health` 现在有**两处**调用（read-coverage + ops-invalidation-bus，
+    //    后者是第十六轮加的）。只改一处的话，端点仍被另一个套件触达 →
+    //    覆盖校验器**正确地**判它「已覆盖」→ 反向验证会误判「校验器恒过」。
+    //    这不是校验器的问题，是**注入不够狠**。
+    const dir = path.join(copyRoot, 'apps/api/test');
+    let changed = 0;
+    const walk = (d) => {
+      for (const entry of fs.readdirSync(d, { withFileTypes: true })) {
+        const full = path.join(d, entry.name);
+        if (entry.isDirectory()) {
+          walk(full);
+          continue;
+        }
+        if (!full.endsWith('.ts')) continue;
+        const src = readText(full);
+        if (!src.includes('${API}/system/health')) continue;
+        writeText(full, src.split('${API}/system/health').join('${API}/system/health-disabled'));
+        changed += 1;
+      }
+    };
+    walk(dir);
+    if (changed === 0) {
+      throw new Error('注入失败：测试树里找不到任何 `${API}/system/health` 调用点');
+    }
   },
 
   /* 请求契约：客户端多发一个服务端没声明的查询参数（会被静默忽略） */

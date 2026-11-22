@@ -3792,6 +3792,63 @@
 - **边界**：本轮**未改任何对外行为**，只是把一条恒过的判定变成真的会跑的判定，
   并给它补上运行时那一半。
 
+### 204. 校园机（后端真源）上的 API 代码比仓库**旧了整整一轮**，此前的「回归链全绿」验的是旧代码（第十七轮发现并修复）
+
+- **现象**：跑 24 步回归链时，最后一步「客户端 ↔ 服务端路径一致性校验」报：
+  ```
+  [ERROR] MIRROR_EXTRA_KEY 小程序镜像包含契约中不存在的路径键：meSummary
+  [ERROR] ROUTE_NOT_FOUND 小程序 调用 GET /me/summary，服务端未注册该路径
+  ```
+  查下来：`apps/api/src` 在校园机上**少 19 个文件**
+  （`me-summary.service.ts`、`ttl-cache.service.ts`、`invalidation-bus.service.ts`、
+  `common/middleware/security-headers.ts`、两条新迁移、`admin-ops.controller.ts` …），
+  `apps/api/test` 少 15 个套件，运行中的容器 swagger **没有** `/me/summary`（86 条路由 vs 现在 88 条）。
+  也就是说：**校园机跑的是 11 月 15~18 日的 API**，仓库里的第三轮~第十六轮改动**从未部署过去**。
+- **为什么此前一直没人发现**：回归链在**容器里**跑 jest，容器是 11 月 18 日构建的旧镜像；
+  校园机的 `apps/api` 源码时间戳也停在 11 月 15~16 日。
+  于是历轮报告里的「24 步 EXIT=0、42 个集成套件全绿」，验的是**旧后端**，
+  而仓库里当时已经有 **57 个套件 / 563 个用例** —— 绿灯验的不是你以为的那个东西。
+  这与老板批的「没做好自查」是同一类毛病。
+- **处置**（第十七轮）：
+  - 按仓库自带流水线把校园机对齐到仓库当前代码：
+    「同步（无 `--delete`）→ `build.sh` 构建 → 幂等迁移 → 切流量 → `nginx -s reload` → 健康检查 → 迁移对账」；
+  - 补 `.env.prod` 缺失的 `ADMIN_BOOTSTRAP_USERNAME` / `ADMIN_BOOTSTRAP_PASSWORD`
+    （旧 `.env.prod` 是加这两个键**之前**的模板生成的 → Seed 在生产模式下拒绝用占位口令建管理员 → 回归链卡在 Seed 一步）；
+  - 两条待应用迁移（`1730000005000` 补查询索引 + 审计日志外键改 `RESTRICT`；
+    `1730000006000` 补 `articles(category_id, published_at)` 与 `event_registrations(user_id, id)`）
+    已应用到业务库 `nmg_alumni`，迁移对账 7/7 全应用；业务库 `users` 仍为 **1202**；
+  - 旧镜像已打回滚标签 `nmg-pku-alumni/{api,worker,admin-web}:rollback-20261122-073006`。
+- **教训**（写在这里以免再犯）：
+  「回归链全绿」**不等于**「验的是仓库当前代码」。每次同步后应当核对
+  **运行中容器的 swagger 路由数**与**仓库契约路径键数**是否对得上，
+  否则就是在给旧代码开绿灯。
+
+### 205. api 镜像里**没有**仓库的部署产物，导致 5 个集成套件在容器里假红（第十七轮发现并修复）
+
+- **现象**：把校园机对齐到仓库当前代码后，回归链的集成测试从 42 套件涨到 **57 套件 / 563 用例**，
+  其中 **5 个套件 / 7 个用例红**。逐条查下来全是**环境问题，不是实现问题**：
+  | 套件 | 报错 | 缺什么 |
+  |---|---|---|
+  | `admin-forbidden-boundary` | `Cannot find module '/app/infra/scripts/check-rbac-matrix.mjs'` | 镜像里没有 `infra/` |
+  | `admin-not-found-boundary` / `-positive` | `Cannot find module '/app/infra/scripts/check-read-visibility.mjs'` | 同上 |
+  | `config-validation`（3 例） | `ENOENT: /app/infra/env/env.prod.example`、`/app/docker-compose.prod.yml` | 镜像里没有 `infra/` 与 compose 模板 |
+  | `rbac-invalidation-bus`（「总线恢复后自动重新订阅」） | `subscribed=false` | 用例把上游 Redis 写死 `127.0.0.1`，容器里 Redis 是**另一个容器**（`REDIS_HOST=redis`），代理连不上上游 |
+- **原因**：
+  - `infra/docker/api.Dockerfile` 只 `COPY` 了 `package.json` / `packages` / `apps`，
+    **没有 `infra/` 与 `docker-compose.prod.yml`**；
+    而这 5 个套件要读仓库里的**部署模板与静态对账脚本**（它们守的正是「部署模板与启动期校验一致」）。
+    回归链是**在容器里**跑 jest 的 → 镜像里没有这些文件 → ENOENT → 假红。
+    （这些套件此前从未在容器里跑过 —— 校园机还是旧镜像。）
+  - 失效总线那条用例假设「Redis 在 127.0.0.1」——这只在**宿主机**上成立，容器里不成立。
+- **处置**：
+  - `api.Dockerfile` 的 deps 阶段补 `COPY infra ./infra` 与 `COPY docker-compose.prod.yml ./docker-compose.prod.yml`
+    （镜像本来就带 `apps/` 与 `packages/` 的源码，再带部署模板是同一套思路；
+    且**不含密钥** —— `.env.prod` 不在仓库里，`env.prod.example` 只有占位值）；
+  - 失效总线用例改成：故障阶段把 `REDIS_HOST` 一并指向 `127.0.0.1`（代理监听在那儿），
+    代理的**上游**用配置里的 `REDIS_HOST`（容器里 = `redis`，宿主机上未设 = `127.0.0.1`）——
+    两种环境都能跑，**用例意图一个字没改**（守的仍是「总线恢复后自动重新订阅，不重启进程」）。
+- **边界**：**未改任何对外行为**；失效总线的实现本身没动（它是对的，是用例的环境假设错了）。
+
 
 ## 待验证 / 未完成（不得声称已通过）> 以下均为**缺少外部资质或环境**导致的未验证项，与实现质量无关。
 > 已实测完成的项（冒烟 10/10、集成测试 39/39、k6 分级压测、备份恢复演练、管理后台构建）见 `docs/TEST-REPORT.md`。

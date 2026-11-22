@@ -224,11 +224,39 @@ function findEscapeWrites(body, managerName = 'manager') {
  * 缺陷 #131 / #132 就藏在这种写法里 ——
  * `replaceAttachments()` 里的两次写用的是局部别名，R2 完全看不见。
  */
-function findWriteExpressions(body) {
+/**
+ * 取出这个类里**通过 `@InjectRepository(...)` 注入**的仓储属性名。
+ *
+ * ⚠️ 缺陷 #162（第十七轮）：R2/R4 原来只按「`this.<x>.<写方法>()` 的形状」判定
+ *    「这是写库」—— 于是 `this.cache.delete(...)`（**缓存失效**，不是写库）
+ *    也被当成「绕过 manager 的写入」→ 事务逃逸校验器在**干净代码上就报 3 条**，
+ *    反向验证的基线因此永远不干净（规则太吵 → 误报）。
+ *
+ *    判据应该是「这个属性**是不是注入仓储**」：
+ *    - 属性在 `@InjectRepository(X)` 名单里 → 是仓储，按写库处理；
+ *    - 属性不在名单里、且这个类**能识别出仓储** → 是服务（如 TTL 缓存），不是写库；
+ *    - 一个仓储都识别不出来（写法特殊）→ **保守起见仍按写库处理**（宁可漏报也不误报）。
+ */
+function collectRepoProps(src) {
+  const props = new Set();
+  // 形态一：构造器参数注入 `@InjectRepository(X) private readonly x: Repository<X>`
+  const injected = /@InjectRepository\(\s*[A-Za-z0-9_.]+\s*\)\s*(?:private|public|protected)?\s*(?:readonly\s*)?([A-Za-z0-9_]+)\s*:/g;
+  // 形态二：属性声明 `private readonly x: Repository<X>`（字段初始化式注入）
+  const typed = /(?:private|public|protected)\s+(?:readonly\s+)?([A-Za-z0-9_]+)\s*:\s*Repository</g;
+  let match;
+  while ((match = injected.exec(src)) !== null) props.add(match[1]);
+  while ((match = typed.exec(src)) !== null) props.add(match[1]);
+  return props;
+}
+
+function findWriteExpressions(body, repoProps) {
   const writes = [];
   const re = new RegExp(`this\\.(\\w+)\\.(${REPO_WRITE_METHODS.join('|')})\\s*\\(`, 'g');
   let match;
   while ((match = re.exec(body)) !== null) {
+    // 只有「注入仓储」的属性才算写库；服务（如 this.cache）的同名方法不算。
+    // 判不出来（这个类里一个仓储都没有）→ 也不算数：这个类根本没碰数据库。
+    if (!repoProps || !repoProps.has(match[1])) continue;
     writes.push(`this.${match[1]}.${match[2]}()`);
   }
 
@@ -330,6 +358,8 @@ function main() {
     const src = readText(file);
     if (!src) continue;
     const relative = path.relative(ROOT, file);
+    // 这个类里**注入仓储**的属性名（用于把「写库」与「服务方法」区分开，见缺陷 #162）
+    const repoProps = collectRepoProps(src);
 
     // R1：事务逃逸
     for (const block of collectTransactionBlocks(src)) {
@@ -353,7 +383,7 @@ function main() {
     for (const method of collectMethods(src)) {
       // ⚠️ 写操作识别必须**认局部别名**（`const articles = ...` 后的 `articles.save(...)`）——
       //    否则「两次写分写在不同形态里」的方法会被漏掉（缺陷 #132 就是这种形态）。
-      const writes = findWriteExpressions(method.body);
+      const writes = findWriteExpressions(method.body, repoProps);
       if (writes.length < 2) continue;
       if (method.body.includes('transaction(')) continue;
       // 事务感知的从属方法：由调用方开事务，自己不需要再开 —— 不算候选
@@ -391,7 +421,7 @@ function main() {
     //   附件那一步失败时，内容写入**已经提交** → 留下半成品。
     const methodWrites = new Map();
     for (const method of collectMethods(src)) {
-      const writes = findWriteExpressions(method.body);
+      const writes = findWriteExpressions(method.body, repoProps);
       if (writes.length > 0) methodWrites.set(method.name, writes);
     }
     for (const method of collectMethods(src)) {
@@ -442,7 +472,7 @@ function main() {
     // 形如 `this.<repo>.save(...)` 的写入即命中。
     for (const method of collectMethods(src)) {
       if (!isTransactionAware(method)) continue;
-      const bypassWrites = findWriteExpressions(method.body).filter((write) =>
+      const bypassWrites = findWriteExpressions(method.body, repoProps).filter((write) =>
         write.startsWith('this.'),
       );
       if (bypassWrites.length === 0) continue;

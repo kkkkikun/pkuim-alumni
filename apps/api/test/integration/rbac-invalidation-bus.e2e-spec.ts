@@ -44,6 +44,7 @@ const ENV_KEYS = [
   'RBAC_INVALIDATION_ENABLED',
   'RBAC_INVALIDATION_CHANNEL',
   'REDIS_PORT',
+  'REDIS_HOST',
 ] as const;
 
 const originalEnv: Record<string, string | undefined> = {};
@@ -355,6 +356,11 @@ describe('共享失效总线 · 跨实例撤权', () => {
     //    把 `ensureSubscribed()` 里的重试与 `'ready'` 回调删掉，
     //    整个集成测试套件照样全绿（因为没有用例去「等 Redis 回来」）。
     const realRedisPort = Number(process.env.REDIS_PORT ?? '6379');
+    // ⚠️ 上游 Redis 的**地址**必须用配置里的 host，不能写死 127.0.0.1：
+    //    在容器里跑集成测试时，Redis 是**另一个容器**（REDIS_HOST=redis），
+    //    127.0.0.1 上什么都没有 —— 代理连上游必然失败，
+    //    「总线恢复后自动重新订阅」这条用例会**假红**（不是实现的错，是环境的错）。
+    const realRedisHost = process.env.REDIS_HOST ?? '127.0.0.1';
 
     // 找一个「现在没人监听」的端口：先 listen(0) 拿到端口号，再立刻关掉。
     const probe = net.createServer();
@@ -363,6 +369,10 @@ describe('共享失效总线 · 跨实例撤权', () => {
     await new Promise<void>((resolve) => probe.close(() => resolve()));
 
     // 起一个**连不上 Redis** 的实例（模拟 Redis 挂了）。
+    // ⚠️ 必须把 host 一并指到 127.0.0.1：代理就监听在 127.0.0.1:deadPort，
+    //    若还让实例按配置里的 host（如容器里的 `redis`）去连，就**根本到不了代理**，
+    //    「总线恢复」这一步永远等不到 → 用例假红。
+    process.env.REDIS_HOST = '127.0.0.1';
     process.env.REDIS_PORT = String(deadPort);
     let appC: INestApplication | undefined;
     try {
@@ -372,6 +382,9 @@ describe('共享失效总线 · 跨实例撤权', () => {
       const original = originalEnv.REDIS_PORT;
       if (original === undefined) delete process.env.REDIS_PORT;
       else process.env.REDIS_PORT = original;
+      const originalHost = originalEnv.REDIS_HOST;
+      if (originalHost === undefined) delete process.env.REDIS_HOST;
+      else process.env.REDIS_HOST = originalHost;
     }
 
     try {
@@ -385,7 +398,7 @@ describe('共享失效总线 · 跨实例撤权', () => {
       const sockets = new Set<net.Socket>();
       const proxy = net.createServer((client) => {
         sockets.add(client);
-        const upstream = net.connect(realRedisPort, '127.0.0.1');
+        const upstream = net.connect(realRedisPort, realRedisHost);
         sockets.add(upstream);
         client.pipe(upstream);
         upstream.pipe(client);
