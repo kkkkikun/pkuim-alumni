@@ -33,9 +33,11 @@
   </view>
 
   <view class="fixed-bar">
-    <button class="btn-main btn-block" bindtap="onStartTap">开始认证</button>
+    <!-- ⚠️ 真机反馈（16:29）：原来「开始认证」在上、「查看认证进度」在下的上下堆叠，
+         显得笨重且占高度。改为左右并排（次操作在左、主操作在右，与其它页 .btn-row 约定一致）。 -->
     <view class="btn-row">
       <button class="btn-ghost btn-block" bindtap="onProgressTap">查看认证进度</button>
+      <button class="btn-main btn-block" bindtap="onStartTap">开始认证</button>
     </view>
   </view>
 </view>

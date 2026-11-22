@@ -25,6 +25,7 @@
  */
 
 import type { ConnectFilter, DirectoryFilter } from '../store/index';
+import type { IndustryDto } from '../types/index';
 
 /** 通讯录筛选条件的签名（任何一项变化都会产生不同的签名） */
 export function directoryFilterSignature(filter: DirectoryFilter): string {
@@ -63,4 +64,56 @@ export function buildGraduationYearOptions(currentYear?: number): number[] {
     years.push(year);
   }
   return years;
+}
+
+/* ------------------------------------------------------------------ *
+ * 连接栏目二级筛选页（真机反馈 16:31 的重构）
+ * ------------------------------------------------------------------ */
+
+/** 二级筛选页的草稿：只管地区 + 行业 */
+export interface ConnectFilterDraft {
+  regionCode: string;
+  industryCode: string;
+}
+
+/**
+ * 从当前生效的连接筛选条件生成二级筛选页的草稿。
+ *
+ * ⚠️ 真机反馈（16:31）：二级页不再提供「信息类型」，类型筛选只保留在
+ *   列表页的「按类型查看」chip 上（即时生效）。因此草稿里**没有 type**，
+ *   防止二级页「重置/确定」把列表页刚选的类型悄悄改掉。
+ */
+export function createConnectFilterDraft(filter: ConnectFilter): ConnectFilterDraft {
+  return {
+    regionCode: filter.regionCode || '',
+    industryCode: filter.industryCode || '',
+  };
+}
+
+/** 草稿 → 提交给 store 的 patch（只含地区与行业） */
+export function toConnectFilterPatch(draft: ConnectFilterDraft): {
+  regionCode: string;
+  industryCode: string;
+} {
+  return {
+    regionCode: draft.regionCode || '',
+    industryCode: draft.industryCode || '',
+  };
+}
+
+/** 草稿是否为空（无地区、无行业）——用于「重置」按钮的可用态与空态提示 */
+export function isConnectFilterDraftEmpty(draft: ConnectFilterDraft): boolean {
+  return !draft.regionCode && !draft.industryCode;
+}
+
+/**
+ * 二级筛选页的行业选项（首项固定为「全部行业」）。
+ *
+ * 与通讯录筛选页同构：选项来自 state.industries，代码用 code 参与签名。
+ */
+export function buildIndustryOptions(industries: IndustryDto[]): { code: string; name: string }[] {
+  return [
+    { code: '', name: '全部行业' },
+    ...industries.map((item) => ({ code: item.code, name: item.name })),
+  ];
 }

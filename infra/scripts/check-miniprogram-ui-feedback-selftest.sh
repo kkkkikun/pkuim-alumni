@@ -8,9 +8,13 @@
 #   当时**24 步回归链全绿**：接口 200、类型检查过、样式校验过、单测全绿。
 #   因为这几类问题都不违反任何契约，只有人拿在手里才看得出来。
 #
+# 第二轮真机反馈（3 张截图）追加：
+#   认证页底部两个按钮要左右并排；连接二级筛选页去掉「信息类型」（外面已有）；
+#   连接列表页的「按行业」chip 行太乱，应收进二级筛选页。
+#
 # 本脚本证明：这层校验**不是恒过的** ——
-#   逐条注入 8 类真机可见缺陷 → 每一条都必须被判失败；
-#   注入一处**合法**改动 → 必须仍然通过（防误报）；
+#   逐条注入 13 类真机可见缺陷 → 每一条都必须被判失败；
+#   注入两处**合法**改动 → 必须仍然通过（防误报）；
 #   恒过的假校验器 → 必须被判失败（元自检）。
 #
 # 退出码：0 全部通过；1 反向验证失败（校验器抓不住缺陷 = 校验器无效）
@@ -24,6 +28,7 @@ INJECT="${SCRIPT_DIR}/check-miniprogram-ui-feedback-inject.mjs"
 WORK_DIR="$(mktemp -d /tmp/nmg-uifb-selftest.XXXXXX)"
 PASS=0
 FAIL=0
+TOTAL=17
 
 log() { printf '[%s] %s\n' "$(date +%H:%M:%S)" "$*"; }
 ok()  { PASS=$((PASS+1)); printf '  \xe2\x9c\x93 %s\n' "$*"; }
@@ -43,7 +48,7 @@ cp -r "${PROJECT_ROOT}/apps/miniprogram/src" "$SRC_DIR"
 log "反向验证开始（临时副本：${SRC_DIR}）"
 
 # --- 1. 正向基线 ------------------------------------------------------------
-log "[1/11] 正向基线：干净源码必须通过……"
+log "[1/${TOTAL}] 正向基线：干净源码必须通过……"
 set +e
 node "$CHECKER" "$SRC_DIR" > "${WORK_DIR}/baseline.log" 2>&1
 BASE_RC=$?
@@ -55,14 +60,14 @@ else
   tail -12 "${WORK_DIR}/baseline.log"
 fi
 
-# --- 2~9. 逐条注入真机可见缺陷 ----------------------------------------------
+# --- 2~14. 逐条注入真机可见缺陷 ----------------------------------------------
 run_case() {
   local idx="$1"; shift
   local label="$1"; shift
   local op="$1"; shift
   local expect_msg="$1"; shift
 
-  log "[${idx}/11] 注入「${label}」并验证校验器……"
+  log "[${idx}/${TOTAL}] 注入「${label}」并验证校验器……"
   rm -rf "$SRC_DIR"
   cp -r "${PROJECT_ROOT}/apps/miniprogram/src" "$SRC_DIR"
   if ! node "$INJECT" "$SRC_DIR" "$op" > "${WORK_DIR}/inject.log" 2>&1; then
@@ -95,9 +100,14 @@ run_case 6  "空列表没有清空出路"        no-empty-action   "没有「清
 run_case 7  "年份条件不可见"            hide-year         "幽灵条件"
 run_case 8  "类型条件不可见"            hide-type         "幽灵条件"
 run_case 9  "有地区一条资源都没有"      region-gap        "一条资源都没有"
+run_case 10 "认证页按钮改回上下堆叠"    stack-verify-buttons "没有左右并排"
+run_case 11 "二级筛选页加回信息类型"    restore-type-filter "重复入口"
+run_case 12 "二级筛选页重新接管类型"    filter-type-leak  "仍在处理信息类型"
+run_case 13 "列表页加回行业 chip 行"    restore-industry-chips "横向 chip 行"
+run_case 14 "列表页行业入口不可见"      hide-industry-entry "没有可见的行业筛选入口"
 
-# --- 10. 防误报：合法改动必须仍然通过 ---------------------------------------
-log "[10/11] 防误报断言：注入合法改动必须仍然通过……"
+# --- 15~16. 防误报：合法改动必须仍然通过 -------------------------------------
+log "[15/${TOTAL}] 防误报断言：注入合法改动（按钮文案）必须仍然通过……"
 rm -rf "$SRC_DIR"
 cp -r "${PROJECT_ROOT}/apps/miniprogram/src" "$SRC_DIR"
 node "$INJECT" "$SRC_DIR" benign > "${WORK_DIR}/inject.log" 2>&1
@@ -112,8 +122,23 @@ else
   tail -12 "${WORK_DIR}/falsepositive.log"
 fi
 
-# --- 11. 元自检 --------------------------------------------------------------
-log "[11/11] 元自检：恒过的假校验器必须被判失败……"
+log "[16/${TOTAL}] 防误报断言：注释里出现敏感字样必须仍然通过……"
+rm -rf "$SRC_DIR"
+cp -r "${PROJECT_ROOT}/apps/miniprogram/src" "$SRC_DIR"
+node "$INJECT" "$SRC_DIR" benign-comment > "${WORK_DIR}/inject.log" 2>&1
+set +e
+node "$CHECKER" "$SRC_DIR" > "${WORK_DIR}/falsepositive2.log" 2>&1
+FP2_RC=$?
+set -e
+if [ "$FP2_RC" -eq 0 ]; then
+  ok "防误报：注释里的字样不被当成界面内容，退出码 0 ✅"
+else
+  bad "防误报：注释里的字样被误判（退出码 ${FP2_RC}）"
+  tail -12 "${WORK_DIR}/falsepositive2.log"
+fi
+
+# --- 17. 元自检 --------------------------------------------------------------
+log "[17/${TOTAL}] 元自检：恒过的假校验器必须被判失败……"
 cat > "${WORK_DIR}/always-pass.sh" <<'EOF'
 #!/usr/bin/env bash
 exit 0
@@ -138,4 +163,4 @@ if [ "$FAIL" -ne 0 ]; then
   log "=== 反向验证未通过 ❌（校验器抓不住缺陷 = 校验器无效）==="
   exit 1
 fi
-log "=== 反向验证通过 ✅（8 类真机可见缺陷都能被抓住，且不误判合法改动）==="
+log "=== 反向验证通过 ✅（13 类真机可见缺陷都能被抓住，且不误判合法改动）==="

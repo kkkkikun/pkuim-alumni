@@ -113,10 +113,18 @@
 
 .connect-toolbar {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20rpx;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 16rpx;
   margin-bottom: 34rpx;
+}
+
+/* 地区 / 行业两个筛选入口（真机反馈 16:31：行业筛选收进二级页后，入口要留在工具栏上可见） */
+.connect-filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16rpx;
 }
 
 .connect-result-count {

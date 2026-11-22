@@ -1,16 +1,10 @@
 <view class="detail-page page-with-fixed-bar filter-page">
-  <view class="section">
-    <view class="section-head">
-      <text class="section-title">信息类型</text>
-      <text class="section-sub">资源与需求双向连接</text>
-    </view>
-    <view class="chip-row">
-      <view class="chip {{type === 'all' ? 'active' : ''}}" data-type="all" bindtap="onTypeTap">全部</view>
-      <view class="chip {{type === 'resource' ? 'active' : ''}}" data-type="resource" bindtap="onTypeTap">我能提供</view>
-      <view class="chip {{type === 'demand' ? 'active' : ''}}" data-type="demand" bindtap="onTypeTap">我有需求</view>
-    </view>
-  </view>
-
+  <!--
+    ⚠️ 真机反馈（16:31）：「信息类型」筛选从二级页移除 ——
+      外面连接列表页已经有「按类型查看」的 chip 行（全部 / 我能提供 / 我有需求），
+      二级页再放一份就是重复入口，用户明确要求「外面已经有了」。
+      类型筛选改为**只在列表页即时生效**，二级页只管地区 + 行业。
+  -->
   <view class="section">
     <view class="section-head">
       <text class="section-title">所属地区</text>
@@ -34,6 +28,29 @@
       </view>
     </view>
   </view>
+
+  <!--
+    ⚠️ 真机反馈（16:31）：「按行业方向查看」的横向 chip 行太乱，从列表页收进二级筛选页。
+      与通讯录筛选页的「所在行业」保持同构。
+  -->
+  <view class="section">
+    <view class="section-head">
+      <text class="section-title">所在行业</text>
+      <text class="section-sub">按行业方向筛选</text>
+    </view>
+    <view class="chip-row">
+      <view class="chip {{industryCode === '' ? 'active' : ''}}" data-code="" bindtap="onIndustryTap">全部行业</view>
+      <view
+        class="chip {{industryCode === item.code ? 'active' : ''}}"
+        wx:for="{{industries}}"
+        wx:key="code"
+        data-code="{{item.code}}"
+        bindtap="onIndustryTap"
+      >{{item.name}}</view>
+    </view>
+  </view>
+
+  <view class="notice-box">筛选条件只影响连接信息，不会改变首页或其他栏目的内容。信息类型可在连接列表页直接切换。</view>
 
   <view class="fixed-bar">
     <view class="btn-row">

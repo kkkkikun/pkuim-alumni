@@ -14,10 +14,22 @@
 
   <view class="link-body">
     <view class="connect-toolbar">
-      <view class="filter-button {{regionLabel !== '全部地区' ? 'active' : ''}}" bindtap="onRegionFilterTap">
-        <image class="filter-icon" src="/assets/icons/filter-pin.png" mode="aspectFit"></image>
-        <text>地区：{{regionLabel}}</text>
-        <image class="filter-icon" src="/assets/icons/filter-down.png" mode="aspectFit"></image>
+      <!--
+        ⚠️ 真机反馈（16:31）：行业筛选从下面那行「按行业方向查看」的横向 chip 行
+          收进二级筛选页（那条横向滚动 chip 太多、太乱）。
+          现在工具栏上「地区 / 行业」两个入口都指向同一个二级筛选页，
+          与通讯录页的工具栏结构保持一致；当前生效的行业在按钮上可见。
+      -->
+      <view class="connect-filters">
+        <view class="filter-button {{regionLabel !== '全部地区' ? 'active' : ''}}" bindtap="onFilterTap">
+          <image class="filter-icon" src="/assets/icons/filter-pin.png" mode="aspectFit"></image>
+          <text>地区：{{regionLabel}}</text>
+          <image class="filter-icon" src="/assets/icons/filter-down.png" mode="aspectFit"></image>
+        </view>
+        <view class="filter-button {{industryLabel !== '全部行业' ? 'active' : ''}}" bindtap="onFilterTap">
+          <text>行业：{{industryLabel}}</text>
+          <image class="filter-icon" src="/assets/icons/filter-down.png" mode="aspectFit"></image>
+        </view>
       </view>
       <text class="connect-result-count">找到 {{total}} 条连接信息</text>
     </view>
@@ -32,24 +44,6 @@
         <view class="sector-chip {{typeLabel === '全部' ? 'on' : ''}}" data-type="all" bindtap="onTypeTap">全部</view>
         <view class="sector-chip {{typeLabel === '我有需求' ? 'on' : ''}}" data-type="demand" bindtap="onTypeTap">我有需求</view>
         <view class="sector-chip {{typeLabel === '我能提供' ? 'on' : ''}}" data-type="resource" bindtap="onTypeTap">我能提供</view>
-      </view>
-    </scroll-view>
-
-    <view class="link-section-title">
-      <text class="section-title">按行业方向查看</text>
-      <text class="section-sub">资源与需求双向连接</text>
-    </view>
-
-    <scroll-view class="sector-scroll" scroll-x>
-      <view class="sector-row">
-        <view class="sector-chip {{industryLabel === '全部' ? 'on' : ''}}" data-code="" bindtap="onIndustryTap">全部</view>
-        <view
-          class="sector-chip {{industryLabel === item.name ? 'on' : ''}}"
-          wx:for="{{industries}}"
-          wx:key="code"
-          data-code="{{item.code}}"
-          bindtap="onIndustryTap"
-        >{{item.name}}</view>
       </view>
     </scroll-view>
 

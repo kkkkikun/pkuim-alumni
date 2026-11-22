@@ -1,6 +1,6 @@
 import { listResources } from '../../../services/index';
 import { getConnectFilter, getState, resetConnectFilter, setConnectFilter } from '../../../store/index';
-import type { IndustryDto, RegionDto, ResourcePostDto } from '../../../types/index';
+import type { ResourcePostDto } from '../../../types/index';
 import { connectFilterSignature, isConnectFilterActive } from '../../../utils/filter';
 import { navigateTo } from '../../../utils/navigate';
 import { resetPageScroll, restorePageScroll, trackPageScroll } from '../../../utils/scroll';
@@ -24,10 +24,8 @@ Page({
     loading: true,
     error: '',
     posts: [] as OpportunityView[],
-    regions: [] as RegionDto[],
-    industries: [] as IndustryDto[],
     regionLabel: '全部地区',
-    industryLabel: '全部',
+    industryLabel: '全部行业',
     typeLabel: '全部',
     page: 1,
     total: 0,
@@ -39,8 +37,6 @@ Page({
   },
 
   onLoad(): void {
-    const state = getState();
-    this.setData({ regions: state.regions, industries: state.industries });
     this.syncFilterLabel();
     void this.load(1);
   },
@@ -75,7 +71,7 @@ Page({
     const industry = state.industries.find((item) => item.code === filter.industryCode);
     this.setData({
       regionLabel: region ? region.name : '全部地区',
-      industryLabel: industry ? industry.name : '全部',
+      industryLabel: industry ? industry.name : '全部行业',
       typeLabel: filter.type === 'resource' ? '我能提供' : filter.type === 'demand' ? '我有需求' : '全部',
       filterActive: isConnectFilterActive(filter),
     });
@@ -136,14 +132,8 @@ Page({
     void this.load(1);
   },
 
-  onIndustryTap(event: WechatMiniprogram.BaseEvent): void {
-    const code = (event.currentTarget.dataset.code as string) || '';
-    setConnectFilter({ industryCode: code });
-    this.syncFilterLabel();
-    void this.load(1);
-  },
-
-  onRegionFilterTap(): void {
+  /** 地区 / 行业筛选入口 —— 都进同一个二级筛选页（真机反馈 16:31） */
+  onFilterTap(): void {
     navigateTo('/pages/connect/filter/index');
   },
 

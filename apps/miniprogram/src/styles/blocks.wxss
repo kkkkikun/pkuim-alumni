@@ -9,12 +9,17 @@
 .btn-row {
   display: flex;
   gap: 20rpx;
+  align-items: stretch;
 }
 
 .btn-row .btn-main,
 .btn-row .btn-soft,
 .btn-row .btn-ghost {
   flex: 1;
+  min-width: 0;
+  /* 并排按钮统一高度：.btn-main 88rpx / .btn-soft 84rpx / .btn-ghost 80rpx
+     三种默认高度不一致，并排时会出现一条高一条矮的错位感。 */
+  height: 88rpx;
 }
 
 .list-foot {

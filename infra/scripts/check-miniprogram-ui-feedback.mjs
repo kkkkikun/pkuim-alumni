@@ -23,6 +23,11 @@
  *   R5 生效中的筛选条件必须在页面上**看得见**（年份 / 类型不能是幽灵条件）；
  *   R6 演示数据里，地区字典的每一个地区都至少要有 1 条资源。
  *
+ * ⚠️ 第二轮真机反馈（2026-11-22 16:29 / 16:31，3 张截图）追加三条：
+ *   R7 校友认证页底部的两个按钮必须**左右并排**（上下堆叠显得笨重）；
+ *   R8 连接栏目的二级筛选页**不得再出现「信息类型」**（列表页已有 chip，重复入口）；
+ *   R9 连接栏目的行业筛选必须**收进二级筛选页**，列表页只保留一个可见的行业入口。
+ *
  * 用法：node check-miniprogram-ui-feedback.mjs <小程序源码目录>
  * 退出码：0 全部通过；1 发现真机可见问题
  */
@@ -74,6 +79,53 @@ function cssBlock(css, selector) {
 }
 
 /**
+ * 读取 WXML 源码并**剥掉注释**。
+ *
+ * ⚠️ 为什么要剥：页面上经常用注释记录「这里原来是什么、为什么这么改」，
+ *   注释里出现「信息类型」「按行业方向查看」这类字眼是**正常的**。
+ *   如果校验器直接对原文做子串匹配，就会把注释当成页面内容 → 误报。
+ *   注释不是用户能看到的界面，必须先剥掉再判断。
+ */
+function readWxml(file) {
+  return readFileSync(file, 'utf8').replace(/<!--[\s\S]*?-->/g, '');
+}
+
+/** 读取 TS 源码并剥掉注释（块注释 + 行注释） */
+function readTs(file) {
+  return readFileSync(file, 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:\\])\/\/[^\n]*/g, '$1');
+}
+
+/**
+ * 取出 WXML 里某个 class 的所有 `<view>` 块（按标签配对，支持嵌套）。
+ * 用来判断「某个结构是不是在另一个结构里面」，而不是只做子串匹配。
+ */
+function extractViewBlocks(text, className) {
+  const re = new RegExp(`<view class="${className}"[^>]*>`, 'g');
+  const blocks = [];
+  let match;
+  while ((match = re.exec(text)) !== null) {
+    const tagRe = /<view\b[^>]*>|<\/view>/g;
+    tagRe.lastIndex = match.index + match[0].length;
+    let depth = 1;
+    let tag;
+    while ((tag = tagRe.exec(text)) !== null) {
+      if (tag[0].startsWith('</')) {
+        depth -= 1;
+        if (depth === 0) {
+          blocks.push(text.slice(match.index, tag.index + tag[0].length));
+          break;
+        }
+      } else {
+        depth += 1;
+      }
+    }
+  }
+  return blocks;
+}
+
+/**
  * 解析 padding 简写的上下值。
  * 返回 [top, bottom]；解析不了返回 null（表示「未声明」）。
  */
@@ -92,7 +144,7 @@ function paddingVertical(value) {
 // ---------------------------------------------------------------------------
 const wxmlFiles = walk(resolve(srcDir, 'pages')).filter((f) => f.endsWith('.wxml'));
 for (const file of wxmlFiles) {
-  const text = readFileSync(file, 'utf8');
+  const text = readWxml(file);
   if (!text.includes('fixed-bar')) {
     continue;
   }
@@ -150,9 +202,9 @@ for (const page of FILTER_PAGES) {
     add('R3', `${page.title}列表页源码缺失`, relative(srcDir, tsFile));
     continue;
   }
-  const ts = readFileSync(tsFile, 'utf8');
+  const ts = readTs(tsFile);
   const wxml = statSync(wxmlFile, { throwIfNoEntry: false })?.isFile()
-    ? readFileSync(wxmlFile, 'utf8')
+    ? readWxml(wxmlFile)
     : '';
 
   // R3：筛选条件变化后必须重载（定义 + 调用，至少出现两次）
@@ -194,11 +246,11 @@ function usesMustacheVar(wxml, name) {
   return expressions.some((expr) => re.test(expr));
 }
 
-const directoryWxml = readFileSync(resolve(srcDir, 'pages/directory/index/index.wxml'), 'utf8');
+const directoryWxml = readWxml(resolve(srcDir, 'pages/directory/index/index.wxml'));
 if (!usesMustacheVar(directoryWxml, 'yearLabel')) {
   add('R5', '通讯录列表页没有展示毕业年份筛选（年份成了看不见的幽灵条件）', 'pages/directory/index/index.wxml');
 }
-const connectWxml = readFileSync(resolve(srcDir, 'pages/connect/index/index.wxml'), 'utf8');
+const connectWxml = readWxml(resolve(srcDir, 'pages/connect/index/index.wxml'));
 if (!usesMustacheVar(connectWxml, 'typeLabel') || !connectWxml.includes('onTypeTap')) {
   add('R5', '连接列表页没有展示信息类型筛选（类型成了看不见的幽灵条件）', 'pages/connect/index/index.wxml');
 }
@@ -235,6 +287,122 @@ if (missing.length > 0) {
 }
 
 // ---------------------------------------------------------------------------
+// R7：校友认证页底部的两个按钮必须左右并排
+//     （真机反馈 16:29「下面的两个按键左右布局更好看」：
+//       原来「开始认证」在上、「查看认证进度」在下的上下堆叠，又笨重又占高度）
+// ---------------------------------------------------------------------------
+const verifyIntroFile = resolve(srcDir, 'pages/me/verify-intro/index.wxml');
+if (!statSync(verifyIntroFile, { throwIfNoEntry: false })?.isFile()) {
+  add('R7', '校友认证介绍页源码缺失', relative(srcDir, verifyIntroFile));
+} else {
+  const verifyWxml = readWxml(verifyIntroFile);
+  const fixedBars = extractViewBlocks(verifyWxml, 'fixed-bar');
+  if (fixedBars.length === 0) {
+    add('R7', '校友认证页没有找到底部固定栏', relative(srcDir, verifyIntroFile));
+  } else {
+    const bar = fixedBars[0];
+    const rows = extractViewBlocks(bar, 'btn-row');
+    const sideBySide = rows.some(
+      (row) => row.includes('onStartTap') && row.includes('onProgressTap')
+    );
+    if (!sideBySide) {
+      add(
+        'R7',
+        '认证页底部两个按钮没有左右并排（客户要求左右布局，上下堆叠显得笨重）',
+        relative(srcDir, verifyIntroFile)
+      );
+    }
+    // 防「并排容器之外还留着按钮」——那等于又变回上下堆叠
+    const outside = rows.length > 0 ? bar.replace(rows.join(''), '') : bar;
+    if (/<button\b/.test(outside)) {
+      add(
+        'R7',
+        '认证页底部按钮又变回上下堆叠（并排容器之外还有按钮）',
+        relative(srcDir, verifyIntroFile)
+      );
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// R8：连接栏目的二级筛选页不得再出现「信息类型」
+//     （真机反馈 16:31「去掉二级页面的信息类型筛选，外面已经有了」：
+//       列表页的「按类型查看」chip 才是类型筛选的入口，二级页再放一份就是重复入口）
+// ---------------------------------------------------------------------------
+const connectFilterWxmlFile = resolve(srcDir, 'pages/connect/filter/index.wxml');
+const connectFilterTsFile = resolve(srcDir, 'pages/connect/filter/index.ts');
+for (const f of [connectFilterWxmlFile, connectFilterTsFile]) {
+  if (!statSync(f, { throwIfNoEntry: false })?.isFile()) {
+    add('R8', '连接栏目二级筛选页源码缺失', relative(srcDir, f));
+  }
+}
+if (statSync(connectFilterWxmlFile, { throwIfNoEntry: false })?.isFile()) {
+  const cfWxml = readWxml(connectFilterWxmlFile);
+  // ⚠️ 判据要精确：说明文案里出现「信息类型」四个字是允许的
+  //   （比如「信息类型可在连接列表页直接切换」这句提示），
+  //   真正要禁的是**一个叫「信息类型」的筛选区块**以及它的绑定。
+  const typeSection = /<text class="section-title">\s*信息类型\s*<\/text>/.test(cfWxml);
+  const typeBinding = /onTypeTap/.test(cfWxml);
+  if (typeSection || typeBinding) {
+    add(
+      'R8',
+      '连接二级筛选页又出现了「信息类型」筛选（外面列表页已经有了，属于重复入口）',
+      `${relative(srcDir, connectFilterWxmlFile)}（区块标题：${typeSection}；类型绑定：${typeBinding}）`
+    );
+  }
+}
+if (statSync(connectFilterTsFile, { throwIfNoEntry: false })?.isFile()) {
+  const cfTs = readTs(connectFilterTsFile);
+  if (/onTypeTap/.test(cfTs) || /type\s*:\s*'all'/.test(cfTs)) {
+    add(
+      'R8',
+      '连接二级筛选页仍在处理信息类型（会与列表页的类型 chip 互相覆盖）',
+      relative(srcDir, connectFilterTsFile)
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// R9：行业筛选收进二级筛选页，列表页只留一个可见入口
+//     （真机反馈 16:31「有点乱，可以把按行业筛选收到二级页面里」）
+// ---------------------------------------------------------------------------
+const connectIndexWxmlFile = resolve(srcDir, 'pages/connect/index/index.wxml');
+if (!statSync(connectIndexWxmlFile, { throwIfNoEntry: false })?.isFile()) {
+  add('R9', '连接列表页源码缺失', relative(srcDir, connectIndexWxmlFile));
+} else {
+  const ciWxml = readWxml(connectIndexWxmlFile);
+  // ⚠️ 判据同样要精确：工具栏上的「行业：{{industryLabel}}」入口是**必须保留**的，
+  //   要禁的是列表页里那条「按行业…查看」的横向 chip 行（以及它的直接选择绑定）。
+  const industrySection = /<text class="section-title">\s*按行业/.test(ciWxml);
+  const industryBinding = /onIndustryTap/.test(ciWxml);
+  if (industrySection || industryBinding) {
+    add(
+      'R9',
+      '连接列表页还留着「按行业…查看」的横向 chip 行（太乱，应收进二级筛选页）',
+      `${relative(srcDir, connectIndexWxmlFile)}（区块标题：${industrySection}；行业直选绑定：${industryBinding}）`
+    );
+  }
+  const filterBlocks = extractViewBlocks(ciWxml, 'connect-filters');
+  if (filterBlocks.length === 0 || !usesMustacheVar(filterBlocks[0], 'industryLabel')) {
+    add(
+      'R9',
+      '连接列表页没有可见的行业筛选入口（行业筛选收进二级页后，入口必须留在工具栏上）',
+      relative(srcDir, connectIndexWxmlFile)
+    );
+  }
+  if (statSync(connectFilterWxmlFile, { throwIfNoEntry: false })?.isFile()) {
+    const cfWxml = readWxml(connectFilterWxmlFile);
+    if (!cfWxml.includes('所在行业') || !cfWxml.includes('onIndustryTap')) {
+      add(
+        'R9',
+        '连接二级筛选页没有行业筛选区块（行业筛选被收进来后必须真的能选）',
+        relative(srcDir, connectFilterWxmlFile)
+      );
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 结论
 // ---------------------------------------------------------------------------
 if (offenders.length > 0) {
@@ -244,13 +412,16 @@ if (offenders.length > 0) {
     console.error(`      ${o.detail}`);
   }
   console.error(
-    '\n这六条对应的都是**真机上才看得见**的问题（客户 2026-11-22 一次报了 12 张截图）：\n' +
+    '\n这九条对应的都是**真机上才看得见**的问题（客户 2026-11-22 两次共报了 15 张截图）：\n' +
       '  R1 底部固定按钮压住正文 → 根节点加 page-with-fixed-bar；\n' +
       '  R2 输入框文字被裁掉一截 → .form-input 用显式 height + line-height，去掉纵向 padding；\n' +
       '  R3 筛选/搜索看起来不生效 → onShow 里比对筛选签名，变了就重新加载；\n' +
       '  R4 筛选后卡在空列表 → 空状态提供「清空筛选条件」；\n' +
       '  R5 幽灵筛选条件 → 页面上把年份 / 类型显示出来；\n' +
-      '  R6 选某个地区 0 条 → 演示内容库补齐各地区资源。'
+      '  R6 选某个地区 0 条 → 演示内容库补齐各地区资源；\n' +
+      '  R7 认证页按钮上下堆叠 → 两个按钮放进同一个 .btn-row 左右并排；\n' +
+      '  R8 二级筛选页重复提供信息类型 → 类型筛选只留在列表页的 chip 上；\n' +
+      '  R9 列表页行业 chip 行太乱 → 行业筛选收进二级页，列表页只留一个可见入口。'
   );
   process.exit(1);
 }
@@ -258,6 +429,7 @@ if (offenders.length > 0) {
 const pages = wxmlFiles.length;
 console.log(
   `✅ 真机反馈回归守卫通过：${pages} 个页面；固定底栏页面均已留白；输入框高度合法；` +
-    '通讯录/连接筛选闭环完整；演示资源覆盖全部地区'
+    '通讯录/连接筛选闭环完整；演示资源覆盖全部地区；认证页按钮左右并排；' +
+    '连接二级筛选页无重复类型入口、行业筛选已收进二级页'
 );
 process.exit(0);
