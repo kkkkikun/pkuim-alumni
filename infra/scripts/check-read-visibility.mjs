@@ -893,14 +893,22 @@ function findEndpoints(src) {
     if (!matched) continue;
 
     const decorators = [];
+    // ⚠️ **注释行不能截断装饰器块**（第十七轮修掉的盲点）：
+    //   装饰器与路由装饰器之间常夹着一段说明性注释
+    //   （如「这个 POST 不创建任何资源 → 应当带 Location 头」）。
+    //   遇到注释就**跳过**、继续收集，而不是**中断** ——
+    //   中断的话，夹在注释后面的 `@RequireAlumniStage('verified')`
+    //   就被当成了「不在这个端点上」，守卫判定会**误报**。
     for (let j = index - 1; j >= 0; j -= 1) {
       const text = lines[j].trim();
       if (text.startsWith('@')) decorators.unshift(text);
+      else if (text.startsWith('//') || text.startsWith('*') || text.startsWith('/*')) continue;
       else break;
     }
     for (let j = index + 1; j < lines.length; j += 1) {
       const text = lines[j].trim();
       if (text.startsWith('@')) decorators.push(text);
+      else if (text.startsWith('//') || text.startsWith('*') || text.startsWith('/*')) continue;
       else break;
     }
     const isPublic = classPublic || decorators.some((item) => item.startsWith('@Public'));
@@ -923,9 +931,59 @@ function findEndpoints(src) {
       line: index + 1,
       isPublic,
       handler: handler ? handler[1] : null,
+      // ⚠️ 这个端点**自己**的装饰器块（守卫就挂在这里）——
+      //    「守卫必须在这个端点上」要按**端点**判，不能按**文件**判。
+      decorators,
     });
   }
   return endpoints;
+}
+
+/**
+ * 取某个端点**自己**的装饰器块（守卫就挂在这里）。
+ *
+ * ⚠️ 为什么不能按**整个控制器文件**判（第十七轮修掉的盲点）：
+ *   一个控制器文件里往往有**几十个**端点，每个端点各自挂着自己的守卫。
+ *   按文件判意味着「**别的**端点还有这道守卫」就算这个端点也有 ——
+ *   守着一个端点的守卫被摘掉、而同一文件里另一个端点还留着，
+ *   这条判定就**恒过**了。
+ *   「未完成校友认证 → 403」这条守卫正是这种**逐端点**的语义，
+ *   按文件判等于没判。
+ *
+ * @param {string} file 控制器文件（相对仓库根）
+ * @param {string} method HTTP 方法
+ * @param {string} route 路由（不含控制器前缀）
+ * @returns {string[]|null} 该端点的装饰器块；端点找不到时返回 null
+ */
+function endpointDecorators(file, method, route) {
+  const src = readTextSafe(path.join(root(), file));
+  if (!src) return null;
+  const found = findEndpoints(src).find(
+    (item) => item.method === method && item.route === route,
+  );
+  return found ? found.decorators : null;
+}
+
+/**
+ * 把登记表里的**对外路径**换算成控制器里的**路由**（不含控制器前缀）。
+ *
+ * ⚠️ 两者的前缀写法不一样：对外路径是 `/connections/:id`，
+ *   控制器里写的是 `@Get(':id')`（前缀 `connections` 由 `@Controller` 提供）。
+ *   换算错了就会**找不到**那个端点 → 守卫判定会因为「端点找不到」而失真。
+ *
+ * @param {string} controllerFile 控制器文件
+ * @param {string} publicPath 对外路径（如 `/connections/:id`）
+ * @returns {string|null} 控制器里的路由（如 `:id`）；换算不了时返回 null
+ */
+function routeOfEndpoint(controllerFile, publicPath) {
+  const src = readTextSafe(path.join(root(), controllerFile));
+  if (!src) return null;
+  const prefix = controllerPrefix(src);
+  const withoutPrefix = prefix && publicPath.startsWith(`/${prefix}`)
+    ? publicPath.slice(prefix.length + 1)
+    : publicPath.replace(/^\//, '');
+  // ⚠️ 去掉开头的 `/`（`/connections/:id` → `connections/:id` → `:id`）。
+  return withoutPrefix.replace(/^\//, '');
 }
 
 /** 只要 `@Public()` 的 GET 端点（第十一轮口径）。 */
@@ -1397,7 +1455,7 @@ function main() {
             kind: 'READ_VISIBILITY_UNDOCUMENTED',
             where: key,
             detail:
-              `文档里没有写明「${entry.docToken}」：${rows.map((row) => row.trim()).join(' / ')}`,
+              `文档里没有写明「${entry.docToken}」：${rows.map((row) => row.text.trim()).join(' / ')}`,
           });
         } else {
           notes.push({
@@ -1556,16 +1614,23 @@ function main() {
       });
     }
     if (entry.controllerMarkers?.length) {
-      const controllerSrc = readTextSafe(path.join(root(), entry.controller)) ?? '';
+      // ⚠️ 按**这个端点自己**的装饰器块判（不是整个控制器文件）——
+      //    否则「同一个文件里别的端点还留着这道守卫」就算这个端点也有，
+      //    守着一个端点的守卫被摘掉就查不出来（第十七轮修掉的盲点）。
+      const route = routeOfEndpoint(entry.controller, entry.path);
+      const decorators = route === null ? null : endpointDecorators(entry.controller, entry.method, route);
+      const markerSource = decorators
+        ? decorators.join('\n')
+        : (readTextSafe(path.join(root(), entry.controller)) ?? '');
       const missingGuards = entry.controllerMarkers.filter(
-        (marker) => !controllerSrc.includes(marker),
+        (marker) => !markerSource.includes(marker),
       );
       if (missingGuards.length) {
         issues.push({
           kind: 'AUTH_VISIBILITY_GUARD_MISSING',
           where: key,
           detail:
-            `\`${entry.controller}\` 上看不到 ${missingGuards.join(' / ')} —— ` +
+            `\`${entry.controller}\` 的 ${entry.method} ${entry.path} 上看不到 ${missingGuards.join(' / ')} —— ` +
             '「未完成校友认证 → 403 `VERIFICATION_REQUIRED`」这条守卫不能被摘掉' +
             '（摘掉之后未认证用户会用得到未认证才能用的功能）',
         });
@@ -1591,7 +1656,7 @@ function main() {
             kind: 'AUTH_VISIBILITY_UNDOCUMENTED',
             where: key,
             detail:
-              `文档里没有写明「${missingTokens.join(' / ')}」：${rows.map((row) => row.trim()).join(' / ')}`,
+              `文档里没有写明「${missingTokens.join(' / ')}」：${rows.map((row) => row.text.trim()).join(' / ')}`,
           });
         } else {
           notes.push({
@@ -1744,7 +1809,7 @@ function main() {
             kind: 'ADMIN_VISIBILITY_UNDOCUMENTED',
             where: key,
             detail:
-              `文档里没有写明「${missingTokens.join(' / ')}」：${rows.map((row) => row.trim()).join(' / ')}`,
+              `文档里没有写明「${missingTokens.join(' / ')}」：${rows.map((row) => row.text.trim()).join(' / ')}`,
           });
         } else {
           notes.push({

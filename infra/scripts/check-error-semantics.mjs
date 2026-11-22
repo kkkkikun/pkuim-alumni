@@ -109,6 +109,28 @@ import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import {
+  createLedger,
+  recordVerdict,
+  LEDGER_DIMENSIONS,
+  VERDICT,
+  objectKeyTable,
+  objectKeyIndex,
+  objectKeyColumn,
+  objectKeyUnique,
+} from './layer-conclusion-ledger.mjs';
+
+/**
+ * **结论台账**（第十七轮新增）——
+ *   把「这一层对**每一个**对象判出了什么结论」记下来，
+ *   供 `check-layer-reconciliation.mjs` 与**库内层**逐条对账。
+ *
+ * ⚠️ 为什么静态层要记台账（它自己的判定一个字没改）：
+ *   第十六轮把两层的**判定口径**对齐了，但两层各自报出的**差异集**
+ *   从未被自动比对过 —— 「口径一致 ≠ 结论一致」。
+ *   台账记的是**判定本身**（不是判定码），
+ *   所以对账能看出「同一对象，静态层说没问题、库内层说有」这类矛盾。
+ */
 
 /* ------------------------------ 参数 ------------------------------ */
 
@@ -1778,6 +1800,8 @@ function errorSemanticsSections() {
 function main() {
   const issues = [];
   const notes = [];
+  /** 结论台账（第十七轮）：逐个对象记下这一层的判定，供跨层对账。 */
+  const ledger = createLedger();
 
   const discovered = discoverUniqueKeys();
   const registryByKey = new Map(
@@ -1792,7 +1816,9 @@ function main() {
         `  ${registered ? '✓' : '✗'} ${item.entity} (${item.columns.join(', ')}) [${item.entityClass}]\n`,
       );
     }
-    process.exit(0);
+    // ⚠️ 用 `exitCode` 而非 `exit()`：见文件末尾的说明（管道输出会被截断）。
+    process.exitCode = 0;
+    return;
   }
 
   // --- 1) 唯一键登记表 ↔ 实体实现对账 -----------------------------------------
@@ -2007,6 +2033,8 @@ function main() {
     const wanted = item.columns.map((column) => column.toLowerCase());
     const candidates = uniquesOfTable(table);
     const exact = candidates.find((entry) => keyOf(entry.columns) === keyOf(wanted));
+    // 台账里的对象标识（两层必须一致）—— 唯一键按「表 + 排序后的列」标识。
+    const ledgerObject = objectKeyUnique(item.entity, item.columns);
 
     if (!exact) {
       // 有同表的唯一约束、但列集合对不上 → 分辨是「覆盖不足」还是「更严」
@@ -2024,6 +2052,13 @@ function main() {
             '多了列就是**比实体更严**（写入会被库挡下，而实体与代码没准备）。' +
             '两者都会让「实体 ↔ 迁移」分叉，必须逐条判断是补迁移还是改实体',
         });
+        recordVerdict(
+          ledger,
+          LEDGER_DIMENSIONS.UNIQUE,
+          ledgerObject,
+          VERDICT.MISMATCH,
+          'MIGRATION_UNIQUE_COLUMN_MISMATCH',
+        );
       } else {
         issues.push({
           kind: 'MIGRATION_UNIQUE_MISSING',
@@ -2036,6 +2071,13 @@ function main() {
             '修法二选一（**必须逐条判断，不能一刀切**）：补一条 TypeORM 迁移' +
             '（`AddMissingUniqueIndexes*`），或去掉实体里那个唯一声明',
         });
+        recordVerdict(
+          ledger,
+          LEDGER_DIMENSIONS.UNIQUE,
+          ledgerObject,
+          VERDICT.MISMATCH,
+          'MIGRATION_UNIQUE_MISSING',
+        );
       }
       continue;
     }
@@ -2051,12 +2093,27 @@ function main() {
           `迁移里由**主键**（PRIMARY KEY (${exact.columns.join(',')})）提供唯一性 —— ` +
           '等价于这条唯一键，不需要再建一条同列的唯一索引（重复约束 = 写放大）',
       });
+      // 台账：主键等价**也是「有这道唯一约束」**（不是缺失）。
+      recordVerdict(
+        ledger,
+        LEDGER_DIMENSIONS.UNIQUE,
+        ledgerObject,
+        VERDICT.OK,
+        'MIGRATION_UNIQUE_BY_PRIMARY_KEY',
+      );
     } else {
       notes.push({
         kind: 'MIGRATION_UNIQUE_OK',
         where: `${item.entity}.${item.columns.join(',')}`,
         detail: `迁移 \`${exact.source}\` 里创建了唯一索引 \`${exact.name}\`（${exact.columns.join(',')}）`,
       });
+      recordVerdict(
+        ledger,
+        LEDGER_DIMENSIONS.UNIQUE,
+        ledgerObject,
+        VERDICT.OK,
+        'MIGRATION_UNIQUE_OK',
+      );
     }
 
     // --- 列定义（长度 / 可空性）也要一致 -----------------------------------
@@ -2221,6 +2278,7 @@ function main() {
     const primaryKey = migrationSchema.primaryKeys.get(table.table) ?? [];
     for (const index of table.indexes) {
       const found = migrationIndexes.find((item) => item.name === index.name);
+      const ledgerObject = objectKeyIndex(table.table, index.name);
       if (!found) {
         // ⚠️ **主键等价**：唯一索引的列就是主键 → 主键天然唯一，
         //    不必再建一条同列的唯一索引（重复约束 = 写放大）。
@@ -2232,6 +2290,13 @@ function main() {
               `迁移里由**主键**（PRIMARY KEY (${primaryKey.join(',')})）提供唯一性 —— ` +
               '等价于这条唯一索引，不需要再建一条同列的（重复约束 = 写放大）',
           });
+          recordVerdict(
+            ledger,
+            LEDGER_DIMENSIONS.INDEX,
+            ledgerObject,
+            VERDICT.OK,
+            'MIGRATION_INDEX_BY_PRIMARY_KEY',
+          );
           continue;
         }
         issues.push({
@@ -2244,6 +2309,13 @@ function main() {
             '生产库上**这个索引不存在**，按该列的查询会退化成全表扫。' +
             '修法二选一（**必须逐条判断**）：补一条 TypeORM 迁移，或去掉实体里的声明',
         });
+        recordVerdict(
+          ledger,
+          LEDGER_DIMENSIONS.INDEX,
+          ledgerObject,
+          VERDICT.MISMATCH,
+          'MIGRATION_INDEX_MISSING',
+        );
         continue;
       }
       if (found.table !== table.table) {
@@ -2255,6 +2327,13 @@ function main() {
             `迁移却把它建在了 \`${found.table}\` 上（迁移 \`${found.source}\`）—— ` +
             '这张表上**没有**那个索引',
         });
+        recordVerdict(
+          ledger,
+          LEDGER_DIMENSIONS.INDEX,
+          ledgerObject,
+          VERDICT.MISMATCH,
+          'MIGRATION_INDEX_TABLE_MISMATCH',
+        );
         continue;
       }
       if (keyOf(found.columns) !== keyOf(index.columns)) {
@@ -2267,6 +2346,13 @@ function main() {
             `迁移 \`${found.source}\` 里建的却是（${found.columns.join(',')}）—— 列集合不一致：` +
             '按哪个列组合建的索引，决定了哪些查询能用上它',
         });
+        recordVerdict(
+          ledger,
+          LEDGER_DIMENSIONS.INDEX,
+          ledgerObject,
+          VERDICT.MISMATCH,
+          'MIGRATION_INDEX_COLUMN_MISMATCH',
+        );
         continue;
       }
       if (Boolean(found.unique) !== Boolean(index.unique)) {
@@ -2278,6 +2364,13 @@ function main() {
             `迁移里建的却是${found.unique ? '**唯一**' : '非唯一'}索引 —— ` +
             '唯一性不同 → 约束强度不同（唯一索引会让撞键直接报错）',
         });
+        recordVerdict(
+          ledger,
+          LEDGER_DIMENSIONS.INDEX,
+          ledgerObject,
+          VERDICT.MISMATCH,
+          'MIGRATION_INDEX_UNIQUENESS_MISMATCH',
+        );
         continue;
       }
       notes.push({
@@ -2285,6 +2378,13 @@ function main() {
         where: `${table.table}.${index.name}`,
         detail: `迁移 \`${found.source}\` 里创建了索引 \`${index.name}\`（${found.columns.join(',')}）`,
       });
+      recordVerdict(
+        ledger,
+        LEDGER_DIMENSIONS.INDEX,
+        ledgerObject,
+        VERDICT.OK,
+        'MIGRATION_INDEX_OK',
+      );
     }
   }
 
@@ -2334,6 +2434,13 @@ function main() {
             '生产库上**引用完整性不被数据库保证**：写入可以指向不存在的行，' +
             '删除被引用的行也不会被拦下',
         });
+        recordVerdict(
+          ledger,
+          LEDGER_DIMENSIONS.FOREIGN_KEY,
+          objectKeyColumn(table.table, relation.column),
+          VERDICT.MISMATCH,
+          'ENTITY_FOREIGN_KEY_MISSING',
+        );
         continue;
       }
       if (
@@ -2348,6 +2455,13 @@ function main() {
             `迁移里的外键 \`${found.name}\` 却指向 \`${found.refTable}\`（${found.refColumn ?? '?'}）—— ` +
             '指向不同的表/列：实体与生产库说的不是一回事',
         });
+        recordVerdict(
+          ledger,
+          LEDGER_DIMENSIONS.FOREIGN_KEY,
+          objectKeyColumn(table.table, relation.column),
+          VERDICT.MISMATCH,
+          'FOREIGN_KEY_TARGET_MISMATCH',
+        );
         continue;
       }
       notes.push({
@@ -2357,6 +2471,13 @@ function main() {
           `迁移 \`${found.source}\` 里 \`${found.name}\` 指向 ` +
           `\`${found.refTable}\`（${found.refColumn}）`,
       });
+      recordVerdict(
+        ledger,
+        LEDGER_DIMENSIONS.FOREIGN_KEY,
+        objectKeyColumn(table.table, relation.column),
+        VERDICT.OK,
+        'FOREIGN_KEY_OK',
+      );
     }
   }
 
@@ -2387,8 +2508,23 @@ function main() {
           `实体声明了表 \`${table.table}\`（${table.className}），但**迁移里没有建这张表** —— ` +
           '生产库 `synchronize: false`，跑的是迁移：这张表在生产库上根本不存在',
       });
+      recordVerdict(
+        ledger,
+        LEDGER_DIMENSIONS.TABLE,
+        objectKeyTable(table.table),
+        VERDICT.MISMATCH,
+        'MIGRATION_TABLE_MISSING',
+      );
       continue;
     }
+    // 台账：这张表在迁移里存在（表维度的一致）。
+    recordVerdict(
+      ledger,
+      LEDGER_DIMENSIONS.TABLE,
+      objectKeyTable(table.table),
+      VERDICT.OK,
+      'MIGRATION_TABLE_OK',
+    );
     for (const column of table.columns.values()) {
       const ddlText = migrationColumns.get(column.column);
       if (!ddlText) {
@@ -2399,6 +2535,13 @@ function main() {
             `实体声明了列 \`${column.column}\`（${table.className}.${column.prop}），` +
             '但**迁移里没有这一列** —— 生产库上读写这一列会直接报「未知列」',
         });
+        recordVerdict(
+          ledger,
+          LEDGER_DIMENSIONS.COLUMN,
+          objectKeyColumn(table.table, column.column),
+          VERDICT.MISMATCH,
+          'MIGRATION_COLUMN_MISSING',
+        );
         continue;
       }
       const ddl = analyzeDdlColumnDef(ddlText);
@@ -2413,6 +2556,13 @@ function main() {
             '读出来的值类型会变（日期变成字符串、数值精度丢失……），' +
             '长度上限不同还会导致写入被截断',
         });
+        recordVerdict(
+          ledger,
+          LEDGER_DIMENSIONS.COLUMN,
+          objectKeyColumn(table.table, column.column),
+          VERDICT.MISMATCH,
+          'MIGRATION_COLUMN_DEF_MISMATCH',
+        );
         continue;
       }
       // 长度（只对**字符串族**判：整数族的「长度」是显示宽度，不是容量）
@@ -2431,6 +2581,13 @@ function main() {
             `迁移里却是 ${ddl.type}(${ddl.length}) —— 长度不一致：` +
             '库里的上限更小的话，超长写入会被**静默截断**（数据丢失）',
         });
+        recordVerdict(
+          ledger,
+          LEDGER_DIMENSIONS.COLUMN,
+          objectKeyColumn(table.table, column.column),
+          VERDICT.MISMATCH,
+          'MIGRATION_COLUMN_DEF_MISMATCH',
+        );
         continue;
       }
       // 可空性
@@ -2443,7 +2600,23 @@ function main() {
             `迁移里却是 ${ddl.nullable ? '可空' : 'NOT NULL'} —— 可空性不一致：` +
             'NOT NULL 的列写进 NULL 会直接报错，可空的列在实体里却被当成一定有值',
         });
+        recordVerdict(
+          ledger,
+          LEDGER_DIMENSIONS.COLUMN,
+          objectKeyColumn(table.table, column.column),
+          VERDICT.MISMATCH,
+          'MIGRATION_COLUMN_DEF_MISMATCH',
+        );
+        continue;
       }
+      // 台账：这一列的类型 / 长度 / 可空性三者都与迁移一致。
+      recordVerdict(
+        ledger,
+        LEDGER_DIMENSIONS.COLUMN,
+        objectKeyColumn(table.table, column.column),
+        VERDICT.OK,
+        'MIGRATION_COLUMN_DEF_OK',
+      );
     }
     // 反向：迁移里多出来的列
     for (const column of migrationColumns.keys()) {
@@ -2502,6 +2675,14 @@ function main() {
         if (ddl.defaultIsExpression) {
           // 迁移侧是表达式（`CURRENT_TIMESTAMP(3)` 这类）→ 判不了，**不判**。
           dimensionStats.default.skipped += 1;
+          // 台账：**跳过也要留痕** —— 否则「这一层判不了」与「这一层判了没问题」分不开。
+          recordVerdict(
+            ledger,
+            LEDGER_DIMENSIONS.COLUMN_DEFAULT,
+            objectKeyColumn(table.table, column.column),
+            VERDICT.SKIPPED,
+            'MIGRATION_COLUMN_DEFAULT_EXPRESSION',
+          );
         } else {
           dimensionStats.default.checked += 1;
           const entityDefault = String(column.defaultValue);
@@ -2521,6 +2702,21 @@ function main() {
                 } —— 实体与迁移对「这一列没传值时填什么」的理解不一致：` +
                 '走实体的写入会带上默认值，走库默认值的写入（原生 SQL / 报表）会带上另一个',
             });
+            recordVerdict(
+              ledger,
+              LEDGER_DIMENSIONS.COLUMN_DEFAULT,
+              objectKeyColumn(table.table, column.column),
+              VERDICT.MISMATCH,
+              'MIGRATION_COLUMN_DEFAULT_MISMATCH',
+            );
+          } else {
+            recordVerdict(
+              ledger,
+              LEDGER_DIMENSIONS.COLUMN_DEFAULT,
+              objectKeyColumn(table.table, column.column),
+              VERDICT.OK,
+              'MIGRATION_COLUMN_DEFAULT_OK',
+            );
           }
         }
       } else {
@@ -2543,6 +2739,14 @@ function main() {
               `（类型 ${column.type}）—— 无符号对布尔位没有意义（取值只有 0/1）：` +
               '**只记录不判定**（见 `docs/KNOWN-ISSUES.md`）',
           });
+          // 台账：布尔位**有意不判**（口径上跳过，不是漏判）。
+          recordVerdict(
+            ledger,
+            LEDGER_DIMENSIONS.COLUMN_UNSIGNED,
+            objectKeyColumn(table.table, column.column),
+            VERDICT.SKIPPED,
+            'MIGRATION_COLUMN_UNSIGNED_BOOLEAN_NOT_JUDGED',
+          );
         } else {
           dimensionStats.unsigned.checked += 1;
           const migrationUnsigned = Boolean(ddl.unsigned);
@@ -2560,6 +2764,21 @@ function main() {
                 '**外键两侧的有符号性必须一致**（MySQL 要求外键列与被引用列类型完全相同），' +
                 '不一致时那一列连外键都建不出来',
             });
+            recordVerdict(
+              ledger,
+              LEDGER_DIMENSIONS.COLUMN_UNSIGNED,
+              objectKeyColumn(table.table, column.column),
+              VERDICT.MISMATCH,
+              'MIGRATION_COLUMN_UNSIGNED_MISMATCH',
+            );
+          } else {
+            recordVerdict(
+              ledger,
+              LEDGER_DIMENSIONS.COLUMN_UNSIGNED,
+              objectKeyColumn(table.table, column.column),
+              VERDICT.OK,
+              'MIGRATION_COLUMN_UNSIGNED_OK',
+            );
           }
         }
       } else {
@@ -2580,6 +2799,13 @@ function main() {
               `迁移里却是 ${ddl.type ?? '未知类型'} —— 不是枚举列：` +
               '实体能写进去的取值，库那一列可能直接拒收（严格模式报 1265）',
           });
+          recordVerdict(
+            ledger,
+            LEDGER_DIMENSIONS.COLUMN_ENUM,
+            objectKeyColumn(table.table, column.column),
+            VERDICT.MISMATCH,
+            'MIGRATION_COLUMN_ENUM_MISMATCH',
+          );
         } else {
           const entityValues = [...column.enumValues].sort().join('|');
           const migrationValuesSorted = [...migrationValues].sort().join('|');
@@ -2602,6 +2828,21 @@ function main() {
                 ' —— 枚举取值不一致：写入会被数据库拒收（严格模式报 1265），' +
                 '而实体的类型检查放过去了',
             });
+            recordVerdict(
+              ledger,
+              LEDGER_DIMENSIONS.COLUMN_ENUM,
+              objectKeyColumn(table.table, column.column),
+              VERDICT.MISMATCH,
+              'MIGRATION_COLUMN_ENUM_MISMATCH',
+            );
+          } else {
+            recordVerdict(
+              ledger,
+              LEDGER_DIMENSIONS.COLUMN_ENUM,
+              objectKeyColumn(table.table, column.column),
+              VERDICT.OK,
+              'MIGRATION_COLUMN_ENUM_OK',
+            );
           }
         }
       } else {
@@ -2634,6 +2875,10 @@ function main() {
     notes: notes.length,
     detail: issues,
     notesDetail: notes,
+    // ⚠️ **结论台账**（第十七轮）：逐个对象记下这一层判出了什么结论。
+    //    库内层（`check-db-reality.mjs`）输出**同名同义**的台账，
+    //    `check-layer-reconciliation.mjs` 据此把两层的结论**逐条对齐**。
+    ledger: [...ledger.values()],
   };
 
   if (AS_JSON) {
@@ -2663,7 +2908,14 @@ function main() {
     }
   }
 
-  process.exit(issues.length > 0 ? 1 : 0);
+  // ⚠️ **用 `process.exitCode` 而不是 `process.exit()`**：
+  //   `process.exit()` 会**立刻**终止进程，**尚未 flush 的 stdout 会被丢弃** ——
+  //   本脚本的 `--json` 报告约 150 KB，一旦被**管道**接走
+  //   （`node check-error-semantics.mjs --json | node -e '…'`），
+  //   输出会在 64 KB（管道缓冲区）处**被截断**，下游拿到的是**残缺的 JSON**。
+  //   写文件不受影响（文件写是同步的），所以这个缺陷此前一直没被发现。
+  //   设 `exitCode` 让 Node **自然退出**，stdout 会被完整 flush。
+  process.exitCode = issues.length > 0 ? 1 : 0;
 }
 
 /* ------------------------------ 导出 ------------------------------ */

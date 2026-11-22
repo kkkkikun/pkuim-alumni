@@ -81,6 +81,16 @@ import path from 'node:path';
 import process from 'node:process';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import {
+  createLedger,
+  recordVerdict,
+  LEDGER_DIMENSIONS,
+  VERDICT,
+  objectKeyTable,
+  objectKeyIndex,
+  objectKeyColumn,
+  objectKeyUnique,
+} from './layer-conclusion-ledger.mjs';
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 
@@ -148,14 +158,25 @@ async function loadCheckerModule() {
  * 载入 mysql2 —— 它是 `@nmg/api` 的依赖（pnpm 下不会提升到仓库根目录）。
  *
  * 不引新依赖、不动锁文件：按 `apps/api/package.json` 去 require。
- * 候选路径按顺序试：脚本所在仓库 → `--root` 指向的仓库
- * （反向验证时脚本在真仓库、依赖也在真仓库，而 `--root` 指向副本）。
+ * 候选路径按顺序试：
+ *   ① 环境变量 `NMG_MYSQL_PACKAGE_JSON`（**对账脚本用它**）；
+ *   ② 脚本所在仓库；
+ *   ③ `--root` 指向的仓库。
+ *
+ * ⚠️ **为什么要有 ①**：反向验证时会把仓库整份拷到临时目录再注入缺陷，
+ *   而临时副本里**没有 `node_modules`** —— 从副本里跑这个脚本会报
+ *   「Cannot find module 'mysql2/promise'」。
+ *   ① 让调用方（对账脚本）**显式指��**带依赖的那个仓库，
+ *   这样「脚本从哪来」与「依赖从哪来」两件事互不牵连。
+ *
+ * @param {string} rootArg `--root` 指向的仓库
  */
-function loadMysql() {
+function loadMysql(rootArg) {
   const candidates = [
+    process.env.NMG_MYSQL_PACKAGE_JSON,
     path.join(SCRIPT_DIR, '../../apps/api/package.json'),
-    path.join(ROOT, 'apps/api/package.json'),
-  ];
+    path.join(rootArg, 'apps/api/package.json'),
+  ].filter(Boolean);
   let lastError = null;
   for (const candidate of candidates) {
     try {
@@ -271,11 +292,13 @@ async function main() {
     analyzeDdlColumnDef,
   } = await loadCheckerModule();
 
-  const mysql = loadMysql();
+  const mysql = loadMysql(ROOT);
 
   const connection = resolveConnection();
   const issues = [];
   const notes = [];
+  /** 结论台账（第十七轮）：逐个对象记下这一层判出了什么结论，供跨层对账。 */
+  const ledger = createLedger();
 
   const client = await mysql.createConnection({
     host: connection.host,
@@ -474,6 +497,8 @@ async function main() {
 
   for (const expected of registryKeys) {
     const found = findEquivalent(expected.table, expected.columns);
+    // 台账里的对象标识（两层必须一致）—— 唯一键按「表 + 排序后的列」标识。
+    const ledgerObject = objectKeyUnique(expected.table, expected.columns);
     if (!found) {
       issues.push({
         kind: 'DB_UNIQUE_MISSING',
@@ -482,6 +507,13 @@ async function main() {
           `${expected.source} 要求这道唯一约束，但**库里没有** —— ` +
           '生产库 `synchronize: false`，撞键不会报错，数据库会**静默写出重复行**',
       });
+      recordVerdict(
+        ledger,
+        LEDGER_DIMENSIONS.UNIQUE,
+        ledgerObject,
+        VERDICT.MISMATCH,
+        'DB_UNIQUE_MISSING',
+      );
       continue;
     }
     notes.push({
@@ -489,6 +521,13 @@ async function main() {
       where: `${expected.table}.${expected.columns.join(',')}`,
       detail: `库里由 \`${found.name}\` 提供唯一性（${found.columns.join(',')}）`,
     });
+    recordVerdict(
+      ledger,
+      LEDGER_DIMENSIONS.UNIQUE,
+      ledgerObject,
+      VERDICT.OK,
+      'DB_UNIQUE_OK',
+    );
   }
 
   // --- 反向：库里多出来的唯一约束 ----------------------------------------
@@ -534,6 +573,13 @@ async function main() {
         where: table.table,
         detail: `实体类 \`${table.className}\`（${table.file}）声明的表在库里存在`,
       });
+      recordVerdict(
+        ledger,
+        LEDGER_DIMENSIONS.TABLE,
+        objectKeyTable(table.table),
+        VERDICT.OK,
+        'DB_TABLE_OK',
+      );
       continue;
     }
     issues.push({
@@ -543,6 +589,13 @@ async function main() {
         `实体声明了表 \`${table.table}\`（${table.className}），但**库里没有这张表** —— ` +
         '生产库 `synchronize: false`，跑的是迁移：这张表在库里根本不存在',
     });
+    recordVerdict(
+      ledger,
+      LEDGER_DIMENSIONS.TABLE,
+      objectKeyTable(table.table),
+      VERDICT.MISMATCH,
+      'DB_TABLE_MISSING',
+    );
   }
 
   /* ------------------------- 2) 索引 ------------------------- */
@@ -552,6 +605,7 @@ async function main() {
     const primary = indexes.find((item) => item.name.toUpperCase() === 'PRIMARY');
     for (const index of table.indexes) {
       const found = indexes.find((item) => item.name === index.name);
+      const ledgerObject = objectKeyIndex(table.table, index.name);
       if (!found) {
         // ⚠️ **主键等价**：唯一索引的列就是主键 → 主键天然唯一，
         //    不必再建一条同列的唯一索引（重复约束 = 写放大）。
@@ -563,6 +617,13 @@ async function main() {
               `库里由**主键**（PRIMARY KEY (${primary.columns.join(',')})）提供唯一性 —— ` +
               '等价于这条唯一索引，不需要再建一条同列的（重复约束 = 写放大）',
           });
+          recordVerdict(
+            ledger,
+            LEDGER_DIMENSIONS.INDEX,
+            ledgerObject,
+            VERDICT.OK,
+            'DB_INDEX_BY_PRIMARY_KEY',
+          );
           continue;
         }
         issues.push({
@@ -574,6 +635,13 @@ async function main() {
             '但**库里没有这条索引** —— 生产库 `synchronize: false`，跑的是迁移：' +
             '按这些列的查询会退化成全表扫（这一层静默变慢，没人报警）',
         });
+        recordVerdict(
+          ledger,
+          LEDGER_DIMENSIONS.INDEX,
+          ledgerObject,
+          VERDICT.MISMATCH,
+          'DB_INDEX_MISSING',
+        );
         continue;
       }
       if (keyOf(found.columns) !== keyOf(index.columns)) {
@@ -586,6 +654,13 @@ async function main() {
             `库里建的却是（${found.columns.join(',')}）—— 列集合不一致：` +
             '按哪个列组合建的索引，决定了哪些查询能用上它',
         });
+        recordVerdict(
+          ledger,
+          LEDGER_DIMENSIONS.INDEX,
+          ledgerObject,
+          VERDICT.MISMATCH,
+          'DB_INDEX_COLUMN_MISMATCH',
+        );
         continue;
       }
       if (Boolean(found.unique) !== Boolean(index.unique)) {
@@ -597,6 +672,13 @@ async function main() {
             `库里建的却是${found.unique ? '**唯一**' : '非唯一'}索引 —— ` +
             '唯一性不同 → 约束强度不同（唯一索引会让撞键直接报错）',
         });
+        recordVerdict(
+          ledger,
+          LEDGER_DIMENSIONS.INDEX,
+          ledgerObject,
+          VERDICT.MISMATCH,
+          'DB_INDEX_UNIQUENESS_MISMATCH',
+        );
         continue;
       }
       notes.push({
@@ -604,6 +686,13 @@ async function main() {
         where: `${table.table}.${index.name}`,
         detail: `库里真实存在索引 \`${index.name}\`（${found.columns.join(',')}）`,
       });
+      recordVerdict(
+        ledger,
+        LEDGER_DIMENSIONS.INDEX,
+        ledgerObject,
+        VERDICT.OK,
+        'DB_INDEX_OK',
+      );
     }
   }
 
@@ -612,6 +701,7 @@ async function main() {
   for (const table of entityTables.values()) {
     for (const relation of table.relations) {
       const found = dbForeignKeys.get(`${table.table}.${relation.column}`);
+      const ledgerObject = objectKeyColumn(table.table, relation.column);
       if (!found) {
         issues.push({
           kind: 'DB_FOREIGN_KEY_MISSING',
@@ -622,6 +712,13 @@ async function main() {
             '引用完整性不再被数据库保证：可以写入指向不存在行的外键，' +
             '删除被引用的行也不会被拦下',
         });
+        recordVerdict(
+          ledger,
+          LEDGER_DIMENSIONS.FOREIGN_KEY,
+          ledgerObject,
+          VERDICT.MISMATCH,
+          'DB_FOREIGN_KEY_MISSING',
+        );
         continue;
       }
       if (found.refTable !== relation.targetTable || found.refColumn !== relation.referencedColumn) {
@@ -633,6 +730,13 @@ async function main() {
             `库里的外键 \`${found.name}\` 却指向 \`${found.refTable}\`（${found.refColumn ?? '?'}）—— ` +
             '指向不同的表/列：实体与库里说的不是一回事',
         });
+        recordVerdict(
+          ledger,
+          LEDGER_DIMENSIONS.FOREIGN_KEY,
+          ledgerObject,
+          VERDICT.MISMATCH,
+          'DB_FOREIGN_KEY_TARGET_MISMATCH',
+        );
         continue;
       }
       notes.push({
@@ -640,6 +744,13 @@ async function main() {
         where: `${table.table}.${relation.column}`,
         detail: `库里 \`${found.name}\` 指向 \`${found.refTable}\`（${found.refColumn}）`,
       });
+      recordVerdict(
+        ledger,
+        LEDGER_DIMENSIONS.FOREIGN_KEY,
+        ledgerObject,
+        VERDICT.OK,
+        'DB_FOREIGN_KEY_OK',
+      );
     }
   }
 
@@ -652,11 +763,13 @@ async function main() {
     enum: { checked: 0, skipped: 0, mismatch: 0 },
   };
 
+  // --- 4.1 类型 / 长度 / 可空性 -------------------------------------------
   for (const table of entityTables.values()) {
     const columns = dbColumns.get(table.table);
     if (!columns) continue; // 表缺失已单独报过
     for (const column of table.columns.values()) {
       const found = columns.get(column.column);
+      const ledgerObject = objectKeyColumn(table.table, column.column);
       if (!found) {
         issues.push({
           kind: 'DB_COLUMN_MISSING',
@@ -665,6 +778,13 @@ async function main() {
             `实体声明了列 \`${column.column}\`（${table.className}.${column.prop}），` +
             '但**库里没有这一列** —— 读写这一列会直接报「未知列」',
         });
+        recordVerdict(
+          ledger,
+          LEDGER_DIMENSIONS.COLUMN,
+          ledgerObject,
+          VERDICT.MISMATCH,
+          'DB_COLUMN_MISSING',
+        );
         continue;
       }
       if (column.type && found.type && !sameType(column.type, found.type)) {
@@ -676,6 +796,13 @@ async function main() {
             `库里却是 ${found.type} —— 类型不一致：` +
             '读出来的值类型会变（日期变成字符串、数值精度丢失……）',
         });
+        recordVerdict(
+          ledger,
+          LEDGER_DIMENSIONS.COLUMN,
+          ledgerObject,
+          VERDICT.MISMATCH,
+          'DB_COLUMN_DEF_MISMATCH',
+        );
         continue;
       }
       if (
@@ -693,6 +820,13 @@ async function main() {
             `库里却是 ${found.type}(${found.length}) —— 长度不一致：` +
             '库里的上限更小的话，超长写入会被**静默截断**（数据丢失）',
         });
+        recordVerdict(
+          ledger,
+          LEDGER_DIMENSIONS.COLUMN,
+          ledgerObject,
+          VERDICT.MISMATCH,
+          'DB_COLUMN_DEF_MISMATCH',
+        );
         continue;
       }
       if (column.nullable !== found.nullable) {
@@ -704,14 +838,62 @@ async function main() {
             `库里却是 ${found.nullable ? '可空' : 'NOT NULL'} —— 可空性不一致：` +
             'NOT NULL 的列写进 NULL 会直接报错，可空的列在实体里却被当成一定有值',
         });
+        recordVerdict(
+          ledger,
+          LEDGER_DIMENSIONS.COLUMN,
+          ledgerObject,
+          VERDICT.MISMATCH,
+          'DB_COLUMN_DEF_MISMATCH',
+        );
         continue;
       }
+      // 台账：这一列的类型 / 长度 / 可空性三者都与库里一致。
+      recordVerdict(
+        ledger,
+        LEDGER_DIMENSIONS.COLUMN,
+        ledgerObject,
+        VERDICT.OK,
+        'DB_COLUMN_OK',
+      );
 
-      /* --- 4.1 默认值 --- */
+      notes.push({
+        kind: 'DB_COLUMN_OK',
+        where: `${table.table}.${column.column}`,
+        detail: `库里 \`${column.column}\` 是 ${found.type}${found.length ? `(${found.length})` : ''}`,
+      });
+    }
+  }
+
+  // --- 4.2 默认值 / `unsigned` / 枚举取值：**单独**遍历一遍列 ------------------
+  //
+  // ⚠️ **为什么要单独遍历**（与静态层的 6.6 节完全同构）：
+  //   上面那个循环在「类型 / 长度 / 可空性」不一致时会 `continue` ——
+  //   若把三个新维度并进去，那一列的默认值 / 无符号性 / 枚举就**永远不会被判**。
+  //   静态层（`check-error-semantics.mjs` 的 6.6 节）早已为此**单独遍历**
+  //   （那里有一段专门的注释说明为什么），两层的**判定覆盖面**才真正一致。
+  //   覆盖面不一致 → 两层对**同一列**给出的结论条数不同 ——
+  //   而结论台账对账（`check-layer-reconciliation.mjs`）比的就是这个。
+  for (const table of entityTables.values()) {
+    const columns = dbColumns.get(table.table);
+    if (!columns) continue; // 表缺失已单独报过
+    for (const column of table.columns.values()) {
+      const found = columns.get(column.column);
+      if (!found) continue; // 列缺失已单独报过
+      const ledgerObject = objectKeyColumn(table.table, column.column);
+
+      /* --- 4.2.1 默认值 --- */
       if (column.defaultValue !== null && column.defaultValue !== undefined) {
         if (isExpressionDefault(found.default)) {
           // 库侧是表达式 → 判不了，不判（不猜）。
           dimensionStats.default.skipped += 1;
+          // 台账：**跳过也要留痕** —— 否则「这一层判不了」与「这一层判了没问题」分不开。
+          recordVerdict(
+            ledger,
+            LEDGER_DIMENSIONS.COLUMN_DEFAULT,
+            ledgerObject,
+            VERDICT.SKIPPED,
+            'DB_COLUMN_DEFAULT_EXPRESSION',
+          );
         } else {
           dimensionStats.default.checked += 1;
           const entityDefault = String(column.defaultValue);
@@ -733,13 +915,28 @@ async function main() {
                 ' —— 实体与库对「这一列没传值时填什么」的理解不一致：' +
                 '走实体的写入会带上默认值，走库默认值的写入（原生 SQL / 报表）会带上另一个',
             });
+            recordVerdict(
+              ledger,
+              LEDGER_DIMENSIONS.COLUMN_DEFAULT,
+              ledgerObject,
+              VERDICT.MISMATCH,
+              'DB_COLUMN_DEFAULT_MISMATCH',
+            );
+          } else {
+            recordVerdict(
+              ledger,
+              LEDGER_DIMENSIONS.COLUMN_DEFAULT,
+              ledgerObject,
+              VERDICT.OK,
+              'DB_COLUMN_DEFAULT_OK',
+            );
           }
         }
       } else {
         dimensionStats.default.skipped += 1;
       }
 
-      /* --- 4.2 unsigned --- */
+      /* --- 4.2.2 unsigned --- */
       if (column.unsigned !== null && column.unsigned !== undefined) {
         const entityType = normalizeType(column.type);
         if (entityType === 'tinyint' || entityType === 'boolean') {
@@ -748,6 +945,14 @@ async function main() {
           //   属于这一类（实体写了 `unsigned: true`，迁移与库里是 `tinyint(1)`）——
           //   纳入判定会产生 9 处常驻误报，故**不判**（记进 KNOWN-ISSUES）。
           dimensionStats.unsigned.skipped += 1;
+          // 台账：布尔位**有意不判**（口径上跳过，不是漏判）。
+          recordVerdict(
+            ledger,
+            LEDGER_DIMENSIONS.COLUMN_UNSIGNED,
+            ledgerObject,
+            VERDICT.SKIPPED,
+            'DB_COLUMN_UNSIGNED_BOOLEAN_NOT_JUDGED',
+          );
         } else {
           dimensionStats.unsigned.checked += 1;
           const dbUnsigned = /unsigned/i.test(found.columnType);
@@ -758,20 +963,37 @@ async function main() {
               kind: 'DB_COLUMN_UNSIGNED_MISMATCH',
               where: `${table.table}.${column.column}`,
               detail:
-                `实体声明 \`${column.column}\` 是${column.unsigned ? '**无符号**' : '**有符号**'}，` +
+                `实体声明 \`${column.column}\` 是${
+                  column.unsigned ? '**无符号**' : '**有符号**'
+                }，` +
                 `库里却是${dbUnsigned ? '**无符号**' : '**有符号**'}（${found.columnType}）` +
                 (migration ? `，迁移里写的是${migration.unsigned ? '无符号' : '有符号'}` : '') +
                 ' —— 有符号性与实体不一致：' +
                 '**外键两侧的有符号性必须一致**（MySQL 要求外键列与被引用列类型完全相同），' +
                 '不一致时那一列连外键都建不出来',
             });
+            recordVerdict(
+              ledger,
+              LEDGER_DIMENSIONS.COLUMN_UNSIGNED,
+              ledgerObject,
+              VERDICT.MISMATCH,
+              'DB_COLUMN_UNSIGNED_MISMATCH',
+            );
+          } else {
+            recordVerdict(
+              ledger,
+              LEDGER_DIMENSIONS.COLUMN_UNSIGNED,
+              ledgerObject,
+              VERDICT.OK,
+              'DB_COLUMN_UNSIGNED_OK',
+            );
           }
         }
       } else {
         dimensionStats.unsigned.skipped += 1;
       }
 
-      /* --- 4.3 枚举取值 --- */
+      /* --- 4.2.3 枚举取值 --- */
       if (column.enumValues !== null && column.enumValues !== undefined) {
         const dbValues = parseDbEnumValues(found.columnType);
         if (!dbValues) {
@@ -785,6 +1007,13 @@ async function main() {
               `库里却是 ${found.columnType} —— 不是枚举列：` +
               '实体能写进去的取值，库那一列可能直接拒收（严格模式报 1265）',
           });
+          recordVerdict(
+            ledger,
+            LEDGER_DIMENSIONS.COLUMN_ENUM,
+            ledgerObject,
+            VERDICT.MISMATCH,
+            'DB_COLUMN_ENUM_MISMATCH',
+          );
         } else {
           dimensionStats.enum.checked += 1;
           const entityValues = [...column.enumValues].sort().join('|');
@@ -808,17 +1037,26 @@ async function main() {
                 ' —— 枚举取值不一致：写入会被数据库拒收（严格模式报 1265），' +
                 '而实体的类型检查放过去了',
             });
+            recordVerdict(
+              ledger,
+              LEDGER_DIMENSIONS.COLUMN_ENUM,
+              ledgerObject,
+              VERDICT.MISMATCH,
+              'DB_COLUMN_ENUM_MISMATCH',
+            );
+          } else {
+            recordVerdict(
+              ledger,
+              LEDGER_DIMENSIONS.COLUMN_ENUM,
+              ledgerObject,
+              VERDICT.OK,
+              'DB_COLUMN_ENUM_OK',
+            );
           }
         }
       } else {
         dimensionStats.enum.skipped += 1;
       }
-
-      notes.push({
-        kind: 'DB_COLUMN_OK',
-        where: `${table.table}.${column.column}`,
-        detail: `库里 \`${column.column}\` 是 ${found.type}${found.length ? `(${found.length})` : ''}`,
-      });
     }
   }
 
@@ -946,6 +1184,10 @@ async function main() {
     notes: notes.length,
     detail: issues,
     notesDetail: notes,
+    // ⚠️ **结论台账**（第十七轮）：逐个对象记下这一层判出了什么结论。
+    //    静态层（`check-error-semantics.mjs`）输出**同名同义**的台账，
+    //    `check-layer-reconciliation.mjs` 据此把两层的结论**逐条对齐**。
+    ledger: [...ledger.values()],
   };
 
   if (AS_JSON) {
@@ -978,7 +1220,12 @@ async function main() {
     }
   }
 
-  process.exit(issues.length > 0 ? 1 : 0);
+  // ⚠️ **用 `process.exitCode` 而不是 `process.exit()`**：
+  //   `process.exit()` 会**立刻**终止进程，**尚未 flush 的 stdout 会被丢弃** ——
+  //   本脚本的 `--json` 报告约 170 KB，一旦被**管道**接走，
+  //   输出会在 64 KB（管道缓冲区）处**被截断**，下游拿到的是**残缺的 JSON**。
+  //   设 `exitCode` 让 Node **自然退出**，stdout 会被完整 flush。
+  process.exitCode = issues.length > 0 ? 1 : 0;
 }
 
 /**
@@ -995,5 +1242,6 @@ function normalizeNumeric(value) {
 
 main().catch((error) => {
   process.stderr.write(`库内实况对账失败：${error.message}\n`);
-  process.exit(2);
+  // ⚠️ 同样用 `exitCode`（见上面的说明）：stderr 也要 flush 完再退出。
+  process.exitCode = 2;
 });

@@ -458,8 +458,10 @@ node infra/scripts/miniprogram-compile-check.mjs apps/miniprogram
    只对非布尔位的数值列判，实测 70 列 0 处出入）。
    它把会话设成 `READ ONLY` 且只放行 `SELECT` / `SHOW`，
    所以**在业务库（生产库）上跑也是安全的**（连接参数走环境变量）。
-   反向验证共 **9 例**（`check-migration-schema-db-selftest.sh` 8 例 +
-   `check-unique-index-db-selftest.sh` 1 例），**已接入 CI**。
+   **第十七轮起**：两支库内自测**合并成一支**
+   `infra/scripts/check-db-reality-selftest.sh` —— **17 个**注入点与
+   **16 个**缺陷判定码**一一对应**（另有覆盖度自检：
+   校验器新增缺陷码却忘了补注入点 → 立刻红），**已接入 CI**。
    **第十六轮起**：**静态层**（`check-error-semantics.mjs` 的 R9，实体 ↔ 迁移）
    的判定维度也扩到与**库内实况层**（实体 ↔ 库）**一致** ——
    **默认值 / `unsigned` / 枚举取值**三项此前只有库内实况层在判，
@@ -479,6 +481,21 @@ node infra/scripts/miniprogram-compile-check.mjs apps/miniprogram
    同轮还修掉了 RBAC 矩阵里一条**恒过**的判定
    （「每个管理端端点都必须有 `@RequirePermissions`」此前一次都没跑过 ——
    路径缺前导斜杠 + 权限点解析只看路由装饰器后面的文字）。
+   **第十七轮起**：两层**口径**一致了，但两层的**结论**此前从未被自动比对过 ——
+   而这事**不能靠「两边都绿」兜底**（两边都绿时差异集是空的，
+   只比对差异集的脚本在这种状态下**必然恒过**）。
+   新增**结论台账**（`infra/scripts/layer-conclusion-ledger.mjs`）与
+   **结论对账脚本**（`infra/scripts/check-layer-conclusion-reconciliation.mjs`）：
+   在**同一个测试库**上同时跑两层，逐个维度、逐个对象比对，
+   报出**矛盾 / 遗漏 / 覆盖面不同 / 口径漂移**四类分叉
+   （另加一条「判定码归属完整性」检查）。
+   实测基线上两层在 **8 个维度、557 个对象**上给出**同一个结论**；
+   对账脚本本身也有**反向验证**（`check-layer-reconciliation-selftest.sh`）。
+   同轮把 `check-read-visibility.mjs` 的反向验证从 **12** 例补到 **26** 例
+   （**9 条**此前一条注入点都没有的判定路径补齐，已覆盖的各补**第二种退化形态**），
+   并因此查出并修掉**两个真问题**：文档口径对不上时校验器**整个崩掉**
+   （后面所有端点的判定都没跑完）、「认证阶段守卫」的判定
+   **按整个控制器文件**算（摘掉一个端点的守卫照样**恒过**）。
 10. **多实例的「撤权立刻生效」可以自己演练**：`infra/scripts/invalidation-bus-drill.mjs`
     起**两个 API 进程 + 一个 Redis**（外加一个总线整条关闭的**对照实例**），
     验证「实例 A 撤权 → 实例 B 的缓存立刻失效」在**跨进程**下真的成立
