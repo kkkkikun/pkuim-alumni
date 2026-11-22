@@ -5915,3 +5915,75 @@ DATABASE_URL=mysql://user:pass@host:3306/nmg_alumni node infra/scripts/check-db-
 - **线上业务库应用那两条索引迁移**：部署侧人工动作。
 - **专用压测窗口**排期、发布窗口排期、正式密钥轮转、`AUTH_MODE=wechat` 切换、
   域名与 HTTPS、WAF 与备份定时任务、小程序真机复验：延续的人工项。
+
+## 23. 第十七轮（opt-017）：两层**结论**逐条对账、反向验证覆盖面补齐、复核第十六轮
+
+### 23.1 结论台账（新增 `infra/scripts/layer-conclusion-ledger.mjs`）
+
+| 项 | 结果 |
+| --- | --- |
+| 维度 | **8** 个参与跨层对账：`table` / `unique` / `index` / `foreign_key` / `column` / `column_default` / `column_unsigned` / `column_enum` |
+| 判定 | `OK` / `MISMATCH` / `SKIPPED`，**黏性**（取最严重的那条）；`SKIPPED` **必须留痕** |
+| 对象标识 | 两层**逐字相同**（`表` / `表.索引` / `表.列` / `表.列1+列2`，唯一键的列**排序**后拼） |
+| 反向维度 | `*_extra` **不参与**跨层对账（两层对「参照物里多出来的东西」基线本就不同 —— 理由写在代码注释里） |
+
+### 23.2 两层结论逐条对账（新增 `infra/scripts/check-layer-conclusion-reconciliation.mjs`）
+
+| 项 | 结果 |
+| --- | --- |
+| 基线（测试库，只读） | 退出码 **0** —— **8 个维度、557 个对象**两层给出**同一个结论**；判定统计逐项相同 |
+| 判定统计 | 默认值 **47 / 224 / 0**、`unsigned` **70 / 201 / 0**、枚举取值 **21 / 250 / 0**（判了 / 跳过 / 不一致），两层**逐个相同** |
+| 报出的分叉类型 | **矛盾**（一层一致、另一层不一致）/ **遗漏**（一层判了、另一层没判）/ **覆盖面不同**（一层跳过、另一层判了）/ **口径漂移**（判定统计对不上）/ **判定码归属不完整** |
+| 反向验证 | `bash infra/scripts/check-layer-reconciliation-selftest.sh` —— 退出码 **0**（**6** 种退化形态 + **1** 条反向用例 + 元自检 + 覆盖度自检） |
+
+### 23.3 反向验证覆盖面补齐
+
+| 自测 | 本轮前 | 本轮后 | 结果 |
+| --- | --- | --- | --- |
+| `check-read-visibility-selftest.sh` | **12** 例 | **26** 例（覆盖**全部 24 条**判定路径） | 退出码 **0** —— 基线 0 处不一致，26 个注入点逐条被抓出、退出码非 0 |
+| `check-db-reality-selftest.sh` | 两支共 **9** 例 | **合并为一支**，**17** 个注入点 ↔ **16** 个缺陷判定码 | 退出码 **0** —— 逐条被抓出、退出码非 0 |
+| `check-layer-reconciliation-selftest.sh` | —（新增） | **6 + 1** 例 | 退出码 **0** |
+| `check-error-semantics-selftest.sh` | **20** 例 | **20** 例（不变） | 退出码 **0** |
+| `check-rbac-matrix-selftest.sh` | **1** 例 | **2** 例（补上规则 6 的反向验证） | 退出码 **0** |
+
+### 23.4 复核第十六轮产出（逐条实跑）
+
+| 项 | 结果 |
+| --- | --- |
+| `node infra/scripts/check-error-semantics.mjs` | 退出码 **0** —— 21 个唯一键 + 32 张表 / 40 条实体索引 / 46 条实体外键 / 271 列逐条对齐；三个新维度 **47 / 70 / 21** 列、**0** 处不一致 |
+| `node infra/scripts/check-db-reality.mjs`（测试库，只读） | 退出码 **0** —— 32 张表 / 40 条实体索引 / 46 条实体外键 / 271 列 + 21 个登记唯一键逐条对齐；三个新维度 **47 / 70 / 21** 列 |
+| `node infra/scripts/check-read-visibility.mjs` | 退出码 **0** —— 16 个公开读端点 / 19 个已登录端点 / 20 个管理端点逐条对齐 |
+| `node infra/scripts/check-rbac-matrix.mjs` | 退出码 **0** —— 109 条端点、40 个管理端点全部声明权限点（规则 6 **不再恒过**：摘掉权限点 → `ADMIN_ENDPOINT_NO_PERMISSION`） |
+
+### 23.5 本轮顺带修掉的真缺陷
+
+| 缺陷 | 现象 | 修复 |
+| --- | --- | --- |
+| `check-read-visibility.mjs` 文档口径对不上时**整个崩掉** | `rows.map((row) => row.trim())` 对**对象**调字符串方法 → `TypeError` → **后面所有端点的判定都没跑完**（三处） | 改为 `row.text.trim()` |
+| 「认证阶段守卫」的判定**按整个控制器文件**算 | 摘掉某一个端点的 `@RequireAlumniStage('verified')`、同一文件里别的端点还留着 → 这条判定**恒过** | 改为**按端点自己**的装饰器块判（顺带修「注释行截断装饰器块」导致的 4 处误报） |
+| 两支校验器的 `--json` 报告经**管道**接走时被**截断** | `process.stdout.write` 紧接着 `process.exit()` → 尚未 flush 的 stdout 被丢弃 → JSON 在 **64 KB** 处被截断 | 改用 `process.exitCode`（让 Node 自然退出，stdout 完整 flush）；退出码语义不变 |
+
+### 23.6 回归
+
+| 项 | 结果 |
+| --- | --- |
+| `pnpm --filter @nmg/api typecheck` | 退出码 **0** |
+| `apps/api` 集成测试 | 本轮**未改任何业务代码**，集成测试与上一轮一致（**57 套件 / 563 例全绿**） |
+
+### 23.7 本轮未做完 / 仍需人工
+
+- **#202**（9 处布尔位的 `unsigned` 差异）：**只记录、不擅改** —— 属**产品 / 运维**决策。
+- **#207 / #208 / #209**（本轮新记）：分别是「两层结论此前从未被自动比对过」、
+  「`check-read-visibility.mjs` 的 9 条判定路径此前一条注入点都没有」、
+  「`--json` 报告经管道接走会被截断」—— 前两条**已在本轮修掉**，
+  第三条**已在本轮修掉**（记录在案是为了说明「为什么此前没发现」）。
+- **#197 / #198 / #194 / #195 / #189**、**`/admin/stats` 的 `connectionTotal` 口径**、
+  **连接列表是否受对方可见开关约束**、**#200**：延续项，仍需产品 / 客户拍板 ——
+  本轮**一个字没改对外行为**。
+- **上线环境**跑一次 `node infra/scripts/check-db-reality.mjs` 与
+  `node infra/scripts/check-layer-conclusion-reconciliation.mjs`（**都只读**）、
+  `bash infra/scripts/healthcheck.sh`、`node infra/scripts/invalidation-bus-drill.mjs`：
+  部署侧动作。
+- **线上业务库应用那两条索引迁移**、**专用压测窗口**排期、发布窗口排期、
+  正式密钥轮转、`AUTH_MODE=wechat` 切换、域名与 HTTPS、WAF 与备份定时任务、
+  小程序真机复验：延续的人工项。

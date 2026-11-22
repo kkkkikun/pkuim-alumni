@@ -204,12 +204,30 @@ jobs:
       #
       # 第十五轮起合并为一支：此前是「唯一键」与「实体 ↔ 库」两支，
       # 同一层对账被拆成两半（跑两遍、报两套口径）。
+      #
+      # ⚠️ 第十七轮：合并后的这一支**又并进了第十七轮新增的对账步骤** ——
+      #   「库内实况」这一层的判定码现在与静态层**逐条对齐**，
+      #   两层结论的分叉由 `check-layer-conclusion-reconciliation.mjs` 守着。
       - name: Database reality reconciliation against the test database
         run: |
           set -euo pipefail
           node infra/scripts/check-db-reality.mjs
-          bash infra/scripts/check-unique-index-db-selftest.sh
-          bash infra/scripts/check-migration-schema-db-selftest.sh
+          bash infra/scripts/check-db-reality-selftest.sh
+          # 第十七轮：两层**结论**逐条对账（静态层 ↔ 库内层）。
+          #
+          # 为什么必须进门禁：
+          #   第十六轮把两层的**判定口径**对齐了（同一批维度、同一批列），
+          #   但**口径一致 ≠ 结论一致** —— 两层各自报出的**差异集**
+          #   从未被自动比对过：
+          #     - 「静态层说迁移里没有这道索引，库内层说库里有」→
+          #       对**同一个对象**给出了互相矛盾的结论（迁移与库已经分叉）；
+          #     - 「静态层判了这一列，库内层**根本没判**」→ 一层**遗漏**了某个对象。
+          #   这两类分叉此前**没有任何机制会报警**，而且都是**静默**的。
+          #
+          # ⚠️ 这一步必须**在同一个测试库上**跑两层 ——
+          #   对账要比的是「同一个世界里」的两份结论。
+          node infra/scripts/check-layer-conclusion-reconciliation.mjs
+          bash infra/scripts/check-layer-reconciliation-selftest.sh
 
       # 第九轮：把「跨实例撤权立刻生效」接进 CI（**跨进程**那一档）。
       #
@@ -335,9 +353,14 @@ jobs:
           bash infra/scripts/check-error-semantics-selftest.sh
           # 第十一轮：公开读端点的可见性口径对账（不可见 → 404）；
           # 第十二轮：同一支脚本的反向验证扩到 9 例（新增已登录端点的三类缺陷）；
-          # 第十三轮：扩到 12 例（再新增管理端的三类缺陷）
+          # 第十三轮：扩到 12 例（再新增管理端的三类缺陷）；
+          # 第十七轮：扩到 26 例（补齐 9 条此前一条注入点都没有的判定路径，
+          # 已覆盖的各补「第二种退化形态」，并加覆盖度自检）
           bash infra/scripts/check-read-visibility-selftest.sh
           # 第八轮：前端 / 契约 / RBAC 四个**纯静态**校验器的反向验证
+          # ⚠️ 第十七轮：RBAC 这支补上了规则 6（「每个管理端端点都必须有
+          #   `@RequirePermissions`」）的反向验证 —— 那条判定此前**恒过**，
+          #   第十六轮修好了它，但修好之后**没人验过它**。
           bash infra/scripts/check-rbac-matrix-selftest.sh
           bash infra/scripts/check-contract-mirror-selftest.sh
           bash infra/scripts/check-admin-web-selftest.sh

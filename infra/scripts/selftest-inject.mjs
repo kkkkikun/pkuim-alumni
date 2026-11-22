@@ -976,6 +976,162 @@ export class InjectedSafeUpsertService {
   },
 
   /*
+   * 库内实况对账（第十七轮）：库里多出一道**来源不明**的唯一约束 ——
+   * 登记表与迁移里都没有它，写入会被它挡下（撞键），
+   * 而代码没准备这条唯一键的失败语义。
+   *
+   * ⚠️ 要同时动**两处**（登记表 + 迁移），因为库内层的「已知」判定是
+   *   「登记表里有 **或** 迁移里有」—— 只去掉一处，另一处还认得它。
+   * 期望：DB_UNIQUE_NOT_DECLARED 点名 uk_alumni_profiles_user。
+   */
+  'db-reality-unique-not-declared-injected'() {
+    const registryFile = path.join(copyRoot, 'infra/scripts/check-error-semantics.mjs');
+    // ⚠️ 只把**这一条**登记表项摘掉（其余字段保持原样）——
+    //   整块删除会让解析器读到残缺的项。
+    replaceOnce(
+      registryFile,
+      /    entity: 'alumni_profiles',\n    entityClass: 'AlumniProfile',\n    entityFile: 'apps\/api\/src\/database\/entities\/alumni\.entity\.ts',\n    columns: \['user_id'\],\n/,
+      "    entity: '__selftest_removed_alumni_profiles',\n" +
+        "    entityClass: 'AlumniProfile',\n" +
+        "    entityFile: 'apps/api/src/database/entities/alumni.entity.ts',\n" +
+        "    columns: ['user_id'],\n",
+    );
+    const migrationFile = path.join(
+      copyRoot,
+      'apps/api/src/database/migrations/1730000000000-InitSchema.ts',
+    );
+    replaceOnce(
+      migrationFile,
+      /      \{\n        table: 'alumni_profiles',\n        name: 'uk_alumni_profiles_user',\n        columns: '`user_id`',\n        unique: true,\n      \},\n/,
+      '',
+    );
+  },
+
+  /*
+   * 库内实况对账（第十七轮）：实体声明了一张**库里根本没有**的表 ——
+   * 生产库 `synchronize: false`，跑的是迁移：这张表在生产库上根本不存在。
+   * 期望：DB_TABLE_MISSING 点名该表。
+   */
+  'db-reality-table-missing-injected'() {
+    const extra = path.join(copyRoot, 'apps/api/src/database/entities/selftest-extra.entity.ts');
+    writeText(
+      extra,
+      `import { Column, Entity, PrimaryGeneratedColumn } from 'typeorm';
+
+@Entity({ name: 'selftest_extra_table' })
+export class SelftestExtraTable {
+  @PrimaryGeneratedColumn({ name: 'id', type: 'bigint', unsigned: true })
+  id: number;
+
+  @Column({ name: 'label', type: 'varchar', length: 64, nullable: false })
+  label: string;
+}
+`,
+    );
+  },
+
+  /*
+   * 库内实况对账（第十七轮）：索引的**唯一性**与库里对不上 ——
+   * 实体说这条索引是**唯一**索引，库里却是**非唯一**的：
+   * 约束强度不同（唯一索引会让撞键直接报错，非唯一索引不会）。
+   * 期望：DB_INDEX_UNIQUENESS_MISMATCH 点名该索引。
+   */
+  'db-reality-index-uniqueness-injected'() {
+    const file = path.join(copyRoot, 'apps/api/src/database/entities/alumni.entity.ts');
+    replaceOnce(
+      file,
+      /@Index\('idx_alumni_profiles_graduation_year', \['graduationYear'\]\)/,
+      "@Index('idx_alumni_profiles_graduation_year', ['graduationYear'], { unique: true })",
+    );
+  },
+
+  /*
+   * 库内实况对账（第十七轮）：库里多出一道**实体没声明**的索引 ——
+   * 库比实体多一道索引：会让查询计划与实体声明对不上。
+   *
+   * ⚠️ 挑的是 `idx_alumni_profiles_directory`（三列）而不是 `idx_alumni_profiles_region`：
+   *   后者只建在**外键列**上，库内层会把它当成「MySQL 为外键自动建的
+   *   支撑索引」而**排除**（那条排除规则是对的：这类索引本就不在契约里）。
+   * 期望：DB_INDEX_NOT_DECLARED 点名 idx_alumni_profiles_directory。
+   */
+  'db-reality-index-not-declared-injected'() {
+    const file = path.join(copyRoot, 'apps/api/src/database/entities/alumni.entity.ts');
+    replaceOnce(
+      file,
+      /@Index\('idx_alumni_profiles_directory', \['showInDirectory', 'regionCode', 'industryCode'\]\)\n/,
+      '',
+    );
+  },
+
+  /*
+   * 库内实况对账（第十七轮）：外键的**指向**与库里对不上 ——
+   * 实体说这一列指向 A 表，库里那条外键却指向 B 表：
+   * 实体与库里说的不是一回事。
+   * 期望：DB_FOREIGN_KEY_TARGET_MISMATCH 点名该列。
+   */
+  'db-reality-foreign-key-target-injected'() {
+    const file = path.join(copyRoot, 'apps/api/src/database/entities/alumni.entity.ts');
+    replaceOnce(
+      file,
+      /@ManyToOne\(\(\) => Region, \{ onDelete: 'SET NULL', nullable: true \}\)\n  @JoinColumn\(\{ name: 'region_code' \}\)/,
+      "@ManyToOne(() => Industry, { onDelete: 'SET NULL', nullable: true })\n" +
+        "  @JoinColumn({ name: 'region_code' })",
+    );
+  },
+
+  /*
+   * 库内实况对账（第十七轮）：库里多出一道**实体没声明**的外键 ——
+   * 写入会被库挡下（外键失败），而实体与业务代码没准备这个约束。
+   * 期望：DB_FOREIGN_KEY_NOT_DECLARED 点名该列。
+   */
+  'db-reality-foreign-key-not-declared-injected'() {
+    const file = path.join(copyRoot, 'apps/api/src/database/entities/alumni.entity.ts');
+    replaceOnce(
+      file,
+      /@ManyToOne\(\(\) => Region, \{ onDelete: 'SET NULL', nullable: true \}\)\n  @JoinColumn\(\{ name: 'region_code' \}\)\n/,
+      '',
+    );
+  },
+
+  /*
+   * 库内实况对账（第十七轮）：实体声明了、**库里没有**的那一列 ——
+   * 读写这一列会直接报「未知列」。
+   *
+   * ⚠️ 必须加一整个**新的属性**（带自己的 `@Column`），
+   *   不能只在已有属性上再挂一个 `@Column` ——
+   *   实体解析是「一个属性取**第一个**列装饰器」，
+   *   多挂一个会被当成同一个属性的声明，解析出来的还是原来那一列。
+   * 期望：DB_COLUMN_MISSING 点名 selftest_absent_column。
+   */
+  'db-reality-column-missing-injected'() {
+    const file = path.join(copyRoot, 'apps/api/src/database/entities/alumni.entity.ts');
+    replaceOnce(
+      file,
+      /  @Column\(\{ name: 'college', type: 'varchar', length: 64, nullable: true \}\)\n  college: string \| null;\n/,
+      "  @Column({ name: 'college', type: 'varchar', length: 64, nullable: true })\n" +
+        "  college: string | null;\n\n" +
+        "  // 自测注入：实体声明了、库里没有的那一列\n" +
+        "  @Column({ name: 'selftest_absent_column', type: 'varchar', length: 32, nullable: true })\n" +
+        "  selftestAbsentColumn: string | null;\n",
+    );
+  },
+
+  /*
+   * 库内实况对账（第十七轮）：库里多出一列**实体没声明**的列 ——
+   * 任何 `synchronize: true` 的环境都会把它删掉，
+   * 而生产库上它一直在（两边对这一列的理解不一致）。
+   * 期望：DB_COLUMN_NOT_DECLARED 点名该列。
+   */
+  'db-reality-column-not-declared-injected'() {
+    const file = path.join(copyRoot, 'apps/api/src/database/entities/alumni.entity.ts');
+    replaceOnce(
+      file,
+      /  @Column\(\{ name: 'college', type: 'varchar', length: 64, nullable: true \}\)\n/,
+      '',
+    );
+  },
+
+  /*
    * 读端点可见性对账（第十一轮）：把「未发布 → 404」的**可见性过滤**删掉 ——
    * 公开详情端点只判「存在与否」，不再判「发布与否」。
    * 后果：草稿 / 未审核的资讯**凭 id 就能公开读到**（对外可见性失控）。
@@ -987,6 +1143,42 @@ export class InjectedSafeUpsertService {
       file,
       /if \(!article \|\| article\.status !== 'published'\) throw new NotFoundException\('内容不存在'\);/,
       "if (!article) throw new NotFoundException('内容不存在');",
+    );
+  },
+
+  /*
+   * 读端点可见性对账（第十七轮，**第二种退化形态**）：
+   * 把「未发布 → 404」的过滤条件**换个写法**（`status === 'published'` 之外的两处写法）——
+   * 过滤**还在**，但登记表的「过滤痕迹」字符串对不上了。
+   *
+   * ⚠️ 为什么要有第二种形态：第一种形态（整条删除）只覆盖了
+   *   「痕迹字符串被整段删掉」这一种退化 —— 校验器若只认整段缺失，
+   *   遇到「痕迹还在但语义变了」（如 `!=` 写成 `<>`）就会漏判。
+   *   两种形态一起守，才说明它守的是**语义**而不是某一段文本。
+   * 期望：READ_VISIBILITY_FILTER_MISSING 点名 GET /articles/:id。
+   */
+  'read-visibility-filter-spelled-differently'() {
+    const file = path.join(copyRoot, 'apps/api/src/modules/content/content.service.ts');
+    replaceOnce(
+      file,
+      /if \(!article \|\| article\.status !== 'published'\) throw new NotFoundException\('内容不存在'\);/,
+      "if (!article || 'published' !== article.status) throw new NotFoundException('内容不存在');",
+    );
+  },
+
+  /*
+   * 读端点可见性对账（第十七轮，**第二种退化形态**）：
+   * 把「不可见 → 404」改成 **500**（服务器内部错误）——
+   * 与 403 不同：403 泄露「对象存在」，500 则是「服务端炸了」，
+   * 客户端拿不到任何可引导的信息。
+   * 期望：READ_VISIBILITY_STATUS_MISMATCH 点名 GET /articles/:id。
+   */
+  'read-visibility-status-changed-to-500'() {
+    const file = path.join(copyRoot, 'apps/api/src/modules/content/content.service.ts');
+    replaceOnce(
+      file,
+      /if \(!article \|\| article\.status !== 'published'\) throw new NotFoundException\('内容不存在'\);/,
+      "if (!article || article.status !== 'published') throw new InternalServerErrorException('内容不存在');",
     );
   },
 
@@ -1027,6 +1219,30 @@ export class InjectedSafeUpsertService {
   },
 
   /*
+   * 读端点可见性对账（第十七轮，**第二种退化形态**）：
+   * 新增一个**公开读端点**，但把它挂在**另一个控制器**上 ——
+   * 第一种形态挂在 content 控制器上，若校验器只认那一个控制器的端点，
+   * 换到别处就漏判了。
+   * 期望：READ_VISIBILITY_NOT_REGISTERED 点名 GET /articles/draft-preview。
+   */
+  'read-visibility-endpoint-unregistered-in-other-controller'() {
+    const file = path.join(copyRoot, 'apps/api/src/modules/content/content.controller.ts');
+    replaceOnce(
+      file,
+      /\n\}\n$/,
+      `
+  @Public()
+  @Get('articles/draft-preview')
+  @ApiOperation({ summary: '自测注入：没登记可见性口径的公开读端点（另一个路径）' })
+  draftPreview() {
+    return { ok: true };
+  }
+}
+`,
+    );
+  },
+
+  /*
    * 读端点可见性对账（第十一轮）：把 API-SPEC「读端点的可见性口径」里的
    * `GET /articles/:id` 那一行删掉 ——
    * 对外契约只存在于代码里，客户端无从得知「未发布 → 404」。
@@ -1044,6 +1260,27 @@ export class InjectedSafeUpsertService {
     });
     if (index < 0) throw new Error('注入失败：API-SPEC 里找不到 /articles/:id 的可见性那一行');
     lines.splice(index, 1);
+    writeText(file, lines.join('\n'));
+  },
+
+  /*
+   * 读端点可见性对账（第十七轮，**第二种退化形态**）：
+   * 把 API-SPEC 里 `GET /articles/:id` 那一行的**状态码**从 404 改成 403 ——
+   * 那一行还在，但写的口径与实现对不上（对外契约说了 403，实现是 404）。
+   * 第一种形态是「整行删掉」，第二种是「行还在但内容错了」——
+   * 两种一起守，才说明它守的是**口径本身**而不只是「有没有这一行」。
+   * 期望：READ_VISIBILITY_UNDOCUMENTED 点名 GET /articles/:id。
+   */
+  'read-visibility-doc-row-status-changed'() {
+    const file = path.join(copyRoot, 'docs/API-SPEC.md');
+    const lines = readText(file).split('\n');
+    const index = lines.findIndex((line) => {
+      if (!line.trim().startsWith('|')) return false;
+      const cells = line.split('|').map((cell) => cell.trim());
+      return cells[1] === 'GET' && cells[2] === '`/articles/:id`' && line.includes('**404**');
+    });
+    if (index < 0) throw new Error('注入失败：API-SPEC 里找不到 /articles/:id 的可见性那一行');
+    lines[index] = lines[index].replace('**404**', '**403**');
     writeText(file, lines.join('\n'));
   },
 
@@ -1070,6 +1307,32 @@ export class InjectedSafeUpsertService {
   },
 
   /*
+   * 读端点可见性对账（第十七轮，**第二种退化形态**）：
+   * 把 KNOWN-ISSUES 里 #197 的**端点路径**删掉（条目还在，但不再点名那个端点）——
+   * 「待拍板」这件事还记着，却已经没人知道它指的是哪个端点。
+   * 期望：READ_VISIBILITY_KNOWN_ISSUE_MISSING 点名 GET /events/:id。
+   */
+  'read-visibility-known-issue-endpoint-forgotten'() {
+    const file = path.join(copyRoot, 'docs/KNOWN-ISSUES.md');
+    const lines = readText(file).split('\n');
+    const start = lines.findIndex((line) => /^#{2,4}\s*197\./.test(line));
+    if (start < 0) throw new Error('注入失败：KNOWN-ISSUES 里找不到 #197');
+    let end = lines.length;
+    for (let i = start + 1; i < lines.length; i += 1) {
+      if (/^#{2,4}\s/.test(lines[i])) {
+        end = i;
+        break;
+      }
+    }
+    for (let i = start; i < end; i += 1) {
+      if (lines[i].includes('/events/:id')) {
+        lines[i] = lines[i].replace('/events/:id', '（端点路径略）');
+      }
+    }
+    writeText(file, lines.join('\n'));
+  },
+
+  /*
    * 读端点可见性对账（第十一轮）：把 `GET /events/:id` 的**可见性过滤补上** ——
    * 模拟「产品已拍板 / 有人擅自改了对外行为」，但登记表与文档还停在「待拍板」。
    * 期望：READ_VISIBILITY_REGISTRY_STALE 点名 GET /events/:id。
@@ -1080,6 +1343,21 @@ export class InjectedSafeUpsertService {
       file,
       /if \(!event\) throw new NotFoundException\('活动不存在'\);/,
       "if (!event || event.status !== 'published') throw new NotFoundException('活动不存在');",
+    );
+  },
+
+  /*
+   * 读端点可见性对账（第十七轮，**第二种退化形态**）：
+   * 把 `GET /events/:id` 的过滤**写成相反的判断**（`status === 'published'`）——
+   * 同样是「擅自改了对外行为」，但痕迹的写法与第一种形态不同。
+   * 期望：READ_VISIBILITY_REGISTRY_STALE 点名 GET /events/:id。
+   */
+  'read-visibility-pending-resolved-inverted'() {
+    const file = path.join(copyRoot, 'apps/api/src/modules/events/events.service.ts');
+    replaceOnce(
+      file,
+      /if \(!event\) throw new NotFoundException\('活动不存在'\);/,
+      "if (!event || event.status === 'published') throw new NotFoundException('活动不存在');",
     );
   },
 
@@ -1224,6 +1502,65 @@ export class InjectedSafeUpsertService {
   },
 
   /*
+   * 读端点可见性对账（第十七轮，**第二种退化形态**）：
+   * 把已登录端点的「无权 → 403」改成 **500** ——
+   * 第一种形态是「403 改成 404」（客户端分不清两种引导），
+   * 第二种是「403 改成 500」（客户端连「无权」这件事都拿不到）——
+   * 两者都是「403 这条口径没落到实现上」。
+   * 期望：AUTH_VISIBILITY_STATUS_MISSING 点名 GET /connections/:id。
+   */
+  'read-visibility-auth-403-changed-to-500'() {
+    const file = path.join(
+      copyRoot,
+      'apps/api/src/modules/connections/connections.service.ts',
+    );
+    replaceOnce(
+      file,
+      /throw new ForbiddenException\('无权查看该连接关系'\);/,
+      "throw new InternalServerErrorException('无权查看该连接关系');",
+    );
+  },
+
+  /*
+   * 读端点可见性对账（第十七轮，**第二种退化形态**）：
+   * 把已登录端点的「不可见 → 404」改成 **500** ——
+   * 客户端分不清「不存在」与「服务端故障」，引导全错。
+   * 期望：AUTH_VISIBILITY_STATUS_MISSING 点名 GET /connections/:id。
+   */
+  'read-visibility-auth-404-changed-to-500'() {
+    const file = path.join(
+      copyRoot,
+      'apps/api/src/modules/connections/connections.service.ts',
+    );
+    replaceAllText(
+      file,
+      /throw new NotFoundException\('连接关系不存在'\);/g,
+      "throw new InternalServerErrorException('连接关系不存在');",
+    );
+  },
+
+  /*
+   * 读端点可见性对账（第十七轮，**第二种退化形态**）：
+   * 把已登录端点的**认证阶段守卫**摘掉 ——
+   * `@RequireAlumniStage('verified')` 这道「未完成校友认证 → 403」的守卫
+   * 一旦消失，未认证用户就能用到只有认证用户才能用的功能。
+   * （第一种形态是「实现里的状态码被改掉」，第二种是「控制器上的守卫被摘掉」——
+   * 两条不同的判定路径，各要一个用例。）
+   * 期望：AUTH_VISIBILITY_GUARD_MISSING 点名 GET /connections/:id。
+   */
+  'read-visibility-auth-guard-removed'() {
+    const file = path.join(
+      copyRoot,
+      'apps/api/src/modules/connections/connections.controller.ts',
+    );
+    replaceOnce(
+      file,
+      /  @Get\(':id'\)\n  @RequireAlumniStage\('verified'\)\n/,
+      "  @Get(':id')\n",
+    );
+  },
+
+  /*
    * 读端点可见性对账（第十二轮，已登录端点）：新增一个**已登录端点**，
    * 它的实现会抛 404，却没人登记可见性分界 ——
    * 「不可见 → 404 还是无权 → 403」没人想过，上线后只能靠人记得。
@@ -1292,6 +1629,23 @@ export class InjectedSafeUpsertService {
   },
 
   /*
+   * 可见性对账（第十七轮，**第二种退化形态**）：
+   * 把「活动不存在 → 404」改成 **500** ——
+   * 第一种形态是「处置被删掉」，第二种是「处置还在、但抛的是服务器错误」：
+   * 管理端把 500 当成「服务端故障」而不是「这条记录不存在」，
+   * 提示仍然是错的。
+   * 期望：ADMIN_VISIBILITY_STATUS_MISSING 点名 DELETE /admin/events/:id。
+   */
+  'read-visibility-admin-404-changed-to-500'() {
+    const file = path.join(copyRoot, 'apps/api/src/modules/events/events.service.ts');
+    replaceOnce(
+      file,
+      /if \(!result\.affected\) throw new NotFoundException\('活动不存在'\);/,
+      "if (!result.affected) throw new InternalServerErrorException('活动不存在');",
+    );
+  },
+
+  /*
    * 可见性对账（第十三轮，管理端）：新增一个**管理端端点**，
    * 它的实现会抛 404，却没人登记「资源不存在 → 404」的分界 ——
    * 管理端于是分不清「资源不存在（404）」与「权限点不足（403）」。
@@ -1311,6 +1665,100 @@ export class InjectedSafeUpsertService {
   }
 }
 `,
+    );
+  },
+
+  /*
+   * 可见性对账（第十七轮，**第二种退化形态**）：
+   * 新增一个管理端端点，但**挂在另一个路径**上（第一种形态是 `injected-preview`）——
+   * 若校验器只认某一个具体路径，换个路径就漏判了。
+   * 期望：ADMIN_VISIBILITY_NOT_REGISTERED 点名 GET /admin/injected-preview-2。
+   */
+  'read-visibility-admin-endpoint-unregistered-other-path'() {
+    const file = path.join(copyRoot, 'apps/api/src/modules/admin/admin.controller.ts');
+    replaceOnce(
+      file,
+      /\n\}\n$/,
+      `
+  @Get('injected-preview-2')
+  @RequirePermissions('alumni:view')
+  @ApiOperation({ summary: '自测注入：没登记可见性分界的管理端端点（另一个路径）' })
+  async injectedPreview2(@Param('id', ParseIntPipe) id: number) {
+    return this.directoryService.adminDetail(id);
+  }
+}
+`,
+    );
+  },
+
+  /*
+   * 读端点可见性对账（第十七轮，**第二种退化形态**）：
+   * 新增一个已登录端点，但**挂在另一个路径**上（第一种形态是 `injected-preview`）——
+   * 若校验器只认某一个具体路径，换个路径就漏判了。
+   * 期望：AUTH_VISIBILITY_NOT_REGISTERED 点名 GET /connections/injected-preview-2。
+   */
+  'read-visibility-auth-endpoint-unregistered-other-path'() {
+    const file = path.join(
+      copyRoot,
+      'apps/api/src/modules/connections/connections.controller.ts',
+    );
+    replaceOnce(
+      file,
+      /\n\}\n$/,
+      `
+  @Get('injected-preview-2')
+  @RequireAlumniStage('verified')
+  @ApiOperation({ summary: '自测注入：没登记可见性分界的已登录端点（另一个路径）' })
+  async injectedPreview2(@CurrentUser() user: RequestUser, @Param('id', ParseIntPipe) id: number) {
+    return this.connectionsService.getConnection(id, user.id);
+  }
+}
+`,
+    );
+  },
+
+  /*
+   * 读端点可见性对账（第十七轮，**第二种退化形态**）：
+   * 把 API-SPEC 里 `GET /connections/:id` 那一行的 **403 列**改成 401 ——
+   * 那一行还在，但写的口径与实现对不上。
+   * 期望：AUTH_VISIBILITY_UNDOCUMENTED 点名 GET /connections/:id。
+   */
+  'read-visibility-auth-doc-row-status-changed'() {
+    const file = path.join(copyRoot, 'docs/API-SPEC.md');
+    const lines = readText(file).split('\n');
+    const index = lines.findIndex((line) => {
+      if (!line.trim().startsWith('|')) return false;
+      const cells = line.split('|').map((cell) => cell.trim());
+      return (
+        cells[1] === 'GET' &&
+        cells[2] === '`/connections/:id`' &&
+        cells.length >= 6 &&
+        cells[3] === '**403**' &&
+        cells[4] === '**404**'
+      );
+    });
+    if (index < 0) throw new Error('注入失败：API-SPEC 里找不到 /connections/:id 的可见性口径那一行');
+    // ⚠️ 这一行里 **403** 出现了**两次**（状态码格 + 说明列的「→ 403」）：
+    //    只换状态码格的话，说明列里还留着 403，校验器照样认为口径写明了 ——
+    //    注入就白注了。两处一起换。
+    lines[index] = lines[index].replace(/403/g, '401');
+    writeText(file, lines.join('\n'));
+  },
+
+  /*
+   * RBAC 矩阵（第十七轮）：把一个**管理端端点**的 `@RequirePermissions` 摘掉 ——
+   * 规则 6（「每个管理端端点都必须声明权限点」）在第十六轮被修好之前
+   * 是一条**恒过**的判定（控制器前缀没有前导斜杠，拼出来的路径永远不以
+   * `/admin` 开头 → 判定一次都没跑过）。
+   * 这个用例是那道修复的**反向验证**：把权限点摘掉，它必须被抓出来。
+   * 期望：ADMIN_ENDPOINT_NO_PERMISSION 点名该管理端端点。
+   */
+  'rbac-matrix-admin-endpoint-no-permission'() {
+    const file = path.join(copyRoot, 'apps/api/src/modules/admin/admin.controller.ts');
+    replaceOnce(
+      file,
+      /  @Get\('alumni'\)\n  @RequirePermissions\('alumni:view'\)\n/,
+      "  @Get('alumni')\n",
     );
   },
 
@@ -1340,6 +1788,373 @@ export class InjectedSafeUpsertService {
     if (index < 0) throw new Error('注入失败：API-SPEC 里找不到 /admin/events/:id 的可见性口径那一行');
     lines.splice(index, 1);
     writeText(file, lines.join('\n'));
+  },
+
+  /*
+   * 可见性对账（第十七轮，**第二种退化形态**）：
+   * 把 API-SPEC 第 13.4 节里 `DELETE /admin/events/:id` 那一行的
+   * **404 列**改成 500 —— 那一行还在，但写的口径与实现对不上。
+   * 期望：ADMIN_VISIBILITY_UNDOCUMENTED 点名 DELETE /admin/events/:id。
+   */
+  'read-visibility-admin-doc-row-status-changed'() {
+    const file = path.join(copyRoot, 'docs/API-SPEC.md');
+    const lines = readText(file).split('\n');
+    const index = lines.findIndex((line) => {
+      if (!line.trim().startsWith('|')) return false;
+      const cells = line.split('|').map((cell) => cell.trim());
+      return (
+        cells[1] === 'DELETE' &&
+        cells[2] === '`/admin/events/:id`' &&
+        cells.length >= 7 &&
+        cells[3] === '**404**' &&
+        cells[4] === '**403**'
+      );
+    });
+    if (index < 0) throw new Error('注入失败：API-SPEC 里找不到 /admin/events/:id 的可见性口径那一行');
+    // ⚠️ 404 在这一行里出现**两次**（状态码格 + 说明列的「→ 404」）：两处一起换。
+    lines[index] = lines[index].replace(/404/g, '500');
+    writeText(file, lines.join('\n'));
+  },
+
+  /*
+   * 两层结论对账（第十七轮）：把**迁移里**某一列的长度改掉 ——
+   * 静态层（实体 ↔ 迁移）判「不一致」，库内层（实体 ↔ 真实的库）判「一致」——
+   * 两层对**同一个对象**给出了互相矛盾的结论：
+   * 说明**迁移与库里真实的结构已经不是一回事**（迁移改过没重跑、或库被手工改过）。
+   * 期望：LAYER_VERDICT_CONFLICT 点名那一列。
+   */
+  'layer-reconciliation-migration-column-drifted'() {
+    const file = path.join(
+      copyRoot,
+      'apps/api/src/database/migrations/1730000000000-InitSchema.ts',
+    );
+    replaceOnce(
+      file,
+      /        '`display_name` VARCHAR\(64\) NOT NULL,' \+/,
+      "        '`display_name` VARCHAR(32) NOT NULL,' +",
+    );
+  },
+
+  /*
+   * 两层结论对账（第十七轮，**第一种退化形态**）：
+   * 把**迁移里**某一列的长度改掉（VARCHAR(64) → VARCHAR(32)）——
+   * 静态层（实体 ↔ 迁移）判「不一致」，库内层（实体 ↔ 真实的库）判「一致」——
+   * 两层对**同一个对象**给出了互相矛盾的结论：
+   * 说明**迁移与库里真实的结构已经不是一回事**（迁移改过没重跑、或库被手工改过）。
+   * 期望：LAYER_VERDICT_CONFLICT 点名那一列。
+   */
+  'layer-reconciliation-migration-column-drifted'() {
+    const file = path.join(
+      copyRoot,
+      'apps/api/src/database/migrations/1730000000000-InitSchema.ts',
+    );
+    replaceOnce(
+      file,
+      /        '`display_name` VARCHAR\(64\) NOT NULL,' \+/,
+      "        '`display_name` VARCHAR(32) NOT NULL,' +",
+    );
+  },
+
+  /*
+   * 两层结论对账（第十七轮，**第二种退化形态**）：
+   * 把**实体里**某一列的默认值改掉（迁移与库里都还是原来那个）——
+   * 静态层判「不一致」（实体 ≠ 迁移），库内层也判「不一致」（实体 ≠ 库）。
+   *
+   * ⚠️ 这一条是**反向的**用例：两层**都**判了不一致，
+   *   而且说的是**同一件事**（这一列的默认值对不上）——
+   *   所以对账脚本**不该**报任何矛盾，它必须**通过**。
+   *   它守的是「对账脚本不是『只要有一层说不一致就报』」：
+   *   真出现了一处**只有一层**说不一致（第一、二条用例）时，
+   *   它报的才是真矛盾。
+   * 期望：退出码 0（无任何分叉）。
+   */
+  'layer-reconciliation-entity-default-drifted'() {
+    const file = path.join(copyRoot, 'apps/api/src/database/entities/alumni.entity.ts');
+    replaceOnce(
+      file,
+      /  @Column\(\{ name: 'college', type: 'varchar', length: 64, nullable: true \}\)\n/,
+      "  @Column({ name: 'college', type: 'varchar', length: 64, nullable: true, default: 'x' })\n",
+    );
+  },
+
+  /*
+   * 两层结论对账（第十七轮，**第三种退化形态**）：
+   * 把**迁移里**某一列整个删掉（实体与库里都还在）——
+   * 静态层判「迁移里没这一列」（不一致），库内层判「一致」；
+   * 更要紧的是：静态层**压根判不了**这一列的默认值 / 无符号性 / 枚举
+   * （迁移里没有这一列 → 判不了），而库内层**判得了**——
+   * 两层的**判定口径**分叉了（判的列数不一样）。
+   * 期望：LAYER_DIMENSION_STATS_DRIFT（口径漂移）。
+   */
+  'layer-reconciliation-migration-column-removed'() {
+    const file = path.join(
+      copyRoot,
+      'apps/api/src/database/migrations/1730000000000-InitSchema.ts',
+    );
+    replaceOnce(
+      file,
+      /        '`college` VARCHAR\(64\) NULL,' \+\n/,
+      '',
+    );
+  },
+
+  /*
+   * 两层结论对账（第十七轮，**第四种退化形态**）：
+   * 把**迁移里**某一列的默认值从字面量改成**表达式** ——
+   * 静态层看的是**迁移里的 DDL 原文**：`DEFAULT CURRENT_TIMESTAMP(3)`
+   * 是表达式 → 「**判不了**」（口径上跳过）；
+   * 库内层看的是**库里真实的默认值**（`0`，建库时就写死了）→ **判得了**，判「一致」。
+   *
+   * ⚠️ 这一条打的是**「跳过」与「判了」的分叉**：
+   *   两层的结论看起来都是「没问题」，但有一层**根本没判** ——
+   *   这是「口径一致 ≠ 结论一致」里最隐蔽的一种：
+   *   对账脚本若只比「有没有报错」，这一处就**永远发现不了**。
+   * 期望：LAYER_SKIPPED_DIVERGENCE。
+   */
+  'layer-reconciliation-default-expression-skewed'() {
+    const file = path.join(
+      copyRoot,
+      'apps/api/src/database/migrations/1730000000000-InitSchema.ts',
+    );
+    // 迁移里 `users.version` 的默认值从 `0` 改成 `CURRENT_TIMESTAMP(3)` ——
+    // 静态层因此「判不了」，而库里的真实默认值仍是 `0`（库内层判得了）。
+    replaceOnce(
+      file,
+      /        '`version` INT NOT NULL DEFAULT 0,' \+/,
+      "        '`version` INT NOT NULL DEFAULT CURRENT_TIMESTAMP(3),' +",
+    );
+  },
+
+  /*
+   * 两层结论对账（第十七轮，**第五种退化形态**）：
+   * 把**登记表里**一道唯一键的条目删掉 ——
+   * 库内层是拿**登记表**当基准的（登记表里有，才去库里找那道约束），
+   * 条目删了，它**压根不去判**这一道唯一键；
+   * 静态层是拿**实体声明**当基准的（实体声明了，就去迁移里找），
+   * 它**照判不误**。
+   *
+   * ⚠️ 这一条打的是**「互相遗漏」**：同一个对象，一层判了、另一层**没判**。
+   *   对账脚本若只比「报出来的差异集」，这一处同样**永远发现不了**。
+   * 期望：LAYER_VERDICT_OMISSION。
+   */
+  'layer-reconciliation-registry-entry-removed'() {
+    const file = path.join(copyRoot, 'infra/scripts/check-error-semantics.mjs');
+    replaceOnce(
+      file,
+      /    entity: 'alumni_profiles',\n    entityClass: 'AlumniProfile',\n    entityFile: 'apps\/api\/src\/database\/entities\/alumni\.entity\.ts',\n    columns: \['user_id'\],\n/,
+      "    entity: '__selftest_removed_alumni_profiles',\n" +
+        "    entityClass: 'AlumniProfile',\n" +
+        "    entityFile: 'apps/api/src/database/entities/alumni.entity.ts',\n" +
+        "    columns: ['user_id'],\n",
+    );
+  },
+
+  /*
+   * 两层结论对账（第十七轮，**第六种退化形态**）：
+   * 给静态层加一个**新的判定码**（`MIGRATION_SELFTEST_NEW_CODE`），
+   * 但**不**把它归到任何维度、也**不**写进「明确不跨层比」的清单 ——
+   * 这个判定码的结论**永远不会被跨层对账比到**（漏判）。
+   *
+   * ⚠️ 这一条打的是「**判定码的归属完整性**」：
+   *   新增判定码却忘了归维度，是最容易发生、也最不容易被发现的漏判 ——
+   *   它**不会**让任何一层报错（两层都绿），
+   *   只是这个判定码报出来的东西**没人交叉验证**。
+   * 期望：LAYER_ISSUE_CODE_UNMAPPED。
+   */
+  'layer-reconciliation-new-issue-code'() {
+    const file = path.join(copyRoot, 'infra/scripts/check-error-semantics.mjs');
+    // 在静态层的「6.6 默认值」那一节**之前**加一条**没有归维度**的新判定码。
+    // ⚠️ 要挑一个「语句级完整」的位置插：插到 `if` 块中间会把块结构弄坏
+    //   （自测脚本自己就跑不起来了，注入就白注了）。
+    replaceOnce(
+      file,
+      /      \/\* --- 6\.6\.1 默认值 --- \*\/\n      if \(column\.defaultValue !== null && column\.defaultValue !== undefined\) \{/,
+      "      // 自测注入：一个**没有归维度**的新判定码 —— 它的结论没人交叉验证\n" +
+        "      if (column.column === 'college' && table.table === 'alumni_profiles') {\n" +
+        "        issues.push({\n" +
+        "          kind: 'MIGRATION_SELFTEST_NEW_CODE',\n" +
+        "          where: `${table.table}.${column.column}`,\n" +
+        "          detail: '自测注入：这个判定码没有归到任何维度，也不在「明确不跨层比」的清单里',\n" +
+        "        });\n" +
+        "      }\n" +
+        "      /* --- 6.6.1 默认值 --- */\n" +
+        "      if (column.defaultValue !== null && column.defaultValue !== undefined) {",
+    );
+  },
+
+  /*
+   * 读端点可见性对账（第十七轮）：把 API-SPEC 里「读端点的可见性口径」
+   * 那一**整节**的标题改掉 ——
+   * 那一节里逐条写着「不可见 → 404」的口径，
+   * 标题一改，整节就**认不出来了** → 口径等于没写。
+   * 期望：READ_VISIBILITY_SECTION_MISSING。
+   */
+  'read-visibility-doc-section-missing'() {
+    const file = path.join(copyRoot, 'docs/API-SPEC.md');
+    replaceOnce(file, /读端点的可见性口径/, '读端点的响应口径');
+  },
+
+  /*
+   * 读端点可见性对账（第十七轮）：把登记表里那个公开读端点的**路径**改掉 ——
+   * 登记表说的那个端点在代码里**找不到了**（要么端点被改名，
+   * 要么它不再是公开的了）。
+   * 期望：READ_VISIBILITY_ROUTE_MISSING。
+   */
+  'read-visibility-route-missing'() {
+    const file = path.join(copyRoot, 'infra/scripts/check-read-visibility.mjs');
+    replaceOnce(
+      file,
+      /path: '\/articles\/:id',\n(\s+)controller: 'apps\/api\/src\/modules\/content\/content\.controller\.ts',/,
+      "path: '/articles/:id/selftest-renamed',\n$1controller: 'apps/api/src/modules/content/content.controller.ts',",
+    );
+  },
+
+  /*
+   * 读端点可见性对账（第十七轮）：把登记表里那个公开读端点的**控制器**改错 ——
+   * 端点还在，但它被挪到了**另一个控制器**里，登记表没跟着更新。
+   * 期望：READ_VISIBILITY_CONTROLLER_MISMATCH。
+   */
+  'read-visibility-controller-mismatch'() {
+    const file = path.join(copyRoot, 'infra/scripts/check-read-visibility.mjs');
+    replaceOnce(
+      file,
+      /path: '\/articles\/:id',\n(\s+)controller: 'apps\/api\/src\/modules\/content\/content\.controller\.ts',/,
+      "path: '/articles/:id',\n$1controller: 'apps/api/src/modules/content/selftest-other.controller.ts',",
+    );
+  },
+
+  /*
+   * 读端点可见性对账（第十七轮）：把**实现**里那个方法**改名** ——
+   * 登记表说「口径落在 `articleDetail` 这个方法里」，
+   * 方法一改名，口径就**无处核对**了。
+   * 期望：READ_VISIBILITY_IMPL_MISSING。
+   */
+  'read-visibility-impl-missing'() {
+    const file = path.join(copyRoot, 'apps/api/src/modules/content/content.service.ts');
+    replaceOnce(
+      file,
+      /  async articleDetail\(id: number\): Promise<ArticleView> \{/,
+      '  async articleDetailSelftestRenamed(id: number): Promise<ArticleView> {',
+    );
+  },
+
+  /*
+   * 已登录端点可见性对账（第十七轮）：把登记表里那个已登录端点的**路径**改掉 ——
+   * 端点在代码里找不到了。
+   * 期望：AUTH_VISIBILITY_ROUTE_MISSING。
+   */
+  'read-visibility-auth-route-missing'() {
+    const file = path.join(copyRoot, 'infra/scripts/check-read-visibility.mjs');
+    replaceOnce(
+      file,
+      /path: '\/connections\/:id',\n(\s+)controller: 'apps\/api\/src\/modules\/connections\/connections\.controller\.ts',/,
+      "path: '/connections/:id/selftest-renamed',\n$1controller: 'apps/api/src/modules/connections/connections.controller.ts',",
+    );
+  },
+
+  /*
+   * 已登录端点可见性对账（第十七轮）：把登记表里那个已登录端点的**控制器**改错 ——
+   * 端点被挪到了另一个控制器，登记表没跟着更新。
+   * 期望：AUTH_VISIBILITY_CONTROLLER_MISMATCH。
+   */
+  'read-visibility-auth-controller-mismatch'() {
+    const file = path.join(copyRoot, 'infra/scripts/check-read-visibility.mjs');
+    replaceOnce(
+      file,
+      /path: '\/connections\/:id',\n(\s+)controller: 'apps\/api\/src\/modules\/connections\/connections\.controller\.ts',/,
+      "path: '/connections/:id',\n$1controller: 'apps/api/src/modules/connections/selftest-other.controller.ts',",
+    );
+  },
+
+  /*
+   * 已登录端点可见性对账（第十七轮）：把**实现**里那个方法**改名** ——
+   * 403 / 404 的分界无处核对。
+   * 期望：AUTH_VISIBILITY_IMPL_MISSING。
+   */
+  'read-visibility-auth-impl-missing'() {
+    const file = path.join(
+      copyRoot,
+      'apps/api/src/modules/connections/connections.service.ts',
+    );
+    replaceOnce(
+      file,
+      /  async getConnection\(pairId: number, userId: number\) \{/,
+      '  async getConnectionSelftestRenamed(pairId: number, userId: number) {',
+    );
+  },
+
+  /*
+   * 管理端可见性对账（第十七轮）：把登记表里那个管理端端点的**路径**改掉 ——
+   * 端点在代码里找不到了。
+   * 期望：ADMIN_VISIBILITY_ROUTE_MISSING。
+   */
+  'read-visibility-admin-route-missing'() {
+    const file = path.join(copyRoot, 'infra/scripts/check-read-visibility.mjs');
+    replaceOnce(
+      file,
+      /path: '\/admin\/alumni\/:id',\n(\s+)controller: 'apps\/api\/src\/modules\/admin\/admin\.controller\.ts',/,
+      "path: '/admin/alumni/:id/selftest-renamed',\n$1controller: 'apps/api/src/modules/admin/admin.controller.ts',",
+    );
+  },
+
+  /*
+   * 管理端可见性对账（第十七轮）：把登记表里那个管理端端点的**控制器**改错 ——
+   * 端点被挪到了另一个控制器，登记表没跟着更新。
+   * 期望：ADMIN_VISIBILITY_CONTROLLER_MISMATCH。
+   */
+  'read-visibility-admin-controller-mismatch'() {
+    const file = path.join(copyRoot, 'infra/scripts/check-read-visibility.mjs');
+    replaceOnce(
+      file,
+      /path: '\/admin\/alumni\/:id',\n(\s+)controller: 'apps\/api\/src\/modules\/admin\/admin\.controller\.ts',/,
+      "path: '/admin/alumni/:id',\n$1controller: 'apps/api/src/modules/admin/selftest-other.controller.ts',",
+    );
+  },
+
+  /*
+   * 管理端可见性对账（第十七轮）：把**实现**里那个方法**改名** ——
+   * 「资源不存在 → 404」的处置无处核对。
+   * 期望：ADMIN_VISIBILITY_IMPL_MISSING。
+   */
+  'read-visibility-admin-impl-missing'() {
+    const file = path.join(
+      copyRoot,
+      'apps/api/src/modules/directory/directory.service.ts',
+    );
+    replaceOnce(
+      file,
+      /  async adminDetail\(targetUserId: number\): Promise<Record<string, unknown>> \{/,
+      '  async adminDetailSelftestRenamed(targetUserId: number): Promise<Record<string, unknown>> {',
+    );
+  },
+
+  /*
+   * 管理端可见性对账（第十七轮）：把**已登录端点表**里的一条，
+   * 也登记进**管理端表** ——
+   * 同一个端点出现在**两张表**里 → 改口径时要改两处、漏一处就分叉。
+   * 期望：ADMIN_VISIBILITY_DUPLICATE。
+   */
+  'read-visibility-admin-duplicate-registration'() {
+    const file = path.join(copyRoot, 'infra/scripts/check-read-visibility.mjs');
+    // 在管理端表的最前面插一条**已登录端点表里已有**的端点。
+    replaceOnce(
+      file,
+      /const ADMIN_VISIBILITY_REGISTRY = \[\n/,
+      "const ADMIN_VISIBILITY_REGISTRY = [\n" +
+        "  // 自测注入：同一个端点在两张表里各登记了一次\n" +
+        "  {\n" +
+        "    method: 'GET',\n" +
+        "    path: '/connections/:id',\n" +
+        "    controller: 'apps/api/src/modules/connections/connections.controller.ts',\n" +
+        "    handler: 'getConnection',\n" +
+        "    impl: {\n" +
+        "      file: 'apps/api/src/modules/connections/connections.service.ts',\n" +
+        "      method: 'getConnection',\n" +
+        "    },\n" +
+        "    boundary: '自测注入：与已登录端点表重复登记',\n" +
+        "    docTokens: ['404'],\n" +
+        "  },\n",
+    );
   },
 
   'multi-step-across-methods'() {
