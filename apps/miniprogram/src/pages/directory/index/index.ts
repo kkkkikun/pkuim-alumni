@@ -1,6 +1,7 @@
 import { listDirectory } from '../../../services/index';
-import { getDirectoryFilter, getState, setDirectoryFilter } from '../../../store/index';
+import { getDirectoryFilter, getState, resetDirectoryFilter, setDirectoryFilter } from '../../../store/index';
 import type { DirectoryEntry } from '../../../types/index';
+import { directoryFilterSignature, isDirectoryFilterActive } from '../../../utils/filter';
 import { directoryProfileUrl, navigateTo } from '../../../utils/navigate';
 import { resetPageScroll, restorePageScroll, trackPageScroll } from '../../../utils/scroll';
 import { setTabBarSelected } from '../../../utils/tabbar';
@@ -40,9 +41,14 @@ Page({
     keyword: '',
     regionLabel: '全部地区',
     industryLabel: '全部行业',
+    yearLabel: '全部年份',
     page: 1,
     total: 0,
     hasMore: false,
+    /** 上一次请求时用到的筛选条件签名（真机缺陷 #161） */
+    loadedSignature: '',
+    /** 当前是否有生效中的筛选条件（空状态提示用） */
+    filterActive: false,
   },
 
   onLoad(): void {
@@ -54,6 +60,9 @@ Page({
     setTabBarSelected(1);
     this.syncFilterLabel();
     restorePageScroll('directory');
+    // ⚠️ 真机缺陷 #161：从筛选页返回时筛选条件可能已经变了，
+    //   必须重新拉数据，否则「标签变了、列表没变、计数也没变」。
+    this.reloadIfFilterChanged();
   },
 
   onPageScroll: trackPageScroll('directory'),
@@ -80,12 +89,28 @@ Page({
       keyword: filter.keyword,
       regionLabel: region ? region.name : '全部地区',
       industryLabel: industry ? industry.name : '全部行业',
+      yearLabel: filter.graduationYear ? `${filter.graduationYear} 届` : '全部年份',
+      filterActive: isDirectoryFilterActive(filter),
     });
+  },
+
+  /** 筛选条件变了就重载列表（真机缺陷 #161） */
+  reloadIfFilterChanged(): void {
+    const loaded = this.data.loadedSignature;
+    if (!loaded) {
+      // 还没加载过（首次 onShow 紧跟 onLoad），不要重复请求
+      return;
+    }
+    if (directoryFilterSignature(getDirectoryFilter()) !== loaded) {
+      resetPageScroll('directory');
+      void this.load(1);
+    }
   },
 
   async load(page: number): Promise<void> {
     this.setData({ loading: true, error: '' });
     const filter = getDirectoryFilter();
+    const signature = directoryFilterSignature(filter);
     try {
       const result = await listDirectory({
         keyword: filter.keyword || undefined,
@@ -103,6 +128,8 @@ Page({
         total: result.meta ? result.meta.total : merged.length,
         hasMore: result.meta ? page < result.meta.totalPages : false,
         loading: false,
+        loadedSignature: signature,
+        filterActive: isDirectoryFilterActive(filter),
       });
     } catch (error) {
       this.setData({ loading: false, error: '通讯录加载失败，请稍后重试' });
@@ -125,6 +152,14 @@ Page({
   onClearSearch(): void {
     setDirectoryFilter({ keyword: '' });
     this.setData({ keyword: '' });
+    void this.load(1);
+  },
+
+  /** 清空全部筛选条件（空状态里的「清空筛选条件」） */
+  onClearFilters(): void {
+    resetDirectoryFilter();
+    this.syncFilterLabel();
+    resetPageScroll('directory');
     void this.load(1);
   },
 

@@ -1,4 +1,4 @@
-<view class="detail-page">
+<view class="detail-page page-with-fixed-bar">
   <view class="card">
     <view class="card-title">发布合作需求</view>
     <view class="card-desc">描述你希望获得的帮助，资源与需求可以双向连接。发布内容需经校友会审核后才会公开展示。</view>

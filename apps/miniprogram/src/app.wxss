@@ -65,6 +65,21 @@ textarea {
   background: var(--bg);
 }
 
+/**
+ * 有底部固定操作栏（.fixed-bar）的页面必须挂这个类。
+ *
+ * ⚠️ 缺陷 #161（真机反馈）：`.fixed-bar` 是 `position: fixed; bottom: 0`，
+ *   而 `.detail-page` 的下内边距只有 60rpx —— 页面正文最后一段
+ *   （表单说明、提示框、最后一个输入框）会被固定底栏**压住**，
+ *   客户在真机上表现为「底部文字显示不全」。
+ *   这里的 260rpx = 底栏自身高度（20 + 88 + 20 ≈ 128rpx）+ 多行按钮/成功态面板的余量，
+ *   再叠加设备安全区（env(safe-area-inset-bottom)），保证底栏**永远盖不住正文**。
+ */
+.page-with-fixed-bar {
+  padding-bottom: calc(260rpx + constant(safe-area-inset-bottom));
+  padding-bottom: calc(260rpx + env(safe-area-inset-bottom));
+}
+
 .page-bottom-space {
   height: 60rpx;
 }
@@ -323,12 +338,24 @@ textarea {
   margin-left: 6rpx;
 }
 
+/**
+ * 单行输入框。
+ *
+ * ⚠️ 缺陷 #161（真机反馈）：小程序 `<input>` 的**内部原生输入框高度只有 1.4em**，
+ *   纵向 padding **撑不开**它；再叠加 `page { line-height: 1.6 }` 继承下来后
+ *   行盒（1.6em）比输入框（1.4em）高 —— placeholder / 已输入文字**下半截被裁掉**，
+ *   真机上表现为「输入框文字显示不全」。
+ *   正确做法：不给纵向 padding，改用**显式 height + line-height**，
+ *   文字自然垂直居中；88rpx 与原型 `.field input` 的视觉高度一致。
+ */
 .form-input {
   width: 100%;
+  height: 88rpx;
+  line-height: 88rpx;
+  padding: 0 22rpx;
   background: #fff;
   border: 1rpx solid #ebe5e2;
   border-radius: 18rpx;
-  padding: 24rpx 22rpx;
   font-size: 28rpx;
   color: #332d2b;
 }

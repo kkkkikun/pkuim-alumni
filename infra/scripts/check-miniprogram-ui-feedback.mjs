@@ -1,0 +1,263 @@
+#!/usr/bin/env node
+/**
+ * 第 23 层校验：**真机反馈回归守卫**。
+ *
+ * ⚠️ 缺陷 #161（2026-11-22 客户真机体验，12 张截图）：
+ *   客户在真机上一次性报了 4 类问题，而**当时 24 步回归链全绿**：
+ *     1. 输入框里的文字被**垂直裁切**（下半截看不见）；
+ *     2. 底部固定按钮**压住了正文**（最后一段说明文字、最后一个输入框被盖住）；
+ *     3. 筛选 / 搜索**看起来完全不生效**（标签变了、列表没变、计数也没变）；
+ *     4. 筛选过一次再取消，页面**卡在空列表**出不来。
+ *
+ *   这四类问题的共同点：**都不违反任何契约**。
+ *   接口 200、类型检查过、样式校验过、单元测试全绿、24 步回归链全绿 ——
+ *   因为「文字被裁掉一截」「按钮压住最后一段」「筛选后列表没刷新」
+ *   在机器上都是**合法的**，只有人拿在手里才能看出来。
+ *   所以必须有**一层专门盯这些的校验**，否则下次改样式/改页面又会漏。
+ *
+ * 本层的判定口径（与真机截图一一对应）：
+ *   R1 凡用到底部固定栏（.fixed-bar）的页面，正文必须留出底栏高度；
+ *   R2 单行输入框必须有显式 height + line-height，且不得有纵向 padding；
+ *   R3 通讯录 / 连接列表页在「筛选条件变化」后必须重新拉数据；
+ *   R4 列表为空时必须提供「清空筛选条件」的出路；
+ *   R5 生效中的筛选条件必须在页面上**看得见**（年份 / 类型不能是幽灵条件）；
+ *   R6 演示数据里，地区字典的每一个地区都至少要有 1 条资源。
+ *
+ * 用法：node check-miniprogram-ui-feedback.mjs <小程序源码目录>
+ * 退出码：0 全部通过；1 发现真机可见问题
+ */
+
+import { readFileSync, statSync, readdirSync } from 'node:fs';
+import { resolve, relative, join } from 'node:path';
+
+const srcDir = resolve(process.argv[2] || 'apps/miniprogram/src');
+const appWxss = resolve(srcDir, 'app.wxss');
+const datasetFile = resolve(srcDir, 'demo/dataset.data.ts');
+const filterUtil = resolve(srcDir, 'utils/filter.ts');
+
+if (!statSync(srcDir, { throwIfNoEntry: false })?.isDirectory()) {
+  console.error(`源码目录不存在：${srcDir}`);
+  process.exit(1);
+}
+for (const f of [appWxss, datasetFile, filterUtil]) {
+  if (!statSync(f, { throwIfNoEntry: false })?.isFile()) {
+    console.error(`必需文件不存在：${f}`);
+    process.exit(1);
+  }
+}
+
+/** 违例清单 */
+const offenders = [];
+
+function add(rule, message, detail) {
+  offenders.push({ rule, message, detail });
+}
+
+/** 递归收集目录下所有文件 */
+function walk(dir, out = []) {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      walk(full, out);
+    } else {
+      out.push(full);
+    }
+  }
+  return out;
+}
+
+/** 取出 CSS 规则块的内容（按选择器匹配） */
+function cssBlock(css, selector) {
+  const re = new RegExp(`(^|[}\\s])${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\{([^}]*)\\}`, 'm');
+  const m = css.match(re);
+  return m ? m[2] : null;
+}
+
+/**
+ * 解析 padding 简写的上下值。
+ * 返回 [top, bottom]；解析不了返回 null（表示「未声明」）。
+ */
+function paddingVertical(value) {
+  const parts = String(value).trim().split(/\s+/);
+  const nums = parts.map((p) => parseFloat(p));
+  if (nums.some((n) => Number.isNaN(n))) return null;
+  if (nums.length === 1) return [nums[0], nums[0]];
+  if (nums.length === 2) return [nums[0], nums[0]];
+  if (nums.length === 3) return [nums[0], nums[2]];
+  return [nums[0], nums[3]];
+}
+
+// ---------------------------------------------------------------------------
+// R1：固定底栏必须留出正文空间
+// ---------------------------------------------------------------------------
+const wxmlFiles = walk(resolve(srcDir, 'pages')).filter((f) => f.endsWith('.wxml'));
+for (const file of wxmlFiles) {
+  const text = readFileSync(file, 'utf8');
+  if (!text.includes('fixed-bar')) {
+    continue;
+  }
+  const rootMatch = text.match(/<view\s+class="([^"]*)"/);
+  const rootClasses = rootMatch ? rootMatch[1].split(/\s+/) : [];
+  if (!rootClasses.includes('page-with-fixed-bar')) {
+    add(
+      'R1',
+      '固定底栏遮挡正文：页面用了 .fixed-bar，但根节点没有留出底栏高度',
+      `${relative(srcDir, file)}（根节点 class="${rootClasses.join(' ')}"，缺少 page-with-fixed-bar）`
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// R2：单行输入框不得被裁切
+// ---------------------------------------------------------------------------
+const appCss = readFileSync(appWxss, 'utf8');
+const formInput = cssBlock(appCss, '.form-input');
+if (!formInput) {
+  add('R2', '找不到 .form-input 的样式定义', relative(srcDir, appWxss));
+} else {
+  if (!/(^|[;{\s])height\s*:/m.test(formInput)) {
+    add('R2', '输入框文字被裁切：.form-input 没有显式 height', relative(srcDir, appWxss));
+  }
+  if (!/(^|[;{\s])line-height\s*:/m.test(formInput)) {
+    add('R2', '输入框文字被裁切：.form-input 没有显式 line-height', relative(srcDir, appWxss));
+  }
+  const paddingMatch = formInput.match(/(^|[;{\s])padding\s*:\s*([^;}]+)/);
+  if (paddingMatch) {
+    const vertical = paddingVertical(paddingMatch[2]);
+    if (vertical && (vertical[0] !== 0 || vertical[1] !== 0)) {
+      add(
+        'R2',
+        '输入框文字被裁切：.form-input 仍有纵向 padding（小程序 input 的纵向 padding 撑不开原生输入框）',
+        `${relative(srcDir, appWxss)}（padding: ${paddingMatch[2].trim()}）`
+      );
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// R3 / R4 / R5：列表页的筛选闭环
+// ---------------------------------------------------------------------------
+/** 带筛选的列表页：页面目录 → 页面标题（失败信息里用中文点名） */
+const FILTER_PAGES = [
+  { dir: 'pages/directory/index', title: '通讯录' },
+  { dir: 'pages/connect/index', title: '连接' },
+];
+
+for (const page of FILTER_PAGES) {
+  const tsFile = resolve(srcDir, `${page.dir}/index.ts`);
+  const wxmlFile = resolve(srcDir, `${page.dir}/index.wxml`);
+  if (!statSync(tsFile, { throwIfNoEntry: false })?.isFile()) {
+    add('R3', `${page.title}列表页源码缺失`, relative(srcDir, tsFile));
+    continue;
+  }
+  const ts = readFileSync(tsFile, 'utf8');
+  const wxml = statSync(wxmlFile, { throwIfNoEntry: false })?.isFile()
+    ? readFileSync(wxmlFile, 'utf8')
+    : '';
+
+  // R3：筛选条件变化后必须重载（定义 + 调用，至少出现两次）
+  const reloadHits = (ts.match(/reloadIfFilterChanged/g) || []).length;
+  if (reloadHits < 2) {
+    add(
+      'R3',
+      `${page.title}列表页的筛选条件变化后没有重新拉数据（筛选看起来不生效）`,
+      `${relative(srcDir, tsFile)}（reloadIfFilterChanged 出现 ${reloadHits} 次，需要定义 + 调用各 1 次）`
+    );
+  }
+
+  // R4：空列表必须给出路
+  if (!wxml.includes('empty-action') || !wxml.includes('onClearFilters')) {
+    add(
+      'R4',
+      `${page.title}列表页空结果时没有「清空筛选条件」的出路（用户会被卡在空列表）`,
+      relative(srcDir, wxmlFile)
+    );
+  }
+}
+
+// R5：生效中的筛选条件必须看得见
+//     ⚠️ 判据要卡「真正被渲染出来的那个变量」——
+//        要求它在**插值表达式里作为独立标识符**出现，
+//        而不是只看名字里有没有这几个字母：
+//        否则把它改名成 yearLabelHidden 就能糊弄过去（子串匹配会中招）。
+// R5：生效中的筛选条件必须看得见
+//     ⚠️ 判据要卡「真正被渲染出来的那个变量」——
+//        要求它在**插值表达式里作为独立标识符**出现，
+//        而不是只看名字里有没有这几个字母：
+//        否则把它改名成 yearLabelHidden 就能糊弄过去（子串匹配会中招）。
+const IDENT_CHARS = 'A-Za-z0-9_';
+
+/** WXML 的插值表达式里是否把变量当成独立标识符用（而不是名字里恰好含这几个字母） */
+function usesMustacheVar(wxml, name) {
+  const expressions = [...wxml.matchAll(/\{\{([^}]*)\}\}/g)].map((m) => m[1]);
+  const re = new RegExp(`(^|[^${IDENT_CHARS}])${name}([^${IDENT_CHARS}]|$)`);
+  return expressions.some((expr) => re.test(expr));
+}
+
+const directoryWxml = readFileSync(resolve(srcDir, 'pages/directory/index/index.wxml'), 'utf8');
+if (!usesMustacheVar(directoryWxml, 'yearLabel')) {
+  add('R5', '通讯录列表页没有展示毕业年份筛选（年份成了看不见的幽灵条件）', 'pages/directory/index/index.wxml');
+}
+const connectWxml = readFileSync(resolve(srcDir, 'pages/connect/index/index.wxml'), 'utf8');
+if (!usesMustacheVar(connectWxml, 'typeLabel') || !connectWxml.includes('onTypeTap')) {
+  add('R5', '连接列表页没有展示信息类型筛选（类型成了看不见的幽灵条件）', 'pages/connect/index/index.wxml');
+}
+
+// ---------------------------------------------------------------------------
+// R6：演示数据里每个地区都要有资源
+// ---------------------------------------------------------------------------
+function parseRawDataset(file) {
+  const text = readFileSync(file, 'utf8');
+  const marker = 'export const RAW_DATASET =';
+  const at = text.indexOf(marker);
+  if (at < 0) throw new Error('找不到 RAW_DATASET 导出');
+  const body = text.slice(at + marker.length);
+  const start = body.indexOf('{');
+  const end = body.lastIndexOf('}');
+  return JSON.parse(body.slice(start, end + 1));
+}
+
+let dataset;
+try {
+  dataset = parseRawDataset(datasetFile);
+} catch (err) {
+  console.error(`❌ 演示数据集解析失败：${err.message}`);
+  process.exit(1);
+}
+const covered = new Set((dataset.resources || []).map((item) => item.regionCode));
+const missing = (dataset.regions || []).filter((region) => !covered.has(region.code));
+if (missing.length > 0) {
+  add(
+    'R6',
+    `演示数据里有 ${missing.length} 个地区一条资源都没有（客户选这些地区会看到 0 条）`,
+    missing.map((region) => region.name).join('、')
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 结论
+// ---------------------------------------------------------------------------
+if (offenders.length > 0) {
+  console.error(`❌ 真机反馈回归守卫未通过：发现 ${offenders.length} 处问题\n`);
+  for (const o of offenders) {
+    console.error(`  [${o.rule}] ${o.message}`);
+    console.error(`      ${o.detail}`);
+  }
+  console.error(
+    '\n这六条对应的都是**真机上才看得见**的问题（客户 2026-11-22 一次报了 12 张截图）：\n' +
+      '  R1 底部固定按钮压住正文 → 根节点加 page-with-fixed-bar；\n' +
+      '  R2 输入框文字被裁掉一截 → .form-input 用显式 height + line-height，去掉纵向 padding；\n' +
+      '  R3 筛选/搜索看起来不生效 → onShow 里比对筛选签名，变了就重新加载；\n' +
+      '  R4 筛选后卡在空列表 → 空状态提供「清空筛选条件」；\n' +
+      '  R5 幽灵筛选条件 → 页面上把年份 / 类型显示出来；\n' +
+      '  R6 选某个地区 0 条 → 演示内容库补齐各地区资源。'
+  );
+  process.exit(1);
+}
+
+const pages = wxmlFiles.length;
+console.log(
+  `✅ 真机反馈回归守卫通过：${pages} 个页面；固定底栏页面均已留白；输入框高度合法；` +
+    '通讯录/连接筛选闭环完整；演示资源覆盖全部地区'
+);
+process.exit(0);

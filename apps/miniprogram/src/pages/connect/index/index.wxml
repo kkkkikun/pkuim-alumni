@@ -23,6 +23,19 @@
     </view>
 
     <view class="link-section-title">
+      <text class="section-title">按类型查看</text>
+      <text class="section-sub">资源与需求双向连接</text>
+    </view>
+
+    <scroll-view class="sector-scroll" scroll-x>
+      <view class="sector-row">
+        <view class="sector-chip {{typeLabel === '全部' ? 'on' : ''}}" data-type="all" bindtap="onTypeTap">全部</view>
+        <view class="sector-chip {{typeLabel === '我有需求' ? 'on' : ''}}" data-type="demand" bindtap="onTypeTap">我有需求</view>
+        <view class="sector-chip {{typeLabel === '我能提供' ? 'on' : ''}}" data-type="resource" bindtap="onTypeTap">我能提供</view>
+      </view>
+    </scroll-view>
+
+    <view class="link-section-title">
       <text class="section-title">按行业方向查看</text>
       <text class="section-sub">资源与需求双向连接</text>
     </view>
@@ -43,10 +56,14 @@
     <state-view
       status="{{loading && posts.length === 0 ? 'loading' : error ? 'error' : posts.length === 0 ? 'empty' : 'idle'}}"
       error-text="{{error}}"
-      empty-text="当前筛选下暂时没有连接信息"
-      empty-desc="可以切换地区或行业，也可以发布一条资源与需求"
+      empty-text="{{filterActive ? '当前筛选条件下没有连接信息' : '当前筛选下暂时没有连接信息'}}"
+      empty-desc="{{filterActive ? '可以清空筛选条件后重新浏览，或发布一条资源与需求' : '可以切换地区或行业，也可以发布一条资源与需求'}}"
       bind:retry="onRetry"
-    ></state-view>
+    >
+      <view slot="empty-action" wx:if="{{filterActive}}">
+        <view class="empty-action" bindtap="onClearFilters">清空筛选条件</view>
+      </view>
+    </state-view>
 
     <view class="post-list" wx:if="{{posts.length}}">
       <opportunity-card wx:for="{{posts}}" wx:key="id" post="{{item}}" bind:tap="onPostTap"></opportunity-card>

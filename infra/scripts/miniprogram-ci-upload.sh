@@ -343,6 +343,14 @@ else
   warn "找不到 check-miniprogram-demo-content.mjs，跳过演示内容卫生对账（不推荐）"
 fi
 
+if [ -f "${SCRIPT_DIR}/check-miniprogram-ui-feedback.mjs" ]; then
+  log "=== 上传前展示校验：真机反馈回归守卫（缺陷 #161）==="
+  node "${SCRIPT_DIR}/check-miniprogram-ui-feedback.mjs" "${PROJECT_DIR}/src" \
+    || die "存在真机可见问题（输入框裁切 / 底栏遮挡 / 筛选不生效）—— 已中止上传"
+else
+  warn "找不到 check-miniprogram-ui-feedback.mjs，跳过真机反馈回归守卫（不推荐）"
+fi
+
 if [ -f "${SCRIPT_DIR}/miniprogram-compile-check.mjs" ]; then
   AUDIT_ARGS=("${PROJECT_DIR}")
   [ -n "$API_BASE_URL_OVERRIDE" ] && AUDIT_ARGS+=(--expect-api-base "$API_BASE_URL_OVERRIDE")

@@ -1,4 +1,4 @@
-<view class="detail-page">
+<view class="detail-page page-with-fixed-bar">
   <view class="card">
     <view class="card-title">填写认证资料</view>
     <view class="card-desc">资料将提交给校友会管理员人工审核，请如实填写。</view>

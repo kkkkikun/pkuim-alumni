@@ -1,15 +1,7 @@
 import { getState } from '../../../store/index';
 import { getDirectoryFilter, resetDirectoryFilter, setDirectoryFilter } from '../../../store/index';
 import type { IndustryDto, RegionDto } from '../../../types/index';
-
-function buildYearOptions(): number[] {
-  const current = new Date().getFullYear();
-  const years: number[] = [];
-  for (let year = current; year > current - 6; year -= 1) {
-    years.push(year);
-  }
-  return years;
-}
+import { buildGraduationYearOptions } from '../../../utils/filter';
 
 Page({
   data: {
@@ -27,7 +19,7 @@ Page({
     this.setData({
       regions: state.regions,
       industries: state.industries,
-      years: buildYearOptions(),
+      years: buildGraduationYearOptions(),
       regionCode: filter.regionCode,
       industryCode: filter.industryCode,
       graduationYear: filter.graduationYear || 0,

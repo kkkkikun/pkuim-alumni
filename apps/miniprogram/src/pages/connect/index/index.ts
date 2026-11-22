@@ -1,6 +1,7 @@
 import { listResources } from '../../../services/index';
-import { getConnectFilter, getState, setConnectFilter } from '../../../store/index';
+import { getConnectFilter, getState, resetConnectFilter, setConnectFilter } from '../../../store/index';
 import type { IndustryDto, RegionDto, ResourcePostDto } from '../../../types/index';
+import { connectFilterSignature, isConnectFilterActive } from '../../../utils/filter';
 import { navigateTo } from '../../../utils/navigate';
 import { resetPageScroll, restorePageScroll, trackPageScroll } from '../../../utils/scroll';
 import { setTabBarSelected } from '../../../utils/tabbar';
@@ -31,6 +32,10 @@ Page({
     page: 1,
     total: 0,
     hasMore: false,
+    /** 上一次请求时用到的筛选条件签名（真机缺陷 #161） */
+    loadedSignature: '',
+    /** 当前是否有生效中的筛选条件（空状态提示用） */
+    filterActive: false,
   },
 
   onLoad(): void {
@@ -44,6 +49,9 @@ Page({
     setTabBarSelected(2);
     this.syncFilterLabel();
     restorePageScroll('connect');
+    // ⚠️ 真机缺陷 #161：从筛选页返回时筛选条件可能已经变了，
+    //   必须重新拉数据，否则「标签变了、列表没变、计数也没变」。
+    this.reloadIfFilterChanged();
   },
 
   onPageScroll: trackPageScroll('connect'),
@@ -69,12 +77,26 @@ Page({
       regionLabel: region ? region.name : '全部地区',
       industryLabel: industry ? industry.name : '全部',
       typeLabel: filter.type === 'resource' ? '我能提供' : filter.type === 'demand' ? '我有需求' : '全部',
+      filterActive: isConnectFilterActive(filter),
     });
+  },
+
+  /** 筛选条件变了就重载列表（真机缺陷 #161） */
+  reloadIfFilterChanged(): void {
+    const loaded = this.data.loadedSignature;
+    if (!loaded) {
+      // 还没加载过（首次 onShow 紧跟 onLoad），不要重复请求
+      return;
+    }
+    if (connectFilterSignature(getConnectFilter()) !== loaded) {
+      void this.load(1);
+    }
   },
 
   async load(page: number): Promise<void> {
     this.setData({ loading: true, error: '' });
     const filter = getConnectFilter();
+    const signature = connectFilterSignature(filter);
     try {
       const result = await listResources({
         type: filter.type,
@@ -91,6 +113,8 @@ Page({
         total: result.meta ? result.meta.total : merged.length,
         hasMore: result.meta ? page < result.meta.totalPages : false,
         loading: false,
+        loadedSignature: signature,
+        filterActive: isConnectFilterActive(filter),
       });
       if (page === 1) {
         resetPageScroll('connect');
@@ -104,6 +128,14 @@ Page({
     void this.load(1);
   },
 
+  /** 信息类型（全部 / 我能提供 / 我有需求）—— 页面上直接给入口，点完立刻生效 */
+  onTypeTap(event: WechatMiniprogram.BaseEvent): void {
+    const type = (event.currentTarget.dataset.type as 'all' | 'resource' | 'demand') || 'all';
+    setConnectFilter({ type });
+    this.syncFilterLabel();
+    void this.load(1);
+  },
+
   onIndustryTap(event: WechatMiniprogram.BaseEvent): void {
     const code = (event.currentTarget.dataset.code as string) || '';
     setConnectFilter({ industryCode: code });
@@ -113,6 +145,13 @@ Page({
 
   onRegionFilterTap(): void {
     navigateTo('/pages/connect/filter/index');
+  },
+
+  /** 清空全部筛选条件（空状态里的「清空筛选条件」） */
+  onClearFilters(): void {
+    resetConnectFilter();
+    this.syncFilterLabel();
+    void this.load(1);
   },
 
   onPublishResource(): void {

@@ -569,6 +569,26 @@
   font-size: 26rpx;
 }
 
+/**
+ * 空状态里的操作按钮（`state-view` 的 `empty-action` 插槽）。
+ *
+ * ⚠️ 小程序组件默认样式隔离：`state-view` 自己的 `.state-btn` 样式
+ *   **作用不到插槽内容**上（插槽内容按页面的样式作用域渲染），
+ *   所以这里必须有一份页面侧的样式，否则按钮会变成裸文字。
+ */
+.empty-action {
+  margin-top: 28rpx;
+  padding: 0 40rpx;
+  height: 72rpx;
+  line-height: 72rpx;
+  border-radius: 36rpx;
+  background: #fff9f6;
+  border: 1rpx solid #efd4cd;
+  color: #a53739;
+  font-size: 26rpx;
+  text-align: center;
+}
+
 /* 分组标题（profile-edit 用；此前 WXML 用了但没有定义） */
 .menu-title {
   margin: 34rpx 0 18rpx;

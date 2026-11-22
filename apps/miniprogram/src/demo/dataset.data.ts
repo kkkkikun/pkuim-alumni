@@ -12,7 +12,7 @@
  */
 export const RAW_DATASET = {
   "__note": "离线演示数据集：由线上 API 导出后经「演示内容库」净化与扩充（infra/demo-content/demo-content.json）；通讯录为虚构条目，由 src/demo 生成。",
-  "__exportedAt": "2026-11-19T02:33:19.929Z",
+  "__exportedAt": "2026-11-22T07:19:29.943Z",
   "events": [
     {
       "id": 4,
@@ -196,7 +196,7 @@ export const RAW_DATASET = {
       "coverMediaId": null,
       "status": "published",
       "publishedAt": "2026-01-08T08:00:00.000Z",
-      "viewCount": 168,
+      "viewCount": 174,
       "createdAt": "2026-11-15T20:04:56.137Z",
       "updatedAt": "2026-11-17T05:31:09.000Z"
     },
@@ -420,7 +420,7 @@ export const RAW_DATASET = {
       "body": "【虚构演示内容】2026 年校庆活动即日起开放报名，请校友在「活动」板块查看详情并提交报名信息，名额以系统显示为准。",
       "status": "published",
       "publishedAt": "2026-01-04T09:00:00.000Z",
-      "viewCount": 92,
+      "viewCount": 98,
       "createdAt": "2026-11-15T20:04:56.140Z",
       "updatedAt": "2026-11-17T05:31:09.000Z"
     },
@@ -1194,6 +1194,101 @@ export const RAW_DATASET = {
       "publishedAt": "2026-01-17T02:00:00.000Z",
       "createdAt": "2026-11-18T02:30:00.000Z",
       "updatedAt": "2026-11-18T02:30:00.000Z"
+    },
+    {
+      "id": 9009,
+      "authorId": 9009,
+      "authorName": "示例校友 109",
+      "type": "resource",
+      "title": "【虚构】高校科研数据治理咨询资源",
+      "body": "【虚构演示内容】面向呼和浩特市高校与科研机构的科研数据治理咨询资源，覆盖数据标准、共享机制与合规审查。",
+      "industryCode": "DIGI",
+      "industryName": "数字科技",
+      "regionCode": "HHS",
+      "regionName": "呼和浩特市",
+      "status": "published",
+      "version": 1,
+      "attachments": [],
+      "reviews": [],
+      "publishedAt": "2026-01-18T02:00:00.000Z",
+      "createdAt": "2026-11-18T02:30:00.000Z",
+      "updatedAt": "2026-11-18T02:30:00.000Z"
+    },
+    {
+      "id": 9010,
+      "authorId": 9010,
+      "authorName": "示例校友 110",
+      "type": "demand",
+      "title": "【虚构】本地企业品牌升级设计需求",
+      "body": "【虚构演示内容】呼和浩特市本地企业希望升级品牌形象，需要视觉识别、包装设计与线上传播物料的整体方案。",
+      "industryCode": "CULT",
+      "industryName": "文化教育",
+      "regionCode": "HHS",
+      "regionName": "呼和浩特市",
+      "status": "published",
+      "version": 1,
+      "attachments": [],
+      "reviews": [],
+      "publishedAt": "2026-01-19T02:00:00.000Z",
+      "createdAt": "2026-11-18T02:30:00.000Z",
+      "updatedAt": "2026-11-18T02:30:00.000Z"
+    },
+    {
+      "id": 9011,
+      "authorId": 9011,
+      "authorName": "示例校友 111",
+      "type": "resource",
+      "title": "【虚构】职业技能培训师资共享资源",
+      "body": "【虚构演示内容】面向呼和浩特市院校与企业的职业技能培训师资共享资源，含课程包、师资派驻与考核评价。",
+      "industryCode": "EDUR",
+      "industryName": "教育科研",
+      "regionCode": "HHS",
+      "regionName": "呼和浩特市",
+      "status": "published",
+      "version": 1,
+      "attachments": [],
+      "reviews": [],
+      "publishedAt": "2026-01-20T02:00:00.000Z",
+      "createdAt": "2026-11-18T02:30:00.000Z",
+      "updatedAt": "2026-11-18T02:30:00.000Z"
+    },
+    {
+      "id": 9012,
+      "authorId": 9012,
+      "authorName": "示例校友 112",
+      "type": "resource",
+      "title": "【虚构】冷链仓储与物流调度资源",
+      "body": "【虚构演示内容】面向乌兰察布市的冷链仓储与物流调度资源，覆盖仓储管理、运输排程与温控监测。",
+      "industryCode": "AGFO",
+      "industryName": "农牧食品",
+      "regionCode": "WLCS",
+      "regionName": "乌兰察布市",
+      "status": "published",
+      "version": 1,
+      "attachments": [],
+      "reviews": [],
+      "publishedAt": "2026-01-21T02:00:00.000Z",
+      "createdAt": "2026-11-18T02:30:00.000Z",
+      "updatedAt": "2026-11-18T02:30:00.000Z"
+    },
+    {
+      "id": 9013,
+      "authorId": 9013,
+      "authorName": "示例校友 113",
+      "type": "demand",
+      "title": "【虚构】新能源牧场运维人才需求",
+      "body": "【虚构演示内容】锡林郭勒盟牧场希望引入新能源牧场运维人才，需要设备运维、疫病防控与数据管理支持。",
+      "industryCode": "ENER",
+      "industryName": "能源产业",
+      "regionCode": "XLGLM",
+      "regionName": "锡林郭勒盟",
+      "status": "published",
+      "version": 1,
+      "attachments": [],
+      "reviews": [],
+      "publishedAt": "2026-01-22T02:00:00.000Z",
+      "createdAt": "2026-11-18T02:30:00.000Z",
+      "updatedAt": "2026-11-18T02:30:00.000Z"
     }
   ],
   "regions": [
@@ -1343,7 +1438,7 @@ export const RAW_DATASET = {
       "status": "active",
       "stage": "logged_in",
       "createdAt": "2026-11-16T09:18:09.619Z",
-      "lastLoginAt": "2026-11-19T02:33:19.851Z"
+      "lastLoginAt": "2026-11-22T07:19:29.745Z"
     },
     "alumniProfile": {
       "userId": 44870,

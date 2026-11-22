@@ -14,8 +14,4 @@ Page({
   onProgressTap(): void {
     wx.navigateTo({ url: '/pages/me/verify-progress/index' });
   },
-
-  onHistoryTap(): void {
-    wx.navigateTo({ url: '/pages/me/verify-history/index' });
-  },
 });

@@ -19,6 +19,7 @@
   <view class="filter-tools">
     <view class="filter-button {{regionLabel !== '全部地区' ? 'active' : ''}}" bindtap="onFilterTap">{{regionLabel}} ▾</view>
     <view class="filter-button {{industryLabel !== '全部行业' ? 'active' : ''}}" bindtap="onFilterTap">{{industryLabel}} ▾</view>
+    <view class="filter-button {{yearLabel !== '全部年份' ? 'active' : ''}}" bindtap="onFilterTap">{{yearLabel}} ▾</view>
     <text class="filter-count" wx:if="{{total}}">共 {{total}} 位校友</text>
   </view>
 
@@ -26,10 +27,14 @@
     <state-view
       status="{{loading && entries.length === 0 ? 'loading' : error ? 'error' : entries.length === 0 ? 'empty' : 'idle'}}"
       error-text="{{error}}"
-      empty-text="没有找到符合条件的校友"
-      empty-desc="可以更换盟市或行业筛选条件，也可以清空搜索关键词"
+      empty-text="{{filterActive ? '当前筛选条件下没有匹配的校友' : '没有找到符合条件的校友'}}"
+      empty-desc="{{filterActive ? '可以清空筛选条件后重新查找，或换一个盟市、行业与毕业年份' : '可以更换盟市或行业筛选条件，也可以清空搜索关键词'}}"
       bind:retry="onRetry"
-    ></state-view>
+    >
+      <view slot="empty-action" wx:if="{{filterActive}}">
+        <view class="empty-action" bindtap="onClearFilters">清空筛选条件</view>
+      </view>
+    </state-view>
 
     <person-item wx:for="{{entries}}" wx:key="userId" entry="{{item}}" bind:tap="onEntryTap"></person-item>
 

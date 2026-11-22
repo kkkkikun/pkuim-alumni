@@ -211,6 +211,13 @@ export function setConnectFilter(patch: Partial<ConnectFilter>): ConnectFilter {
   return state.connectFilter;
 }
 
+/** 重置连接栏目筛选条件（列表页空状态的「清空筛选」用） */
+export function resetConnectFilter(): ConnectFilter {
+  state.connectFilter = defaultConnectFilter();
+  notify();
+  return state.connectFilter;
+}
+
 /* ------------------------------ 认证草稿 ------------------------------ */
 
 export function getVerificationDraft(): { attachmentMediaIds: number[] } {
