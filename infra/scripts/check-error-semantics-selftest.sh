@@ -40,6 +40,9 @@
 #   error-semantics-column-length-mismatch       → R9：同一列的**长度**不一致
 #   error-semantics-entity-foreign-key-missing   → R8：实体声明了、迁移里没有的外键
 #   error-semantics-foreign-key-target-mismatch  → R8：外键的**指向**不一致
+#   error-semantics-column-default-mismatch      → R9：同一列的**默认值**不一致
+#   error-semantics-column-unsigned-mismatch     → R9：同一列的**无符号性**不一致
+#   error-semantics-column-enum-mismatch         → R9：同一列的**枚举取值**不一致
 #
 # 第九轮新增的四个用例针对**用户侧**：这一轮把唯一键登记表扩到了用户侧
 # （连接申请 / 联系方式授权 / 活动报名 / 资源附件 / 认证附件 / openid / unionid /
@@ -216,6 +219,13 @@ run_case "error-semantics-entity-foreign-key-missing" "ENTITY_FOREIGN_KEY_MISSIN
 # 实体 ↔ 迁移（第十二轮扩面）：外键的**指向**不一致（两边说的不是一回事）
 run_case "error-semantics-foreign-key-target-mismatch" "FOREIGN_KEY_TARGET_MISMATCH"
 
+# 实体 ↔ 迁移（第十六轮扩面）：三个新增维度的分歧必须被抓出 ——
+# 静态层此前**只判**类型 / 长度 / 可空性，库内实况层**已经判**这三个维度 →
+# 两层口径不一致（静态层报不出库内层已判出的分歧）。这三个用例就是那道防线。
+run_case "error-semantics-column-default-mismatch" "MIGRATION_COLUMN_DEFAULT_MISMATCH"
+run_case "error-semantics-column-unsigned-mismatch" "MIGRATION_COLUMN_UNSIGNED_MISMATCH"
+run_case "error-semantics-column-enum-mismatch" "MIGRATION_COLUMN_ENUM_MISMATCH"
+
 # --- 2. 清理 ---------------------------------------------------------------
 log "[2/2] 清理临时副本……"
 find "$TMP_ROOT" -mindepth 1 -delete 2>/dev/null || true
@@ -225,5 +235,5 @@ if [ "$FAILED" -ne 0 ]; then
   die "错误语义对账校验器反向验证失败 ❌"
 fi
 
-log "=== 反向验证通过 ✅（17 类「错误语义失配」缺陷全部被抓出，校验器非恒过）==="
+log "=== 反向验证通过 ✅（20 类「错误语义失配」缺陷全部被抓出，校验器非恒过）==="
 log "错误语义对账校验器反向验证通过 ✅"

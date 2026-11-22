@@ -124,44 +124,80 @@ function parseSeed(src) {
   return { permissions, roles };
 }
 
-/** 扫描服务端控制器：端点 → 所需权限 */
+/**
+ * 扫描服务端控制器：端点 → 所需权限。
+ *
+ * ⚠️ **按行扫描**、且把路由装饰器**上下**紧邻的装饰器块**一起**看：
+ *   `@RequirePermissions()` 与 `@Public()` 相对路由装饰器的**先后顺序不固定** ——
+ *   `admin.controller.ts` 是「权限点在后」，`admin-ops.controller.ts` 是「权限点在前」。
+ *   只扫一侧的话，`admin-ops.controller.ts` 那个端点会被判成
+ *   「没有 @RequirePermissions」——而它其实有（误报）；
+ *   反过来，只按固定顺序扫也可能**漏掉**真的没写权限点的端点（漏报）。
+ *   两种错法都会让「管理端端点必须声明权限点」这条判定失去意义。
+ *
+ * ⚠️ 对外路径一律**带前导斜杠**（`/admin/alumni`）：
+ *   控制器前缀写的是 `admin`（**没有**斜杠），直接拼出来的是 `admin/alumni` ——
+ *   拿它去和 `/admin` 比会**永远不相等**，
+ *   规则 6（每个管理端端点都必须有 @RequirePermissions）就成了一条**恒过**的判定。
+ */
 function parseControllers(files) {
   const endpoints = [];
   for (const file of files) {
     const src = readFileSafe(file);
     if (!src) continue;
     const relative = path.relative(ROOT, file);
+    const lines = src.split('\n');
 
     // 控制器前缀
-    const controllerRe = /@Controller\(([^)]*)\)/g;
-    let cmatch;
     const prefixes = [];
-    while ((cmatch = controllerRe.exec(src)) !== null) {
-      prefixes.push(cmatch[1].replace(/['"`]/g, '').trim());
+    for (const line of lines) {
+      const matched = /@Controller\(([^)]*)\)/.exec(line);
+      if (matched) prefixes.push(matched[1].replace(/['"`]/g, '').trim());
     }
     const prefix = prefixes[0] ?? '';
 
-    const re = /@(Get|Post|Put|Patch|Delete)\(([^)]*)\)([\s\S]{0,400}?)\n\s*(?:async\s+)?\w+\s*\(/g;
-    let match;
-    while ((match = re.exec(src)) !== null) {
-      const method = match[1].toUpperCase();
-      const rawPath = match[2].replace(/['"`]/g, '').trim();
-      const after = match[3];
-      const permMatch = /@RequirePermissions\(([^)]*)\)/.exec(after);
-      const permissions = permMatch
-        ? [...permMatch[1].matchAll(/'([^']+)'/g)].map((m) => m[1])
-        : [];
-      const publicMatch = /@Public\(\)/.test(after);
+    for (let index = 0; index < lines.length; index += 1) {
+      // ⚠️ 路径可以**省略**（`@Get()` = 控制器前缀本身）。
+      const matched = /^\s*@(Get|Post|Put|Patch|Delete)\(\s*(?:'([^']*)')?\s*\)/.exec(lines[index]);
+      if (!matched) continue;
+      const method = matched[1].toUpperCase();
+      const rawPath = (matched[2] ?? '').trim();
+
+      // 路由装饰器**上下**紧邻的装饰器块（注释行跳过，空行是分界）。
+      const decorators = [];
+      for (let j = index - 1; j >= 0; j -= 1) {
+        const text = lines[j].trim();
+        if (text.startsWith('@')) decorators.unshift(text);
+        else if (text.startsWith('//') || text.startsWith('*') || text.startsWith('/*')) continue;
+        else break;
+      }
+      for (let j = index + 1; j < lines.length; j += 1) {
+        const text = lines[j].trim();
+        if (text.startsWith('@')) decorators.push(text);
+        else if (text === '' || text.startsWith('//') || text.startsWith('*') || text.startsWith('/*')) {
+          continue;
+        } else break;
+      }
+
+      const permissions = [];
+      for (const decorator of decorators) {
+        const permMatch = /@RequirePermissions\(([^)]*)\)/.exec(decorator);
+        if (!permMatch) continue;
+        for (const code of permMatch[1].matchAll(/'([^']+)'/g)) permissions.push(code[1]);
+      }
+      const isPublic = decorators.some((item) => /@Public\(\)/.test(item));
+
       let fullPath = prefix;
       if (rawPath && rawPath !== '') fullPath = `${prefix}/${rawPath}`;
       fullPath = fullPath.replace(/\/+$/, '') || '/';
+      if (!fullPath.startsWith('/')) fullPath = `/${fullPath}`;
       endpoints.push({
         method,
         path: fullPath,
         permissions,
-        isPublic: publicMatch,
+        isPublic,
         file: relative,
-        line: src.slice(0, match.index).split('\n').length,
+        line: index + 1,
       });
     }
   }
@@ -282,6 +318,18 @@ function main() {
   const unusedPermissions = seed.permissions.filter((permission) => !usedPermissions.has(permission));
 
   const summary = {
+    adminEndpoints: endpoints
+      .filter((endpoint) => endpoint.path.startsWith('/admin'))
+      .map((endpoint) => ({
+        method: endpoint.method,
+        path: endpoint.path,
+        permissions: endpoint.permissions,
+      }))
+      .sort((left, right) =>
+        left.path === right.path
+          ? left.method.localeCompare(right.method)
+          : left.path.localeCompare(right.path),
+      ),
     permissions: seed.permissions.length,
     roles: seed.roles.size,
     endpointsScanned: endpoints.length,
