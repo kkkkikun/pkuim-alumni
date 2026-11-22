@@ -29,31 +29,6 @@
       <image class="spot-deco" src="/assets/art/mini-art.png" mode="aspectFit"></image>
     </view>
 
-    <view class="shortcut-grid">
-      <view class="shortcut" data-action="directory" bindtap="onShortcutTap">
-        <view class="shortcut-icon"><image class="shortcut-glyph" src="/assets/icons/shortcut-users.png" mode="aspectFit"></image></view>
-        <text class="shortcut-text">校友通讯录</text>
-      </view>
-      <view class="shortcut" data-action="connect" bindtap="onShortcutTap">
-        <view class="shortcut-icon"><image class="shortcut-glyph" src="/assets/icons/shortcut-connect.png" mode="aspectFit"></image></view>
-        <text class="shortcut-text">校友连接</text>
-      </view>
-      <view class="shortcut" data-action="events" bindtap="onShortcutTap">
-        <view class="shortcut-icon"><image class="shortcut-glyph" src="/assets/icons/shortcut-calendar.png" mode="aspectFit"></image></view>
-        <text class="shortcut-text">校友活动</text>
-      </view>
-      <view class="shortcut" data-action="about" bindtap="onShortcutTap">
-        <view class="shortcut-icon"><image class="shortcut-glyph" src="/assets/icons/shortcut-building.png" mode="aspectFit"></image></view>
-        <text class="shortcut-text">校友会介绍</text>
-      </view>
-    </view>
-
-    <view class="notice-row" bindtap="onMoreTap">
-      <text class="notice-label">公告</text>
-      <text class="notice-text">校友会通知与组织动态</text>
-      <text class="notice-arrow">›</text>
-    </view>
-
     <view class="section-heading">
       <text class="section-title">{{tab === 'notices' ? '通知公告' : tab === 'events' ? '活动与交流' : '校友动态'}}</text>
       <text class="section-more" bindtap="onMoreTap">更多{{tab === 'events' ? '活动' : tab === 'notices' ? '公告' : '资讯'}} ›</text>

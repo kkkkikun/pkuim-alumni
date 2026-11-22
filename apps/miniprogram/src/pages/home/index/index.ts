@@ -1,7 +1,7 @@
 import { ensureDemoSession, isDemoFallbackActive, listArticles, listEvents, listNotices, onDemoModeChange } from '../../../services/index';
 import type { ArticleView, EventView, NoticeView } from '../../../utils/view';
 import { toArticleView, toEventView, toNoticeView } from '../../../utils/view';
-import { articleDetailUrl, eventDetailUrl, navigateTo, noticeDetailUrl, switchTab } from '../../../utils/navigate';
+import { articleDetailUrl, eventDetailUrl, navigateTo, noticeDetailUrl } from '../../../utils/navigate';
 import { setTabBarSelected } from '../../../utils/tabbar';
 
 type HomeTab = 'news' | 'events' | 'notices';
@@ -131,21 +131,6 @@ Page({
       navigateTo('/pages/home/notice-list/index');
     } else {
       navigateTo('/pages/home/article-list/index');
-    }
-  },
-
-  onShortcutTap(event: WechatMiniprogram.BaseEvent): void {
-    const action = event.currentTarget.dataset.action as string;
-    if (action === 'directory') {
-      switchTab('/pages/directory/index/index');
-    } else if (action === 'connect') {
-      switchTab('/pages/connect/index/index');
-    } else if (action === 'events') {
-      this.setData({ tab: 'events' });
-      void this.loadTab('events');
-      wx.pageScrollTo({ scrollTop: 0, duration: 200 });
-    } else {
-      navigateTo('/pages/home/about/index');
     }
   },
 

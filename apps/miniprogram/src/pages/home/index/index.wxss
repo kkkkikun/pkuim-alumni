@@ -9,6 +9,12 @@
  *    **在所有 WXSS 里都没有定义** → 真机上页面上半部分全是裸文字，
  *    与 HTML 原型（「精致」）差得很远。
  *    已补齐，并新增第 19 层校验（类名对账）防复发。
+ *
+ * 2026-11-19 界面调整：删除**四个图标快捷入口**（.shortcut*）与
+ *    **「公告」浮窗**（.notice-row / .notice-label / .notice-text）——
+ *    前者与顶部 tab（校友资讯/校友活动/通知公告）及底部导航功能重复，
+ *    后者与下方「更多公告」重复。对应 WXML 片段与 TS 里的 onShortcutTap
+ *    一并移除，.notice-arrow 保留（通知列表仍在用）。
  */
 
 @import "../../../styles/blocks.wxss";
@@ -208,91 +214,7 @@
   pointer-events: none;
 }
 
-/* 快捷入口 */
-
-.shortcut-grid {
-  display: flex;
-  margin: 24rpx 0 10rpx;
-}
-
-.shortcut {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 20rpx;
-  padding: 10rpx 0;
-  font-size: 24rpx;
-  color: #37312f;
-}
-
-.shortcut-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 102rpx;
-  height: 102rpx;
-  border-radius: 36rpx;
-  background: #fcf0eb;
-  color: #b3403c;
-}
-
-.shortcut:nth-child(2) .shortcut-icon {
-  background: #f9eee9;
-  color: #b57c4f;
-}
-
-.shortcut:nth-child(3) .shortcut-icon {
-  background: #fff2ed;
-  color: #b24348;
-}
-
-.shortcut:nth-child(4) .shortcut-icon {
-  background: #f3efeb;
-  color: #96765a;
-}
-
-.shortcut-glyph {
-  width: 46rpx;
-  height: 46rpx;
-}
-
-.shortcut-text {
-  font-size: 24rpx;
-  color: #37312f;
-}
-
-/* 公告条 */
-
-.notice-row {
-  display: flex;
-  align-items: center;
-  gap: 22rpx;
-  width: 100%;
-  margin-top: 20rpx;
-  padding: 22rpx;
-  border-radius: 22rpx;
-  background: #faf8f6;
-}
-
-.notice-label {
-  flex: none;
-  padding: 10rpx 16rpx;
-  border-radius: 12rpx;
-  background: #f6e7e2;
-  color: #a53e36;
-  font-size: 22rpx;
-  font-weight: 600;
-}
-
-.notice-text {
-  flex: 1;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  font-size: 24rpx;
-  color: #58504b;
-}
+/* 列表项右箭头（通知列表复用） */
 
 .notice-arrow {
   flex: none;
