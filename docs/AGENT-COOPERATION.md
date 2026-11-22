@@ -115,3 +115,72 @@ GitHub 派活链路 → CI 门禁 → 本地仓库同步状态与编号唯一性
 
 相关文档：排障手册 `~/anyProject/dsh-superagent-setup/server-setup/pkuim-agent.md`
 （第 9 节 CI 门禁、第 10 节循环卡住的三个故障与护栏）。
+
+---
+
+## 七、暂停与恢复（2026-11-22 首次使用）
+
+循环**默认是开的**，所以「让它停下来」必须显式做，且要能原样恢复。
+
+### 判断该不该停
+
+连续多轮的产出若是「把已有校验器再对账一遍、把清单再收敛一份」这类
+**内部工程卫生**，而真正卡住交付的是客户侧外部流程（服务器采购、ICP 备案、
+小程序备案、体验版与真实内容）—— 那就该停，把配额与服务器资源留给主线。
+本次停机的判断依据：第 17 轮之后连续多轮属于前者。
+
+### 停的三步（顺序不能反）
+
+```sh
+# 1) 队列置空 —— 派活工作流读到空的 .current.id / .current.brief 就 dispatch=false
+#    （这一步是「不再派发新任务」的真正开关；节拍器与 cron 仍会敲门，但不会开单）
+python3 - <<'PY'
+import json
+p='.agent/dispatch-queue.json'
+d=json.load(open(p,encoding='utf-8'))
+d['current']={}                      # 保留 history 一字不删
+d['paused']={'reason':'...','pausedAt':'...','resumeHow':'把 current 填回 {id,title,brief} 即可'}
+json.dump(d,open(p,'w',encoding='utf-8'),ensure_ascii=False,indent=2)
+PY
+git commit -am "chore(agent): 暂停自动派活循环" && git push origin master
+
+# 2) 关掉开着的派活 issue（否则 profile 重启后会重新接单继续跑）
+gh issue close <编号> --repo kkkkikun/pkuim-alumni --comment '循环已暂停…'
+
+# 3) 停 profile（正规方式，会写「故意停止」标记）
+ssh sqserver "cd ~/anyProject/dsh-superagent && \
+  python3 scripts/dsh-superagent stop --profile pkuim --url http://127.0.0.1:3084"
+```
+
+### ⚠️ watchdog 曾经不尊重停机标记（已修）
+
+`dsh-superagent stop` 会写 `.artifacts/control/profiles/<profile>/manually-stopped`，
+它自己的语义是「Automatic recovery is paused until start/restart」。
+但 `watchdog-dsh.sh` **既不检查这个标记、也没给 restart 传 `--respect-stop`**，
+只靠心跳年龄（`MAX_AGE=1800`）判断「是不是故意停的」——
+于是 stop 之后心跳还新鲜，watchdog **一分钟内就把 profile 拉了回来**，
+而 `restart` 还会顺手把标记删掉：**停机等于没停**。
+
+已修：watchdog 的 `watch()` 与 `watch_liveness()` 开头都先看标记，
+有意停的就跳过恢复。源文件在本机 `~/anyProject/dsh-superagent-setup/watchdog-dsh.sh`，
+改完 `rsync` 到服务器即可生效（`watchdog-loop.sh` 每轮都重新调用它，不用重启服务）。
+
+### 恢复
+
+```sh
+# 1) 把队列 current 填回 { id, title, brief }（写清这轮要做什么），推上去
+# 2) 起 profile（start 会自动删掉停机标记）
+ssh sqserver "cd ~/anyProject/dsh-superagent && \
+  python3 scripts/dsh-superagent start --profile pkuim --url http://127.0.0.1:3084"
+# 3) 派活工作流下一次运行（或节拍器下一次敲门）就会接上
+```
+
+节拍器与 watchdog 一直开着，**恢复时不需要重启任何服务**。
+
+### 当前状态（2026-11-22 17:55）
+
+- 队列 `current` 已置空（顶层有 `paused` 字段写明原因与恢复方法），`history` 17 条完整保留；
+- 派活 issue #45 / #47 已关闭；
+- pkuim profile 已停（停机标记在位），watchdog 不再拉起；
+- 巡检脚本已能区分「按计划暂停」与「意外挂掉」；
+- **SchoolWall 的那个 profile（端口 3083）仍在运行**，本次未动它。
